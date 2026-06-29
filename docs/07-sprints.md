@@ -114,3 +114,13 @@ S0 → S1 → S2 → S3 → S4 → S5 → S6 → S7
 ## Backlog (post-v1)
 Integración Addi API · templates fuera de 24h · multicanal (IG/Messenger) · evals de prompt ·
 confirmación de venta y tracking (otro equipo) · debounce avanzado de mensajes.
+
+---
+
+## Definition of Done (aplica a TODOS los sprints)
+Además del criterio de aceptación de cada sprint, no se cierra hasta:
+1. `CHANGELOG.md` actualizado (versión movida de `[Unreleased]`).
+2. `docs/sprint-log/sprint-NN.md` escrito (desde `_template.md`).
+3. ADR(s) creado(s) si hubo decisiones no triviales (`docs/decisions/`).
+4. Commits en Conventional Commits + push.
+Ver `docs/08-registro-y-documentacion.md`.

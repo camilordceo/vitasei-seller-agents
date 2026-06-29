@@ -44,3 +44,18 @@ Styling neutral; tokens de marca Vitasei como placeholder (no usar marca Rentmie
 ## No hacer en v1
 Integración Addi API, templates fuera de 24h, multicanal, confirmación de venta/logística
 (eso es de otro equipo). Ver backlog en `docs/07-sprints.md`.
+
+## Registro y documentación (OBLIGATORIO — ver docs/08)
+Mantén el rastro como parte del trabajo, no como un extra:
+- **Commits**: usa Conventional Commits (`feat(scope): ...`, `fix`, `docs`, `chore`, `refactor`, `test`).
+- **CHANGELOG.md**: agrega lo que construyes bajo `## [Unreleased]` mientras trabajas.
+- **ADR**: por cualquier decisión con trade-off (librería, patrón, modelo, esquema), crea
+  `docs/decisions/NNNN-titulo.md` desde `0000-template.md`. Los ADR son inmutables.
+- **Sprint log**: al cerrar un sprint, escribe `docs/sprint-log/sprint-NN.md` desde `_template.md`.
+
+### Definition of Done de un sprint (no avanzar sin esto)
+1. Cumple el criterio de aceptación de `docs/07-sprints.md`.
+2. `CHANGELOG.md` actualizado y versión movida de `[Unreleased]` a `[0.X.0] - fecha — Sprint N`.
+3. `docs/sprint-log/sprint-NN.md` escrito.
+4. ADR(s) creado(s) si hubo decisiones no triviales.
+5. Commits en Conventional Commits y push hecho.
