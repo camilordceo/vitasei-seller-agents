@@ -4,8 +4,38 @@ Todos los cambios notables de este proyecto se documentan aquí.
 Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
+
+> Sprints 0 y 1 entregados a nivel de **código y verificación local**. El cierre formal
+> (mover a versión) queda pendiente del aprovisionamiento de servicios externos: pings
+> OK a Supabase/OpenAI/Callbell (S0) y test con un mensaje real de WhatsApp (S1). Ver
+> `docs/sprint-log/sprint-00.md` y `sprint-01.md`.
+
 ### Added
-- (Claude Code agrega aquí lo que va construyendo en el sprint actual)
+- **Scaffold Next.js 14 + TypeScript estricto + Tailwind** (App Router): `app/layout.tsx`,
+  `app/page.tsx`, `app/globals.css`, configs (`tsconfig`, `next.config.mjs`, `tailwind`,
+  `postcss`, `.eslintrc`). Dependencias reales en `package.json`.
+- **Clientes Supabase**: `lib/supabase/server.ts` (service-role, solo server) y
+  `lib/supabase/browser.ts` (anon). Tipos de DB a mano en `lib/supabase/types.ts`.
+- **Acceso a env centralizado** (`lib/env.ts`) con getters lazy (build-safe) y separación
+  server-only. `.env.local` creado a partir de `.env.example`.
+- **Inngest**: cliente con schema de eventos (`lib/inngest/client.ts`) y endpoint
+  `app/api/inngest/route.ts`.
+- **Webhook** `POST /api/webhooks/callbell`: valida secret (opcional en dev), responde
+  `200 {"status":"ok"}`, filtra `message_created` inbound, normaliza teléfono (E.164 sin
+  `+`) y encola `whatsapp/message.received`. Helpers en `lib/callbell/types.ts`.
+- **Inngest function `processMessage`** (inicio del loop SENSE+LOG): idempotencia por
+  `callbell_message_uuid`, get-or-create de contacto y conversación, `last_inbound_at`,
+  persistencia del inbound y `events_log.webhook_received` con payload crudo.
+- **Health check** `GET /api/health`: verifica conectividad a Supabase, OpenAI y Callbell
+  (soporta la aceptación del Sprint 0).
+- **Migración** `0002_storage_product_images.sql`: bucket público `product-images`.
+- **ADRs** 0005 (validación/parsing del webhook), 0006 (idempotencia), 0007 (concurrencia
+  por teléfono).
+
+### Notes
+- Instalación en Windows con `npm install --ignore-scripts` por un postinstall transitivo
+  (`protobufjs`) que falla al lanzar `node` vía `cmd.exe` desde Git Bash. El dev server y
+  el build se corren desde PowerShell. Detalle en `docs/sprint-log/sprint-01.md`.
 
 ## [0.1.0] - 2026-06-29 — Diseño y scaffold
 ### Added
