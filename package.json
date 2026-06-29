@@ -1,0 +1,13 @@
+{
+  "name": "ai-seller-vitasei",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agente de IA de ventas por WhatsApp para Vitasei (Responses API + File Search + Callbell).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "_note": "Dependencias las agrega Claude Code en Sprint 1 (next, react, @supabase/supabase-js, openai, inngest, tailwindcss)."
+}
