@@ -47,6 +47,11 @@ export const env = {
     return optional("CALLBELL_WHATSAPP_CHANNEL_UUID");
   },
 
+  // Admin (operaciones internas como la carga de catálogo)
+  get CATALOG_ADMIN_SECRET() {
+    return optional("CATALOG_ADMIN_SECRET");
+  },
+
   // Supabase
   get SUPABASE_URL() {
     return required("NEXT_PUBLIC_SUPABASE_URL");
