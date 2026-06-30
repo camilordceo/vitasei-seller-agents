@@ -5,11 +5,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 
 ## [Unreleased]
 
-> Sprints 0, 1 y 2 entregados a nivel de **código y verificación local** (typecheck +
-> tests + build). El cierre formal (mover a versión) queda pendiente del aprovisionamiento
-> de servicios externos: pings OK a Supabase/OpenAI/Callbell (S0), test con un mensaje real
-> de WhatsApp (S1) y carga de un catálogo de prueba contra OpenAI/Supabase (S2). Ver
-> `docs/sprint-log/sprint-00.md`, `sprint-01.md` y `sprint-02.md`.
+> Sprints 0–3 entregados a nivel de **código y verificación local** (typecheck + tests +
+> build). El cierre formal (mover a versión) queda pendiente del aprovisionamiento de
+> servicios externos: pings OK a Supabase/OpenAI/Callbell (S0), mensaje real de WhatsApp
+> (S1), carga de un catálogo de prueba (S2) y una respuesta generada contra OpenAI (S3).
+> Ver `docs/sprint-log/sprint-00.md` … `sprint-03.md`.
 
 ### Added
 - **Scaffold Next.js 14 + TypeScript estricto + Tailwind** (App Router): `app/layout.tsx`,
@@ -47,6 +47,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   pura de catálogo en `lib/openai/catalog.test.ts`.
 - **ADRs** 0008 (Vitest como framework de tests) y 0009 (carga de catálogo: route + archivo
   por producto).
+- **Generación de respuesta (S3)**: `processMessage` ahora genera la respuesta con **una sola**
+  llamada `responses.create` (`lib/openai/responses.ts`, `file_search` + `agent_config` activo),
+  parsea los tags (`lib/agent/tags.ts`: `#ID:`, `#addi`, `#compra-contra-entrega`,
+  `#orden-lista`, `#humano`) y guarda el outbound (`cleanText` + tags) encadenando
+  `openai_previous_response_id`. No genera si la conversación no está `active` o no hay
+  `agent_config`. El envío por Callbell + gate de `#ID` es el S4. 7 tests del parser.
+- **ADR 0010**: generación de un solo paso (sin loop de tools).
+
+### Changed
+- **Framing simplificado**: se elimina el lenguaje de "loop de razonamiento". Es una IA simple
+  de **una llamada** por mensaje (`file_search` es hosted). Ajustados `CLAUDE.md`,
+  `docs/01-arquitectura.md` y `docs/07-sprints.md` (Sprint 3 → "Generación de respuesta").
 
 ### Notes
 - Instalación en Windows con `npm install --ignore-scripts` por un postinstall transitivo
