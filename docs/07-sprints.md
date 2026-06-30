@@ -44,21 +44,21 @@ filas en `products` con imagen, y SKUs consistentes.
 
 ---
 
-## Sprint 3 — Loop de razonamiento (REASON + PROPOSE)
+## Sprint 3 — Generación de respuesta (Responses + tags)
 **Entregables**
-- Inngest function `processMessage` con concurrency por `conversation_id` (+ debounce opcional).
-- SENSE: cargar historial / `previous_response_id`, guardar mensaje inbound.
-- REASON: `openai.responses.create` con `file_search` + system prompt de `agent_config`.
-- Guardar `previous_response_id`. Extraer texto del output.
-- PROPOSE: parser de tags (`#ID:`, `#addi`, `#compra-contra-entrega`, `#orden-lista`, `#humano`),
-  `cleanText` sin tags.
+- `processMessage` (ya con concurrency por teléfono): cargar `previous_response_id` / historial.
+- **Generar:** UNA sola llamada `openai.responses.create` con `file_search` + system prompt de
+  `agent_config`. Guardar `previous_response_id`. Extraer el texto del output.
+- **Parsear tags** (`#ID:`, `#addi`, `#compra-contra-entrega`, `#orden-lista`, `#humano`) y
+  construir `cleanText` (el texto sin las líneas de tags). Sin razonamiento ni llamadas extra:
+  la respuesta del modelo se guarda como mensaje.
 
-**Aceptación:** mensaje del cliente → respuesta del agente generada y parseada; tags y texto
-limpio quedan en `messages` (outbound, aún sin enviar a Callbell o enviando solo texto).
+**Aceptación:** mensaje del cliente → respuesta generada en una llamada y parseada; `cleanText`
+y tags quedan en `messages` (outbound; el envío a Callbell es el Sprint 4).
 
 ---
 
-## Sprint 4 — ACT: envío por Callbell (texto + imágenes #ID)
+## Sprint 4 — Envío por Callbell + gate (texto + imágenes #ID)
 **Entregables**
 - Sender Callbell abstraído: `sendText`, `sendImage`. Guardar `callbell_message_uuid`.
 - GATE: descartar `#ID` cuyo SKU no exista en `products` (log `gate_blocked`); validar ventana 24h.

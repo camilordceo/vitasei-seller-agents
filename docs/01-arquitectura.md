@@ -5,15 +5,19 @@
 | Componente | Tecnología | Rol |
 |------------|-----------|-----|
 | Webhook receiver | Next.js Route Handler (`/api/webhooks/callbell`) en Vercel | Recibe `message_created`, responde 200 inmediato, encola |
-| Orquestador async | Inngest | Corre el loop fuera del request del webhook |
-| Razonamiento | OpenAI **Responses API** + `file_search` | Genera respuesta del agente sobre el catálogo |
+| Orquestador async | Inngest | Procesa el mensaje fuera del request del webhook |
+| Generación | OpenAI **Responses API** + `file_search` | **Una** llamada genera la respuesta sobre el catálogo |
 | Conocimiento | OpenAI **Vector Store** | Catálogo indexado (chunking/embeddings los hace OpenAI) |
 | Datos / estado | Supabase Postgres | contacts, conversations, messages, products, orders, logs |
 | Imágenes | Supabase Storage | URLs públicas de imágenes de producto |
 | Envío WhatsApp | Callbell `POST /v1/messages/send` | Texto e imágenes; handoff con `team_uuid` + `bot_status` |
 | UI | Next.js + Supabase Auth | Dashboard de conversaciones |
 
-## 2. Flujo inbound (el loop)
+## 2. Flujo inbound (por mensaje)
+
+Es una **IA simple**: **una sola** llamada a Responses por mensaje. No hay loop de tools ni
+razonamiento iterativo — `file_search` es hosted, así que OpenAI busca en el catálogo y
+responde en esa misma llamada. La respuesta se guarda como mensaje y se envía.
 
 ```
 Cliente WhatsApp
@@ -24,22 +28,21 @@ Callbell ──(webhook message_created)──► POST /api/webhooks/callbell
                                           │ 2. responde 200 {"status":"ok"}  ← rápido
                                           │ 3. inngest.send("whatsapp/message.received")
                                           ▼
-                              Inngest function: processMessage  (LOOP)
+                              Inngest function: processMessage
    ┌──────────────────────────────────────────────────────────────────┐
-   │ SENSE   upsert contact + conversation; guardar mensaje inbound;    │
-   │         cargar historial / previous_response_id                    │
-   │ REASON  Responses API: system prompt + file_search(vector_store)   │
-   │         + input (turno actual o historial reciente)                │
-   │ PROPOSE parsear salida → texto limpio + tags (#ID, #addi, ...)     │
-   │ GATE    validar: SKUs existen en products; no inventar precios;    │
-   │         dentro de ventana 24h; tags bien formados                  │
-   │ ACT     Callbell: enviar texto; por cada #ID válido enviar imagen; │
-   │         si #orden-lista → crear orden + handoff (team + bot_end)   │
-   │ LOG     persistir mensaje outbound, tags, response_id, eventos     │
+   │ contexto  guardar inbound; cargar previous_response_id / historial │
+   │ GENERAR   1× responses.create: system prompt + file_search +       │
+   │           input (turno actual)  → texto del modelo                 │
+   │ preparar  quitar los tags del texto (cleanText) + GATE: descartar  │
+   │           #ID cuyo SKU no exista en products; chequear ventana 24h │
+   │ enviar    Callbell: texto; por cada #ID válido, imagen; si         │
+   │           #orden-lista → crear orden + handoff (team + bot_end)    │
+   │ guardar   mensaje outbound (cleanText + tags), response_id, eventos │
    └──────────────────────────────────────────────────────────────────┘
 ```
 
-Este es el patrón **trigger → sense → reason → propose → gate → act → log** sobre Inngest + Supabase.
+Una llamada al modelo; el resto es código determinista (parseo + un lookup en `products` +
+envío). Cada paso loguea en `events_log`.
 
 ## 3. Estado de conversación (Responses API)
 

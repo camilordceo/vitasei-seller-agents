@@ -5,7 +5,7 @@ orden y no avances sin cumplir el criterio de aceptación de cada uno.
 
 ## Stack
 Next.js 14 (App Router) · TypeScript estricto · Tailwind · Supabase (Postgres + Storage + Auth) ·
-Inngest (loop async) · OpenAI Responses API + file_search · Callbell (WhatsApp).
+Inngest (cola async) · OpenAI Responses API + file_search · Callbell (WhatsApp).
 
 ## Principios
 - **Webhook responde rápido** (200 `{"status":"ok"}`) y delega a Inngest. Nada de LLM inline.
@@ -16,8 +16,13 @@ Inngest (loop async) · OpenAI Responses API + file_search · Callbell (WhatsApp
 - **Teléfonos** en E.164 sin `+` (`573XXXXXXXXX`).
 - **Idempotencia** por `callbell_message_uuid`.
 
-## Patrón del loop (Inngest)
-`SENSE → REASON → PROPOSE → GATE → ACT → LOG`. Cada paso loguea en `events_log`.
+## Flujo por mensaje (Inngest)
+Es una **IA simple**: **una sola llamada** a Responses por mensaje. No hay loop de tools ni
+razonamiento iterativo (`file_search` es hosted: OpenAI busca y responde en esa misma llamada).
+Por cada inbound:
+**generar** (1× `responses.create`) → **preparar** (quitar tags del texto + gate: validar que
+cada `#ID` exista en `products`) → **enviar** (texto + imágenes válidas por Callbell) →
+**guardar/loguear** en `messages` y `events_log`.
 
 ## Estructura objetivo
 ```
@@ -29,7 +34,7 @@ lib/
   supabase/        # clientes browser + server(service-role)
   openai/          # responses + vector store + carga catálogo
   callbell/        # sender (sendText, sendImage), tipos webhook
-  agent/           # parser de tags, gate, loop steps
+  agent/           # parser de tags + gate (#ID existe en products)
 inngest/
   functions/processMessage.ts
 supabase/migrations/0001_init.sql
