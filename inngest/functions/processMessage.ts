@@ -3,6 +3,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { createOpenAIClient } from "@/lib/openai/client";
 import { generateReply } from "@/lib/openai/responses";
 import { parseReply } from "@/lib/agent/tags";
+import { applyGate } from "@/lib/agent/gate";
+import { sendText, sendImage } from "@/lib/callbell/sender";
 import type { Database, Json, MessageType } from "@/lib/supabase/types";
 
 type ContactUpdate = Database["public"]["Tables"]["contacts"]["Update"];
@@ -30,7 +32,7 @@ function toMessageType(type: string | null): MessageType {
  *
  * Es una IA simple: por cada inbound se guarda el mensaje, se genera la
  * respuesta con UNA llamada a Responses (file_search hosted), se parsean los
- * tags y se guarda el outbound. El envío por Callbell + gate de `#ID` es el S4.
+ * tags, se aplica el gate y se envía por Callbell (texto + imágenes de `#ID`).
  *
  * Responsabilidades (S1):
  *  - Idempotencia por `callbell_message_uuid` (unique en `messages`).
@@ -42,7 +44,13 @@ function toMessageType(type: string | null): MessageType {
  * Responsabilidades (S3):
  *  - Generar: 1× `responses.create` con `file_search` + `agent_config` activo.
  *  - Parsear tags (`#ID:`, `#addi`, ...) y `cleanText`; guardar el outbound y
- *    encadenar `openai_previous_response_id`. Sin enviar todavía.
+ *    encadenar `openai_previous_response_id`.
+ *
+ * Responsabilidades (S4):
+ *  - Gate: descartar `#ID` cuyo SKU no exista en `products` (`gate_blocked`);
+ *    validar ventana 24h (`out_of_window`).
+ *  - Enviar `cleanText` y, por cada `#ID` válido, la imagen por Callbell;
+ *    guardar `callbell_message_uuid` y loguear (`text_sent`, `image_sent`).
  *
  * Concurrencia: limitada a 1 por `phone` para no pisar respuestas si el cliente
  * manda varios mensajes seguidos (equivale a "por conversación" en v1, donde un
@@ -194,7 +202,7 @@ export const processMessage = inngest.createFunction(
     const convo = await step.run("load-conversation-state", async () => {
       const { data, error } = await supabase
         .from("conversations")
-        .select("status, openai_previous_response_id")
+        .select("status, openai_previous_response_id, last_inbound_at")
         .eq("id", conversationId)
         .single();
       if (error) throw new Error(`load-conversation-state: ${error.message}`);
@@ -242,16 +250,20 @@ export const processMessage = inngest.createFunction(
     // 8) Parsear tags + cleanText (puro) y guardar el outbound + encadenar.
     const parsed = parseReply(gen.text);
 
-    await step.run("save-outbound-message", async () => {
-      const { error: msgErr } = await supabase.from("messages").insert({
-        conversation_id: conversationId,
-        direction: "outbound",
-        role: "assistant",
-        type: "text",
-        content: parsed.cleanText,
-        tags: parsed.tags.raw as unknown as Json,
-        openai_response_id: gen.responseId,
-      });
+    const outboundMessageId = await step.run("save-outbound-message", async () => {
+      const { data, error: msgErr } = await supabase
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          direction: "outbound",
+          role: "assistant",
+          type: "text",
+          content: parsed.cleanText,
+          tags: parsed.tags.raw as unknown as Json,
+          openai_response_id: gen.responseId,
+        })
+        .select("id")
+        .single();
       if (msgErr) throw new Error(`save-outbound-message: ${msgErr.message}`);
 
       const { error: updErr } = await supabase
@@ -259,9 +271,9 @@ export const processMessage = inngest.createFunction(
         .update({ openai_previous_response_id: gen.responseId })
         .eq("id", conversationId);
       if (updErr) throw new Error(`update previous_response_id: ${updErr.message}`);
+      return data.id;
     });
 
-    // 9) LOG: respuesta generada (los #ID se validan/ envían en el S4).
     await step.run("log-reply-generated", async () => {
       await supabase.from("events_log").insert({
         conversation_id: conversationId,
@@ -274,14 +286,122 @@ export const processMessage = inngest.createFunction(
       });
     });
 
+    // --- S4: gate + envío por Callbell --------------------------------------
+
+    // 9) Lookup en products de los SKUs emitidos (fuente del gate + imagen).
+    const found = await step.run("load-products-for-skus", async () => {
+      if (parsed.tags.skus.length === 0) return [] as ProductLookup[];
+      const { data, error } = await supabase
+        .from("products")
+        .select("sku, image_url, name")
+        .in("sku", parsed.tags.skus);
+      if (error) throw new Error(`load-products-for-skus: ${error.message}`);
+      return data as ProductLookup[];
+    });
+
+    const productBySku = new Map(found.map((p) => [p.sku, p]));
+    // 10) GATE (puro): válidos vs inventados + ventana 24h.
+    // `event.ts` (tiempo del inbound) es estable entre replays de Inngest.
+    const gate = applyGate(
+      parsed.tags.skus,
+      productBySku.keys(),
+      convo.last_inbound_at,
+      event.ts ?? Date.now(),
+    );
+
+    if (gate.blockedSkus.length > 0) {
+      await step.run("log-gate-blocked", async () => {
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "gate_blocked",
+          payload: { blockedSkus: gate.blockedSkus } as unknown as Json,
+        });
+      });
+    }
+
+    // Fuera de ventana de 24h: no se envía (requeriría template). Se registra.
+    if (!gate.withinWindow) {
+      await step.run("log-out-of-window", async () => {
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "out_of_window",
+          payload: { lastInboundAt: convo.last_inbound_at } as unknown as Json,
+        });
+      });
+      return { ok: true, conversationId, generated: true, sent: false, reason: "out_of_window" };
+    }
+
+    // 11) Enviar el texto (si hay) y registrar el uuid en el mensaje outbound.
+    if (parsed.cleanText.length > 0) {
+      const sent = await step.run("send-text", () =>
+        sendText(phone, parsed.cleanText, { conversation_id: conversationId }),
+      );
+      await step.run("save-text-sent", async () => {
+        await supabase
+          .from("messages")
+          .update({ callbell_message_uuid: sent.uuid })
+          .eq("id", outboundMessageId);
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "text_sent",
+          payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
+        });
+      });
+    }
+
+    // 12) Por cada #ID válido con imagen → enviar imagen + guardar mensaje.
+    for (const sku of gate.validSkus) {
+      const product = productBySku.get(sku);
+      if (!product?.image_url) {
+        await step.run(`log-image-missing:${sku}`, async () => {
+          await supabase.from("events_log").insert({
+            conversation_id: conversationId,
+            type: "image_missing",
+            payload: { sku } as unknown as Json,
+          });
+        });
+        continue;
+      }
+
+      const imageUrl = product.image_url;
+      const caption = product.name ?? null;
+      const sent = await step.run(`send-image:${sku}`, () =>
+        sendImage(phone, imageUrl, caption),
+      );
+      await step.run(`save-image:${sku}`, async () => {
+        await supabase.from("messages").insert({
+          conversation_id: conversationId,
+          direction: "outbound",
+          role: "assistant",
+          type: "image",
+          content: caption,
+          media_url: imageUrl,
+          tags: [`#ID:${sku}`] as unknown as Json,
+          callbell_message_uuid: sent.uuid,
+        });
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "image_sent",
+          payload: { sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
+        });
+      });
+    }
+
     return {
       ok: true,
       conversationId,
       contactId,
       messageUuid,
       generated: true,
-      responseId: gen.responseId,
-      skus: parsed.tags.skus,
+      sent: true,
+      validSkus: gate.validSkus,
+      blockedSkus: gate.blockedSkus,
     };
   },
 );
+
+interface ProductLookup {
+  sku: string;
+  image_url: string | null;
+  name: string | null;
+}
