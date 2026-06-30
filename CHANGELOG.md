@@ -5,10 +5,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 
 ## [Unreleased]
 
-> Sprints 0 y 1 entregados a nivel de **código y verificación local**. El cierre formal
-> (mover a versión) queda pendiente del aprovisionamiento de servicios externos: pings
-> OK a Supabase/OpenAI/Callbell (S0) y test con un mensaje real de WhatsApp (S1). Ver
-> `docs/sprint-log/sprint-00.md` y `sprint-01.md`.
+> Sprints 0, 1 y 2 entregados a nivel de **código y verificación local** (typecheck +
+> tests + build). El cierre formal (mover a versión) queda pendiente del aprovisionamiento
+> de servicios externos: pings OK a Supabase/OpenAI/Callbell (S0), test con un mensaje real
+> de WhatsApp (S1) y carga de un catálogo de prueba contra OpenAI/Supabase (S2). Ver
+> `docs/sprint-log/sprint-00.md`, `sprint-01.md` y `sprint-02.md`.
 
 ### Added
 - **Scaffold Next.js 14 + TypeScript estricto + Tailwind** (App Router): `app/layout.tsx`,
@@ -34,6 +35,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 - **Infra (S0)**: repo en GitHub `camilordceo/vitasei-seller-agents` (rama por defecto
   `main`); proyecto Vercel `ai-seller-vitasei` (team `rentmies`) enlazado con preset Next.js
   e integración Git conectada. Falta el primer deploy (depende de las env vars).
+- **Carga de catálogo (S2)**: `POST /api/catalog/load` (route protegida por
+  `CATALOG_ADMIN_SECRET` opcional). Pipeline: documento markdown por producto → vector store
+  OpenAI (`uploadAndPoll`, espera `completed`, guarda `vector_store_file_id`); imagen → bucket
+  `product-images` (re-hospedaje best-effort desde URL/base64); upsert por `sku` en `products`;
+  persistencia de `vector_store_id` en `agent_config` activo; trazabilidad en `catalog_imports`.
+  - `lib/openai/`: `client.ts` (cliente lazy), `catalog.ts` (lógica **pura**: validación
+    SKU↔catálogo, generación de documento, rutas de imagen), `vectorStore.ts` y
+    `catalogLoader.ts` (orquestación). `lib/supabase/storage.ts` (subida a Storage).
+- **Tests**: Vitest (`vitest.config.ts`, scripts `test`/`test:watch`). 11 tests de la lógica
+  pura de catálogo en `lib/openai/catalog.test.ts`.
+- **ADRs** 0008 (Vitest como framework de tests) y 0009 (carga de catálogo: route + archivo
+  por producto).
 
 ### Notes
 - Instalación en Windows con `npm install --ignore-scripts` por un postinstall transitivo
