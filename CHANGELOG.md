@@ -5,11 +5,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 
 ## [Unreleased]
 
-> Sprints 0–3 entregados a nivel de **código y verificación local** (typecheck + tests +
+> Sprints 0–4 entregados a nivel de **código y verificación local** (typecheck + tests +
 > build). El cierre formal (mover a versión) queda pendiente del aprovisionamiento de
 > servicios externos: pings OK a Supabase/OpenAI/Callbell (S0), mensaje real de WhatsApp
-> (S1), carga de un catálogo de prueba (S2) y una respuesta generada contra OpenAI (S3).
-> Ver `docs/sprint-log/sprint-00.md` … `sprint-03.md`.
+> (S1), carga de un catálogo de prueba (S2), una respuesta generada contra OpenAI (S3) y
+> un envío real por Callbell con gate de `#ID` (S4). Ver `docs/sprint-log/sprint-00.md` …
+> `sprint-04.md`.
 
 ### Added
 - **Scaffold Next.js 14 + TypeScript estricto + Tailwind** (App Router): `app/layout.tsx`,
@@ -54,8 +55,13 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `openai_previous_response_id`. No genera si la conversación no está `active` o no hay
   `agent_config`. El envío por Callbell + gate de `#ID` es el S4. 7 tests del parser.
 - **ADR 0010**: generación de un solo paso (sin loop de tools).
-
-### Changed
+- **Envío por Callbell + gate (S4)**: sender `lib/callbell/sender.ts` (`sendText`, `sendImage`
+  sobre `POST /v1/messages/send`, guarda `callbell_message_uuid`). Gate puro
+  `lib/agent/gate.ts`: descarta `#ID` cuyo SKU no exista en `products` (log `gate_blocked`) y
+  valida la ventana de 24h (`out_of_window`). `processMessage` (S4): lookup de SKUs en
+  `products`, envía `cleanText` y, por cada `#ID` válido, la imagen; persiste mensajes
+  `image` y loguea `text_sent`/`image_sent`/`image_missing`. Cada envío va en su propio
+  step de Inngest (memoizado → no reenvía en reintentos). 7 tests del gate.
 - **Framing simplificado**: se elimina el lenguaje de "loop de razonamiento". Es una IA simple
   de **una llamada** por mensaje (`file_search` es hosted). Ajustados `CLAUDE.md`,
   `docs/01-arquitectura.md` y `docs/07-sprints.md` (Sprint 3 → "Generación de respuesta").
