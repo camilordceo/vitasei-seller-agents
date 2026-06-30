@@ -31,6 +31,9 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 - **Migración** `0002_storage_product_images.sql`: bucket público `product-images`.
 - **ADRs** 0005 (validación/parsing del webhook), 0006 (idempotencia), 0007 (concurrencia
   por teléfono).
+- **Infra (S0)**: repo en GitHub `camilordceo/vitasei-seller-agents` (rama por defecto
+  `main`); proyecto Vercel `ai-seller-vitasei` (team `rentmies`) enlazado con preset Next.js
+  e integración Git conectada. Falta el primer deploy (depende de las env vars).
 
 ### Notes
 - Instalación en Windows con `npm install --ignore-scripts` por un postinstall transitivo
