@@ -25,14 +25,16 @@ Cliente WhatsApp
    ▼
 Callbell ──(webhook message_created)──► POST /api/webhooks/callbell
                                           │ 1. valida secret
-                                          │ 2. responde 200 {"status":"ok"}  ← rápido
-                                          │ 3. inngest.send("whatsapp/message.received")
+                                          │ 2. ingesta: guarda inbound + marca "último"
+                                          │ 3. responde 200 {"status":"ok"}
+                                          │ 4. waitUntil: respuesta con debounce
                                           ▼
-                              Inngest function: processMessage
+                              runDebouncedReply (lib/agent) — background
    ┌──────────────────────────────────────────────────────────────────┐
-   │ contexto  guardar inbound; cargar previous_response_id / historial │
+   │ debounce  esperar ~12s; ¿sigo siendo el último mensaje? si no, fin │
+   │ contexto  juntar inbound pendientes; previous_response_id encadena │
    │ GENERAR   1× responses.create: system prompt + file_search +       │
-   │           input (turno actual)  → texto del modelo                 │
+   │           input (mensajes agrupados)  → texto del modelo           │
    │ preparar  quitar los tags del texto (cleanText) + GATE: descartar  │
    │           #ID cuyo SKU no exista en products; chequear ventana 24h │
    │ enviar    Callbell: texto; por cada #ID válido, imagen; si         │
@@ -50,9 +52,9 @@ envío). Cada paso loguea en `events_log`.
 - En cada turno: si existe `previous_response_id` → se pasa para encadenar; si no (o si caducó / conversación vieja), se reconstruye `input` con los últimos N mensajes desde Supabase.
 - **Supabase es la fuente de verdad** del historial (no dependemos solo del retention de OpenAI).
 
-## 4. Webhook: respuesta rápida obligatoria
+## 4. Webhook: ingesta + respuesta con debounce
 
-Callbell hace connection checks y espera `200` con `{"status":"ok"}`; si el endpoint no responde ~10 min, alerta al admin. Por eso el handler **nunca** hace el trabajo pesado inline: valida, encola en Inngest y responde 200. Si Callbell hace un health-check (ping sin mensaje), responder 200 `{"status":"ok"}` sin encolar.
+Callbell hace connection checks y espera `200` con `{"status":"ok"}`. El handler hace la **ingesta síncrona** (`ingestInboundMessage`: guarda el inbound y marca el último mensaje), responde 200, y agenda la **respuesta en background** con `waitUntil` (`runDebouncedReply`): espera `REPLY_DEBOUNCE_MS` (default 12s) y, si sigue siendo el último mensaje, junta los pendientes y responde una sola vez — sin cola async. Si Callbell hace un health-check (ping sin mensaje), responder 200 sin procesar. Ver **ADR-0012** y **ADR-0013**.
 
 ## 5. Idempotencia y orden
 

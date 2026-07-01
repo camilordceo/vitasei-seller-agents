@@ -1,8 +1,13 @@
 # ADR-0007: Concurrencia del loop keyed por teléfono (proxy de conversation_id)
 
-- **Estado:** Aceptada
+- **Estado:** Reemplazada por [ADR-0012](0012-procesamiento-inline-sin-inngest.md)
 - **Fecha:** 2026-06-28
 - **Sprint:** 1
+
+> **Nota (2026-07-01):** este ADR asume Inngest como cola. Con la eliminación de Inngest
+> (ADR-0012), ya no hay clave de concurrencia por teléfono; la serialización que aquí se
+> decidía es ahora deuda conocida documentada en ADR-0012. El texto original se conserva
+> como registro histórico.
 
 ## Contexto
 `01-arquitectura.md` pide `concurrency` por `conversation_id` en Inngest para que dos

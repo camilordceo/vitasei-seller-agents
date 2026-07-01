@@ -33,6 +33,14 @@ export const env = {
     return optional("OPENAI_VECTOR_STORE_ID");
   },
 
+  // Debounce: ms que esperamos tras un inbound para agrupar mensajes seguidos
+  // y responder una sola vez (ver ADR-0013). Default 12s.
+  get REPLY_DEBOUNCE_MS() {
+    const raw = optional("REPLY_DEBOUNCE_MS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : 12000;
+  },
+
   // Callbell
   get CALLBELL_API_KEY() {
     return required("CALLBELL_API_KEY");

@@ -5,10 +5,13 @@ orden y no avances sin cumplir el criterio de aceptación de cada uno.
 
 ## Stack
 Next.js 14 (App Router) · TypeScript estricto · Tailwind · Supabase (Postgres + Storage + Auth) ·
-Inngest (cola async) · OpenAI Responses API + file_search · Callbell (WhatsApp).
+OpenAI Responses API + file_search · Callbell (WhatsApp).
 
 ## Principios
-- **Webhook responde rápido** (200 `{"status":"ok"}`) y delega a Inngest. Nada de LLM inline.
+- **Webhook sin cola async:** ingesta síncrona (guarda inbound + marca "último mensaje") →
+  responde 200 → **respuesta con debounce en background** (`waitUntil`). Ver ADR-0012/0013.
+- **Debounce:** se espera `REPLY_DEBOUNCE_MS` (default 12s) y solo responde la tarea del
+  ÚLTIMO mensaje, juntando los mensajes seguidos en una sola llamada. Nada de servicios extra.
 - **Supabase = fuente de verdad** del historial. `previous_response_id` es conveniencia, no estado canónico.
 - **Gate anti-alucinación siempre:** ningún `#ID` se envía si el SKU no existe en `products`.
 - **Tags nunca son visibles al cliente:** se quitan del texto antes de enviar.
@@ -16,27 +19,26 @@ Inngest (cola async) · OpenAI Responses API + file_search · Callbell (WhatsApp
 - **Teléfonos** en E.164 sin `+` (`573XXXXXXXXX`).
 - **Idempotencia** por `callbell_message_uuid`.
 
-## Flujo por mensaje (Inngest)
-Es una **IA simple**: **una sola llamada** a Responses por mensaje. No hay loop de tools ni
-razonamiento iterativo (`file_search` es hosted: OpenAI busca y responde en esa misma llamada).
-Por cada inbound:
-**generar** (1× `responses.create`) → **preparar** (quitar tags del texto + gate: validar que
-cada `#ID` exista en `products`) → **enviar** (texto + imágenes válidas por Callbell) →
-**guardar/loguear** en `messages` y `events_log`.
+## Flujo por mensaje (ingesta + debounce)
+Es una **IA simple**: **una sola llamada** a Responses por (ráfaga de) mensajes. No hay loop
+de tools (`file_search` es hosted: OpenAI busca y responde en esa misma llamada). En
+`lib/agent/processMessage.ts`: **ingesta** (`ingestInboundMessage`, síncrona: guarda inbound,
+marca `last_inbound_message_uuid`) → 200 → **respuesta** en background
+(`runDebouncedReply` vía `waitUntil`): espera el debounce, y si sigue siendo el último
+mensaje, junta los pendientes y **genera** (1× `responses.create`) → **prepara** (quitar tags
++ gate: `#ID` debe existir en `products`) → **envía** (texto + imágenes por Callbell) →
+**guarda/loguea** en `messages` y `events_log`.
 
 ## Estructura objetivo
 ```
 app/
-  api/webhooks/callbell/route.ts
-  api/inngest/route.ts
+  api/webhooks/callbell/route.ts   # valida + procesa inline + 200
   (dashboard)/...
 lib/
   supabase/        # clientes browser + server(service-role)
   openai/          # responses + vector store + carga catálogo
   callbell/        # sender (sendText, sendImage), tipos webhook
-  agent/           # parser de tags + gate (#ID existe en products)
-inngest/
-  functions/processMessage.ts
+  agent/           # processMessage (flujo inline) + parser de tags + gate
 supabase/migrations/0001_init.sql
 docs/
 ```

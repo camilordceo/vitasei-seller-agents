@@ -21,12 +21,12 @@ los toma en orden. Tiempo estimado: dev a tiempo parcial.
 **Entregables**
 - Scaffold Next.js 14 + TS + Tailwind. Cliente Supabase (browser + server/service-role).
 - Aplicar migración `0001_init.sql` (`supabase db push`). Bucket `product-images`.
-- Setup Inngest (cliente + endpoint `/api/inngest`).
-- Route handler `POST /api/webhooks/callbell`: valida secret, responde `200 {"status":"ok"}`,
-  filtra `message_created` inbound, normaliza teléfono, encola `whatsapp/message.received`.
+- Route handler `POST /api/webhooks/callbell`: valida secret, filtra `message_created`
+  inbound, normaliza teléfono, **procesa inline** (`processInboundMessage`) y responde
+  `200 {"status":"ok"}`. Sin cola async — ver ADR-0012.
 - Idempotencia por `callbell_message_uuid`.
 
-**Aceptación:** un mensaje real de WhatsApp llega al webhook, se encola en Inngest y se ve un
+**Aceptación:** un mensaje real de WhatsApp llega al webhook, se procesa inline y se ve un
 registro en `events_log` (`webhook_received`). Contact + conversation se crean/actualizan.
 
 ---

@@ -19,17 +19,13 @@ export default function Home() {
           <dd className="font-mono text-gray-900">/api/webhooks/callbell</dd>
         </div>
         <div className="flex justify-between border-b border-gray-100 pb-2">
-          <dt className="text-gray-500">Inngest</dt>
-          <dd className="font-mono text-gray-900">/api/inngest</dd>
-        </div>
-        <div className="flex justify-between border-b border-gray-100 pb-2">
           <dt className="text-gray-500">Health check</dt>
           <dd className="font-mono text-gray-900">/api/health</dd>
         </div>
       </dl>
 
       <p className="text-xs text-gray-400">
-        Stack: Next.js 14 · TypeScript · Supabase · Inngest · OpenAI · Callbell
+        Stack: Next.js 14 · TypeScript · Supabase · OpenAI · Callbell
       </p>
     </main>
   );

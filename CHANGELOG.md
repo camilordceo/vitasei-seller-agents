@@ -31,6 +31,10 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 - **Health check** `GET /api/health`: verifica conectividad a Supabase, OpenAI y Callbell
   (soporta la aceptación del Sprint 0).
 - **Migración** `0002_storage_product_images.sql`: bucket público `product-images`.
+- **Migración** `0003_seed_agent_config.sql`: siembra el `agent_config` activo con el system
+  prompt v1 (docs/03 §5). Sin esta fila el bot no genera respuesta. `vector_store_id` queda
+  NULL a propósito: lo rellena el cargador de catálogo. Idempotente. Aplicar **antes** de cargar
+  el catálogo.
 - **ADRs** 0005 (validación/parsing del webhook), 0006 (idempotencia), 0007 (concurrencia
   por teléfono).
 - **Infra (S0)**: repo en GitHub `camilordceo/vitasei-seller-agents` (rama por defecto
@@ -73,6 +77,31 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 - **Framing simplificado**: se elimina el lenguaje de "loop de razonamiento". Es una IA simple
   de **una llamada** por mensaje (`file_search` es hosted). Ajustados `CLAUDE.md`,
   `docs/01-arquitectura.md` y `docs/07-sprints.md` (Sprint 3 → "Generación de respuesta").
+
+### Changed
+- **Debounce de respuestas (agrupar mensajes seguidos).** El webhook hace ingesta síncrona
+  y agenda la respuesta en background con `waitUntil` (`@vercel/functions`): espera
+  `REPLY_DEBOUNCE_MS` (default 12s) y solo responde la tarea del ÚLTIMO mensaje, juntando los
+  inbound pendientes en una sola llamada a Responses. Resuelve la serialización sin lock y
+  mejora la UX (no contesta a cada mensajito). `processInboundMessage` se divide en
+  `ingestInboundMessage` (fase 1) + `runDebouncedReply`/`generateAndSend` (fase 2). Nueva
+  columna `conversations.last_inbound_message_uuid` (migración `0004`) y env
+  `REPLY_DEBOUNCE_MS`. Ver **ADR-0013**.
+- **Refactor a procesamiento inline (fuera Inngest).** El webhook
+  `POST /api/webhooks/callbell` ahora procesa el mensaje **dentro del request**
+  (`lib/agent/processMessage.ts`: `processInboundMessage`) y responde 200 — sin cola async.
+  Se conserva íntegra la lógica de S1/S3/S4/S5 (idempotencia, generar, gate, envío, orden,
+  handoff); solo se elimina el envoltorio `step.run` y el `inngest.send`. El vector store
+  del catálogo se toma de `agent_config.vector_store_id` o, si no está, de
+  `OPENAI_VECTOR_STORE_ID` (store creado y administrado directo en OpenAI). Ver **ADR-0012**.
+- **Migración `0003`**: comentario actualizado — `vector_store_id` viene de env, no del loader.
+
+### Removed
+- **Inngest** como dependencia y servicio: se borran `lib/inngest/client.ts`,
+  `app/api/inngest/route.ts` e `inngest/functions/processMessage.ts`; se quita `inngest` de
+  `package.json` y las envs `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY`. Servicios externos:
+  Supabase + OpenAI + Callbell. **ADR-0007** queda reemplazado por **ADR-0012** (sin la cola
+  no hay serialización por teléfono; deuda conocida documentada).
 
 ### Notes
 - Instalación en Windows con `npm install --ignore-scripts` por un postinstall transitivo

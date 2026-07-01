@@ -12,13 +12,13 @@ Base URL: `https://api.callbell.eu/v1` · Auth: `Authorization: Bearer <CALLBELL
 - Normalizar teléfono a E.164 sin `+`.
 
 ```ts
-// pseudo
+// pseudo — procesamiento inline (sin cola async; ver ADR-0012)
 export async function POST(req) {
   const sig = req.headers.get('x-callbell-secret');
   if (sig !== process.env.CALLBELL_WEBHOOK_SECRET) return json({status:'ok'}); // no filtrar info
   const body = await req.json();
   if (body?.event !== 'message_created' || isOutbound(body)) return json({status:'ok'});
-  await inngest.send({ name: 'whatsapp/message.received', data: body });
+  try { await processInboundMessage(normalize(body)); } catch (e) { logError(e); }
   return json({ status: 'ok' });
 }
 ```

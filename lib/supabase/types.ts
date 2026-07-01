@@ -74,6 +74,7 @@ export interface Database {
           openai_previous_response_id: string | null;
           assigned_team_uuid: string | null;
           last_inbound_at: string | null;
+          last_inbound_message_uuid: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -86,6 +87,7 @@ export interface Database {
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
+          last_inbound_message_uuid?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -98,6 +100,7 @@ export interface Database {
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
+          last_inbound_message_uuid?: string | null;
           created_at?: string;
           updated_at?: string;
         };
