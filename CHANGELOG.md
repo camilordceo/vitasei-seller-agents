@@ -5,12 +5,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 
 ## [Unreleased]
 
-> Sprints 0–4 entregados a nivel de **código y verificación local** (typecheck + tests +
+> Sprints 0–5 entregados a nivel de **código y verificación local** (typecheck + tests +
 > build). El cierre formal (mover a versión) queda pendiente del aprovisionamiento de
 > servicios externos: pings OK a Supabase/OpenAI/Callbell (S0), mensaje real de WhatsApp
-> (S1), carga de un catálogo de prueba (S2), una respuesta generada contra OpenAI (S3) y
-> un envío real por Callbell con gate de `#ID` (S4). Ver `docs/sprint-log/sprint-00.md` …
-> `sprint-04.md`.
+> (S1), carga de un catálogo de prueba (S2), una respuesta generada contra OpenAI (S3),
+> un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
+> handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
 - **Scaffold Next.js 14 + TypeScript estricto + Tailwind** (App Router): `app/layout.tsx`,
@@ -62,6 +62,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `products`, envía `cleanText` y, por cada `#ID` válido, la imagen; persiste mensajes
   `image` y loguea `text_sent`/`image_sent`/`image_missing`. Cada envío va en su propio
   step de Inngest (memoizado → no reenvía en reintentos). 7 tests del gate.
+- **Flujos de compra + handoff (S5)**: en `processMessage`, `#addi`/`#compra-contra-entrega`
+  fijan `fulfillment_method` (y `#addi` envía `ADDI_LINK` si está); `#orden-lista` extrae la
+  orden con una **completion estructurada** (`lib/openai/extractOrder.ts`, `chat.completions`
+  + `json_schema`) desde el transcript y crea `orders` + `order_items`; `#orden-lista`/`#humano`
+  hacen **handoff** (send con `team_uuid` + `bot_end`, `status = handed_off`, `assigned_team_uuid`).
+  Lógica pura de orden en `lib/agent/order.ts` (transcript, total, normalización) con 7 tests.
+  Sender extendido con `SendOptions` (`teamUuid`/`botStatus`). Nueva env opcional `ADDI_LINK`.
+- **ADR 0011**: extracción de la orden con completion estructurada (solo al cerrar, no por mensaje).
 - **Framing simplificado**: se elimina el lenguaje de "loop de razonamiento". Es una IA simple
   de **una llamada** por mensaje (`file_search` es hosted). Ajustados `CLAUDE.md`,
   `docs/01-arquitectura.md` y `docs/07-sprints.md` (Sprint 3 → "Generación de respuesta").
