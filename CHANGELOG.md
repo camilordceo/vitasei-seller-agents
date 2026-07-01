@@ -18,7 +18,8 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (ventas generadas = suma de `orders.total`, transacciones = # órdenes, y **costo de tokens
   estimado** — placeholder de precio, tokens reales) + lista de conversaciones recientes;
   **detalle de conversación** con hilo de mensajes estilo WhatsApp + panel de contacto/orden.
-  `lib/dashboard/queries.ts` (consultas) y `format.ts` (formateo es-CO/COP). Estados
+  Sección dedicada **Conversaciones** (`/dashboard/conversations`, lista completa) con enlace
+  en el nav, además del resumen. `lib/dashboard/queries.ts` (consultas) y `format.ts` (formateo es-CO/COP). Estados
   `loading`/`error`, reglas Pro Max (contraste, focus rings, touch targets, skeletons).
   Gate de acceso con **Basic Auth** (`middleware.ts`, `DASHBOARD_USER`/`DASHBOARD_PASSWORD`);
   Supabase Auth queda para más adelante. Pendiente de S6: órdenes, productos, métricas,

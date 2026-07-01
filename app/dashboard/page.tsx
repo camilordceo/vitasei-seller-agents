@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getKpis, getRecentConversations } from "@/lib/dashboard/queries";
-import { formatCOP, formatNumber, formatUsd, relativeTime } from "@/lib/dashboard/format";
-import { KpiCard, StatusPill, MethodPill } from "./ui";
+import { formatCOP, formatNumber, formatUsd } from "@/lib/dashboard/format";
+import { KpiCard, ConversationList } from "./ui";
 
 // Datos siempre frescos (nada de caché estática en el panel).
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ const IconChip = (
 );
 
 export default async function DashboardPage() {
-  const [kpis, convos] = await Promise.all([getKpis(), getRecentConversations(30)]);
+  const [kpis, convos] = await Promise.all([getKpis(), getRecentConversations(8)]);
   const totalTokens = kpis.inputTokens + kpis.outputTokens;
 
   return (
@@ -58,42 +58,16 @@ export default async function DashboardPage() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold text-slate-700">Conversaciones recientes</h2>
-        {convos.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
-            <p className="text-sm text-slate-500">Aún no hay conversaciones.</p>
-            <p className="mt-1 text-xs text-slate-400">
-              Aparecerán aquí cuando lleguen mensajes por WhatsApp.
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
-            {convos.map((c) => (
-              <li key={c.id}>
-                <Link
-                  href={`/dashboard/conversations/${c.id}`}
-                  className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium text-slate-900">
-                        {c.contactName ?? c.phone}
-                      </span>
-                      <StatusPill status={c.status} />
-                    </div>
-                    <p className="mt-0.5 truncate text-sm text-slate-500">
-                      {c.lastMessage ?? "Sin mensajes"}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    <span className="text-xs text-slate-400">{relativeTime(c.lastActivity)}</span>
-                    <MethodPill method={c.method} />
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-700">Conversaciones recientes</h2>
+          <Link
+            href="/dashboard/conversations"
+            className="rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          >
+            Ver todas
+          </Link>
+        </div>
+        <ConversationList rows={convos} />
       </section>
     </div>
   );
