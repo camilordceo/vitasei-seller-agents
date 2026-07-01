@@ -520,31 +520,29 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         ? "¡Listo! Te paso con el equipo que confirma tu pedido y la entrega."
         : "";
 
-  if (textToSend.length > 0) {
-    const sent = await sendText(
-      phone,
-      textToSend,
-      isHandoff
-        ? {
-            metadata: { conversation_id: conversationId },
-            teamUuid: env.CALLBELL_LOGISTICS_TEAM_UUID,
-            botStatus: "bot_end",
-          }
-        : { metadata: { conversation_id: conversationId } },
-    );
-    await supabase
-      .from("messages")
-      .update({ callbell_message_uuid: sent.uuid })
-      .eq("id", outboundMessageId);
-    await supabase.from("events_log").insert({
-      conversation_id: conversationId,
-      type: "text_sent",
-      payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
-    });
-  }
+  const meta = { metadata: { conversation_id: conversationId } };
 
-  // Imágenes de los #ID válidos (no en handoff: la conversación se cierra).
-  if (!isHandoff) {
+  if (isHandoff) {
+    // Handoff: solo texto (reasigna + apaga el bot). Sin imágenes: se cierra.
+    if (textToSend.length > 0) {
+      const sent = await sendText(phone, textToSend, {
+        ...meta,
+        teamUuid: env.CALLBELL_LOGISTICS_TEAM_UUID,
+        botStatus: "bot_end",
+      });
+      await supabase
+        .from("messages")
+        .update({ callbell_message_uuid: sent.uuid })
+        .eq("id", outboundMessageId);
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "text_sent",
+        payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
+      });
+    }
+  } else {
+    // Imágenes válidas (SKU existe en `products` y tiene image_url).
+    const validImages: Array<{ sku: string; imageUrl: string; name: string | null }> = [];
     for (const sku of gate.validSkus) {
       const product = productBySku.get(sku);
       if (!product?.image_url) {
@@ -555,25 +553,57 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         });
         continue;
       }
+      validImages.push({ sku, imageUrl: product.image_url, name: product.name ?? null });
+    }
 
-      const imageUrl = product.image_url;
-      const caption = product.name ?? null;
-      const sent = await sendImage(phone, imageUrl, caption);
-      await supabase.from("messages").insert({
-        conversation_id: conversationId,
-        direction: "outbound",
-        role: "assistant",
-        type: "image",
-        content: caption,
-        media_url: imageUrl,
-        tags: [sku] as unknown as Json,
-        callbell_message_uuid: sent.uuid,
-      });
+    // Caption de WhatsApp: límite ~1024 chars. Si el texto cabe, va JUNTO con la
+    // primera imagen (una sola llamada a Callbell = un mensaje con foto + texto).
+    // Si el texto es muy largo o no hay imagen, van por separado.
+    const CAPTION_MAX = 1024;
+    const combine =
+      validImages.length > 0 && textToSend.length > 0 && textToSend.length <= CAPTION_MAX;
+
+    if (combine) {
+      const [first, ...rest] = validImages;
+      // La primera imagen lleva el texto como caption → reutilizamos el mensaje
+      // outbound (que ya guardaba el texto) marcándolo como imagen.
+      const sent = await sendImage(phone, first.imageUrl, textToSend, meta);
+      await supabase
+        .from("messages")
+        .update({ type: "image", media_url: first.imageUrl, callbell_message_uuid: sent.uuid })
+        .eq("id", outboundMessageId);
       await supabase.from("events_log").insert({
         conversation_id: conversationId,
         type: "image_sent",
-        payload: { sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
+        payload: {
+          sku: first.sku,
+          uuid: sent.uuid,
+          status: sent.status,
+          withCaption: true,
+        } as unknown as Json,
       });
+      // Imágenes adicionales: mensajes aparte con el nombre del producto.
+      for (const img of rest) {
+        await sendProductImage(supabase, conversationId, phone, img, meta);
+      }
+    } else {
+      // Texto (si hay) como su propio mensaje.
+      if (textToSend.length > 0) {
+        const sent = await sendText(phone, textToSend, meta);
+        await supabase
+          .from("messages")
+          .update({ callbell_message_uuid: sent.uuid })
+          .eq("id", outboundMessageId);
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "text_sent",
+          payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
+        });
+      }
+      // Imágenes por separado (con el nombre del producto como caption).
+      for (const img of validImages) {
+        await sendProductImage(supabase, conversationId, phone, img, meta);
+      }
     }
 
     // #addi → enviar el link/instrucciones si está configurado (v1 sin API Addi).
@@ -582,7 +612,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       const sent = await sendText(
         phone,
         `Puedes financiar tu compra con Addi aquí: ${addiLink}`,
-        { metadata: { conversation_id: conversationId } },
+        meta,
       );
       await supabase.from("events_log").insert({
         conversation_id: conversationId,
@@ -613,4 +643,34 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       } as unknown as Json,
     });
   }
+}
+
+/**
+ * Envía UNA imagen de producto en su propio mensaje (con el nombre como caption),
+ * guarda la fila `messages` (type image) y loguea `image_sent`. Se usa para las
+ * imágenes adicionales cuando hay varios `#ID` (la primera va junto al texto).
+ */
+async function sendProductImage(
+  supabase: DB,
+  conversationId: string,
+  phone: string,
+  img: { sku: string; imageUrl: string; name: string | null },
+  opts: { metadata?: Record<string, unknown> },
+): Promise<void> {
+  const sent = await sendImage(phone, img.imageUrl, img.name, opts);
+  await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    direction: "outbound",
+    role: "assistant",
+    type: "image",
+    content: img.name,
+    media_url: img.imageUrl,
+    tags: [img.sku] as unknown as Json,
+    callbell_message_uuid: sent.uuid,
+  });
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "image_sent",
+    payload: { sku: img.sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
+  });
 }

@@ -77,11 +77,16 @@ export function sendText(
   });
 }
 
-/** Envía una imagen por URL (la del `#ID` validado), con caption opcional. */
+/**
+ * Envía una imagen por URL (la del `#ID` validado) con caption opcional. El
+ * `caption` viaja en `content.text`, así la imagen y el texto van en el MISMO
+ * mensaje (una sola llamada a Callbell). Límite de caption de WhatsApp ~1024.
+ */
 export function sendImage(
   to: string,
   url: string,
   caption?: string | null,
+  options?: { metadata?: Record<string, unknown> },
 ): Promise<SentMessage> {
   const content: Record<string, unknown> = { url };
   if (caption) content.text = caption;
@@ -91,5 +96,6 @@ export function sendImage(
     type: "image",
     content,
     channel_uuid: env.CALLBELL_WHATSAPP_CHANNEL_UUID,
+    metadata: options?.metadata,
   });
 }

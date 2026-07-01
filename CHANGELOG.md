@@ -13,6 +13,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Changed
+- **Imagen + texto en el MISMO mensaje**: cuando el agente recomienda un producto, el texto
+  viaja como *caption* de la imagen en una sola llamada a Callbell (`sendImage` con `content.text`),
+  en vez de un mensaje de texto + otro de imagen. Si hay varios `#ID`, la primera imagen lleva
+  el texto y las demás van aparte; si el texto excede el límite de caption (~1024) o no hay
+  imagen, van por separado. `sendImage` acepta `metadata`. (`lib/agent/processMessage.ts`,
+  `lib/callbell/sender.ts`).
 - **Formato de `#ID` a inline (ver `docs/09`, ADR-0014)**: el agente escribe el `#ID` del
   catálogo **inline** (`#ID7948237144230`) en vez de `#ID:SKU` en línea propia. `parseReply`
   (`lib/agent/tags.ts`) lo extrae con `/#ID\d+/g`, usa el **token completo como `sku`** y lo
