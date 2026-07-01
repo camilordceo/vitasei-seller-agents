@@ -23,9 +23,16 @@ export interface GenerateReplyParams {
   maxNumResults?: number;
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface GeneratedReply {
   responseId: string;
   text: string;
+  usage: TokenUsage | null;
 }
 
 export async function generateReply(
@@ -51,5 +58,16 @@ export async function generateReply(
     temperature: params.temperature,
   });
 
-  return { responseId: response.id, text: response.output_text ?? "" };
+  const u = response.usage as
+    | { input_tokens?: number; output_tokens?: number; total_tokens?: number }
+    | undefined;
+  const usage: TokenUsage | null = u
+    ? {
+        inputTokens: u.input_tokens ?? 0,
+        outputTokens: u.output_tokens ?? 0,
+        totalTokens: u.total_tokens ?? 0,
+      }
+    : null;
+
+  return { responseId: response.id, text: response.output_text ?? "", usage };
 }

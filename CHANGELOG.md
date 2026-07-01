@@ -13,6 +13,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Dashboard v1 (Sprint 6, parcial)**: panel interno server-rendered en `/dashboard`
+  (lee con el cliente service-role; nunca expone la llave). Vistas: **Resumen** con KPIs
+  (ventas generadas = suma de `orders.total`, transacciones = # órdenes, y **costo de tokens
+  estimado** — placeholder de precio, tokens reales) + lista de conversaciones recientes;
+  **detalle de conversación** con hilo de mensajes estilo WhatsApp + panel de contacto/orden.
+  `lib/dashboard/queries.ts` (consultas) y `format.ts` (formateo es-CO/COP). Estados
+  `loading`/`error`, reglas Pro Max (contraste, focus rings, touch targets, skeletons).
+  Gate de acceso con **Basic Auth** (`middleware.ts`, `DASHBOARD_USER`/`DASHBOARD_PASSWORD`);
+  Supabase Auth queda para más adelante. Pendiente de S6: órdenes, productos, métricas,
+  realtime.
+- **Captura de uso de tokens**: `generateReply` devuelve `usage` (input/output/total) y se
+  loguea en `events_log.reply_generated` — alimenta el KPI de costo del dashboard.
 - **Scaffold Next.js 14 + TypeScript estricto + Tailwind** (App Router): `app/layout.tsx`,
   `app/page.tsx`, `app/globals.css`, configs (`tsconfig`, `next.config.mjs`, `tailwind`,
   `postcss`, `.eslintrc`). Dependencias reales en `package.json`.

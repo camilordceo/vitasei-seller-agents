@@ -9,8 +9,14 @@ export default function Home() {
           Vitasei — Agente de WhatsApp
         </h1>
         <p className="mt-3 text-base text-gray-600">
-          Backend del agente de ventas. El dashboard llega en el Sprint 6.
+          Backend del agente de ventas por WhatsApp.
         </p>
+        <a
+          href="/dashboard"
+          className="mt-4 inline-flex min-h-[44px] items-center rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+        >
+          Abrir panel
+        </a>
       </div>
 
       <dl className="grid gap-3 text-sm">

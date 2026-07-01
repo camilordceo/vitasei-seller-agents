@@ -399,6 +399,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       responseId: gen.responseId,
       skus: parsed.tags.skus,
       tags: parsed.tags.raw,
+      usage: gen.usage, // tokens para el KPI de costo del dashboard
     } as unknown as Json,
   });
 
