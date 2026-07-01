@@ -566,7 +566,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         type: "image",
         content: caption,
         media_url: imageUrl,
-        tags: [`#ID:${sku}`] as unknown as Json,
+        tags: [sku] as unknown as Json,
         callbell_message_uuid: sent.uuid,
       });
       await supabase.from("events_log").insert({

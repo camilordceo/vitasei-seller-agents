@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import {
   type CallbellWebhookBody,
+  classifyInbox,
   isInboundMessageEvent,
   normalizePhone,
 } from "@/lib/callbell/types";
@@ -10,6 +11,7 @@ import {
   runDebouncedReply,
 } from "@/lib/agent/processMessage";
 import { createServiceClient } from "@/lib/supabase/server";
+import { env } from "@/lib/env";
 import type { Json } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
@@ -33,6 +35,20 @@ function secretIsValid(req: Request): boolean {
   const fromHeader = req.headers.get("x-callbell-secret");
   const fromQuery = new URL(req.url).searchParams.get("secret");
   return fromHeader === expected || fromQuery === expected;
+}
+
+/**
+ * Log best-effort del filtro de número (`inbox_rejected` / `inbox_indeterminate`).
+ * No tiene `conversation_id` (aún no hay conversación) y nunca debe tumbar el 200.
+ */
+async function logInbox(type: string, payload: unknown): Promise<void> {
+  try {
+    await createServiceClient()
+      .from("events_log")
+      .insert({ type, payload: payload as unknown as Json });
+  } catch {
+    // best-effort: si ni el log entra, queda en los logs de Vercel.
+  }
 }
 
 /**
@@ -64,12 +80,31 @@ export async function POST(req: Request) {
   const phone = normalizePhone(payload.contact?.phoneNumber);
   const messageUuid = payload.uuid ?? null;
 
+  // 5) Filtro de número: Callbell tiene varios números y un solo webhook. Solo
+  //    respondemos a los que llegan al número de la IA (por número destino o, si
+  //    no viene, por channel_uuid). Ver ADR-0015.
+  const inbox = classifyInbox(
+    payload,
+    env.AGENT_WHATSAPP_NUMBER,
+    env.CALLBELL_WHATSAPP_CHANNEL_UUID,
+  );
+  if (inbox.decision === "reject") {
+    // No es el número de la IA: no procesar. Logueamos (best-effort) para auditar.
+    await logInbox("inbox_rejected", { phone, messageUuid, inbox, body });
+    return ok();
+  }
+  if (inbox.decision === "indeterminate") {
+    // No pudimos determinar el destino con este webhook. Procesamos igual
+    // (fail-open) pero dejamos el crudo para confirmar el campo y endurecer.
+    await logInbox("inbox_indeterminate", { phone, messageUuid, inbox, body });
+  }
+
   // Sin teléfono o sin uuid no podemos procesar de forma idempotente → ack y salir.
   if (!phone || !messageUuid) return ok();
 
   const receivedAt = Date.now();
 
-  // 5) Ingesta síncrona. Un error no debe tumbar el webhook: se registra y 200.
+  // 6) Ingesta síncrona. Un error no debe tumbar el webhook: se registra y 200.
   try {
     const ingest = await ingestInboundMessage({
       phone,
@@ -83,7 +118,7 @@ export async function POST(req: Request) {
       receivedAt,
     });
 
-    // 6) Duplicado → no reprogramar. Si no, agendar la respuesta con debounce.
+    // 7) Duplicado → no reprogramar. Si no, agendar la respuesta con debounce.
     if (!ingest.duplicate) {
       waitUntil(
         runDebouncedReply({

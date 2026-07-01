@@ -9,6 +9,10 @@ Base URL: `https://api.callbell.eu/v1` · Auth: `Authorization: Bearer <CALLBELL
 - Responder **siempre 200** con `{"status":"ok"}` (Callbell hace health-checks; si no respondes ~10 min, alerta al admin).
 - Validar `CALLBELL_WEBHOOK_SECRET` (header/query). **TODO:** confirmar el mecanismo de firma exacto de Callbell y endurecer.
 - Filtrar: procesar solo mensajes **inbound del cliente** (ignorar outbound propios y status updates en este endpoint).
+- **Filtrar por número de la IA:** la cuenta tiene varios números y un solo webhook. Solo se
+  procesan los inbound al número de la IA (`AGENT_WHATSAPP_NUMBER=573332877350`); por número
+  destino o, si no viene en el payload, por `channel_uuid` (`CALLBELL_WHATSAPP_CHANNEL_UUID`).
+  El resto se descarta con `inbox_rejected`. Ver **ADR-0015** y `docs/09`.
 - Normalizar teléfono a E.164 sin `+`.
 
 ```ts
@@ -40,7 +44,8 @@ Respuesta: `{ "message": { "uuid": "...", "status": "enqueued" } }` → guardar 
 
 ## 3. Enviar imagen (sistema `#ID`)
 
-Por cada `#ID:<sku>` válido:
+La IA escribe el `#ID` **inline** (`#ID7948237144230`); el backend lo extrae por regex,
+busca el producto en `products` por `sku` y, por cada `#ID` **válido** (gate), envía:
 ```bash
 POST /v1/messages/send
 {
@@ -50,7 +55,10 @@ POST /v1/messages/send
   "content": { "url": "<products.image_url>", "text": "<caption opcional: nombre/precio>" }
 }
 ```
-> Confirmar en Sprint 3 el shape exacto de `content` para imagen en tu versión de la API de Callbell (campo `url` vs `attachment`). Dejar el sender abstraído (`sendImage(to, url, caption)`).
+> Dos tipos de envío: **sin imagen** = solo `sendText` (flujo normal); **con imagen** =
+> `sendText` (texto limpio, sin el `#ID`) + un `sendImage` por cada `#ID` válido. Ver `docs/09`
+> y ADR-0014. Sender abstraído (`sendImage(to, url, caption)`); `content.url` confirmado en
+> el sender.
 
 ## 4. Handoff a logística
 

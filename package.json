@@ -10,7 +10,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "import:catalog": "node scripts/import-catalog-csv.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

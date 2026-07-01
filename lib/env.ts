@@ -55,6 +55,13 @@ export const env = {
     return optional("CALLBELL_WHATSAPP_CHANNEL_UUID");
   },
 
+  // Número de WhatsApp de la IA (E.164 sin '+'). En Callbell hay varios números
+  // y un solo webhook: solo procesamos los inbound que llegan a ESTE número.
+  // Si está vacío, el filtro queda desactivado (procesa todo — solo dev).
+  get AGENT_WHATSAPP_NUMBER() {
+    return optional("AGENT_WHATSAPP_NUMBER");
+  },
+
   // Addi (v1: solo enviar link/instrucciones; sin API — ver "No hacer en v1")
   get ADDI_LINK() {
     return optional("ADDI_LINK");

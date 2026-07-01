@@ -12,7 +12,27 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Changed
+- **Formato de `#ID` a inline (ver `docs/09`, ADR-0014)**: el agente escribe el `#ID` del
+  catálogo **inline** (`#ID7948237144230`) en vez de `#ID:SKU` en línea propia. `parseReply`
+  (`lib/agent/tags.ts`) lo extrae con `/#ID\d+/g`, usa el **token completo como `sku`** y lo
+  quita del texto que ve el cliente. El SKU real del catálogo de Vitasei es el valor de la
+  columna `ID` del CSV. Prompt actualizado en `supabase/migrations/0005_update_agent_prompt.sql`
+  (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
+
 ### Added
+- **Ajustes v1.1 — datos reales (ver `docs/09`)**:
+  - **Filtro por número de la IA** en el webhook: la cuenta de Callbell tiene varios números y
+    un solo webhook; solo se procesan los inbound al número de la IA
+    (`AGENT_WHATSAPP_NUMBER=573332877350`), por número destino o, si no viene, por
+    `channel_uuid`. `classifyInbox`/`getDestinationNumber`/`getChannelUuid` en
+    `lib/callbell/types.ts`; logs `inbox_rejected`/`inbox_indeterminate`. Nueva env
+    `AGENT_WHATSAPP_NUMBER`. Tests en `lib/callbell/types.test.ts`. **ADR-0015**.
+  - **Carga del catálogo real desde CSV**: `scripts/import-catalog-csv.mjs`
+    (`npm run import:catalog`, sin dependencias) mapea `vitasei-productos-actualizado.csv`
+    (16 productos) → `products` y hace POST a `/api/catalog/load` (reusa el pipeline S2:
+    vector store + imagen a Storage + upsert por `sku`). Modo `--dry` para previsualizar.
+    **ADR-0016**.
 - **Dashboard v1 (Sprint 6, parcial)**: panel interno server-rendered en `/dashboard`
   (lee con el cliente service-role; nunca expone la llave). Vistas: **Resumen** con KPIs
   (ventas generadas = suma de `orders.total`, transacciones = # órdenes, y **costo de tokens

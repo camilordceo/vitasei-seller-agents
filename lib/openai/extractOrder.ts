@@ -69,8 +69,9 @@ const ORDER_JSON_SCHEMA: Record<string, unknown> = {
 
 const EXTRACTION_INSTRUCTIONS = `Eres un extractor de datos de órdenes de venta por WhatsApp.
 A partir de la conversación, devuelve la orden en JSON según el schema:
-- items: cada producto que el cliente confirmó comprar, con su SKU (si aparece como #ID:SKU o
-  en el catálogo), nombre, cantidad (entero >= 1) y precio unitario si se mencionó.
+- items: cada producto que el cliente confirmó comprar, con su SKU (si aparece un #ID como
+  #ID7948237144230, úsalo tal cual como sku), nombre, cantidad (entero >= 1) y precio unitario
+  si se mencionó.
 - shipping: nombre, dirección, ciudad y teléfono del cliente, si los dio.
 - fulfillment_method: "addi" o "cod" (contra entrega) según lo que eligió; null si no está claro.
 - notes: cualquier detalle relevante para logística.

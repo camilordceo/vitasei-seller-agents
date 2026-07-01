@@ -9,17 +9,22 @@ asesorar → mostrar producto → resolver dudas (con File Search) → llevar a 
 
 | Tag | Cuándo lo emite el agente | Qué hace el backend |
 |-----|---------------------------|---------------------|
-| `#ID:<sku>` | Al recomendar/mostrar un producto concreto | Envía imagen del producto (lookup en `products`) |
+| `#ID<dígitos>` (inline) | Al recomendar/mostrar un producto concreto | Envía imagen del producto (lookup en `products`) |
 | `#addi` | Cliente elige financiar con Addi | Envía info/link Addi; `fulfillment_method = addi` |
 | `#compra-contra-entrega` | Cliente elige pago contra entrega | Inicia recolección de datos COD |
 | `#orden-lista` | Ya tiene método + ítems + datos de envío completos | Crea orden + **handoff** a logística |
 | `#humano` | Cliente pide humano o caso fuera de alcance | Handoff inmediato (sin orden) |
 
 ### Reglas de formato (críticas)
-- Cada tag va **al final del mensaje, en su propia línea**.
-- `#ID:` usa el **SKU exacto** del catálogo. **Nunca** inventar un SKU.
-- Puede haber varios `#ID:` (uno por línea) si muestra varios productos.
-- Los tags **no son visibles** para el cliente: el backend los **quita** del texto antes de enviar. El agente escribe el mensaje natural y agrega los tags abajo.
+- **`#ID` va INLINE** (formato `#ID` + dígitos, p. ej. `#ID7948237144230`): el agente lo
+  escribe dentro del mensaje; el backend lo detecta por regex (`/#ID\d+/g`), envía la imagen
+  y lo **borra** del texto. El **SKU es el token completo** (incluye `#ID`) y es el `sku`
+  exacto del catálogo. **Nunca** inventar ni modificar un `#ID`. Ver ADR-0014.
+- Puede haber varios `#ID` (se deduplican en orden) si muestra varios productos.
+- Los tags de **flujo** (`#addi`, `#compra-contra-entrega`, `#orden-lista`, `#humano`) van
+  **al final del mensaje, cada uno en su propia línea**.
+- Los tags **no son visibles** para el cliente: el backend los **quita** del texto antes de
+  enviar. El agente escribe el mensaje natural.
 
 ## 3. Reglas anti-alucinación (gate)
 
@@ -61,16 +66,17 @@ CÓMO TRABAJAS
 - Respondes dudas de producto SOLO con la información del catálogo (búsqueda de archivos).
   Si algo no está en el catálogo, dilo con honestidad y ofrece verificarlo. NUNCA inventes
   precios, especificaciones, plazos de entrega ni condiciones de Addi.
-- Para mostrar un producto, agrega al final, en su propia línea, el tag #ID:SKU con el SKU
-  EXACTO del catálogo. Puedes agregar varios (uno por línea). Nunca inventes un SKU.
+- Para mostrar un producto, escribe su #ID del catálogo (formato #ID seguido de números,
+  por ejemplo #ID7948237144230). Puedes escribirlo dentro del mensaje: el sistema lo detecta,
+  envía la foto y BORRA el #ID antes de que el cliente lo vea. Usa el #ID EXACTO del catálogo;
+  nunca lo inventes ni lo modifiques. Puedes incluir varios #ID.
 - Llevas al cliente a elegir método de compra: Addi (financiación) o Contra entrega.
 
-TAGS (van al final del mensaje, en su propia línea; el cliente NO los ve)
-- #ID:SKU            -> mostrar imagen de ese producto
-- #addi              -> el cliente quiere pagar con Addi
+TAGS DE FLUJO (van al final del mensaje, cada uno en su propia línea; el cliente NO los ve)
+- #addi                  -> el cliente quiere pagar con Addi
 - #compra-contra-entrega -> el cliente quiere pago contra entrega
-- #orden-lista       -> ya tienes método + ítems + nombre + dirección + ciudad + teléfono
-- #humano            -> el cliente pide una persona o es algo fuera de tu alcance
+- #orden-lista           -> ya tienes método + ítems + nombre + dirección + ciudad + teléfono
+- #humano                -> el cliente pide una persona o es algo fuera de tu alcance
 
 CONTRA ENTREGA
 - Recolecta de forma natural (no de golpe): nombre, dirección, ciudad, teléfono.
@@ -90,6 +96,13 @@ REGLAS
 
 ## 6. Parsing de tags (backend)
 
-- Regex por línea: `^#ID:([A-Za-z0-9\-]+)$`, `^#addi$`, `^#compra-contra-entrega$`, `^#orden-lista$`, `^#humano$`.
-- Extraer tags → `tags[]`; construir `cleanText` = texto sin las líneas de tags (y sin líneas vacías colgantes).
-- `cleanText` se envía como mensaje de texto; los `#ID` válidos generan mensajes `image`.
+- **`#ID` inline:** `/#ID\d+/g` en cualquier parte del texto → `skus[]` (token completo, dedup,
+  en orden); se quitan del `cleanText`.
+- **Tags de flujo por línea:** `^#addi$`, `^#compra-contra-entrega$`, `^#orden-lista$`,
+  `^#humano$`.
+- `cleanText` = texto sin `#ID` ni líneas de tags (y sin líneas vacías colgantes).
+- `cleanText` se envía como mensaje de texto; los `#ID` **válidos** (gate: existen en
+  `products`) generan mensajes `image` con `products.image_url`.
+
+> El system prompt v1 usaba `#ID:SKU` en línea propia; el prompt vigente (migración `0005`)
+> usa el formato inline. Ver ADR-0014.

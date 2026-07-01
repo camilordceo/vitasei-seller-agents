@@ -19,11 +19,19 @@ export interface CallbellMessagePayload {
   text?: string | null;
   type?: string; // text | image | audio | video | document | ...
   status?: string; // received | sent | ...
-  channel?: string; // whatsapp
+  // Según la versión de Callbell puede venir como string ("whatsapp") o como
+  // objeto con datos del canal (uuid/phoneNumber). Lo tratamos defensivamente.
+  channel?: string | Record<string, unknown>;
   from?: string; // origen del mensaje (contact / user / operator / bot ...)
   conversationHref?: string;
   contactUuid?: string;
   contact?: CallbellContact;
+  // Campos que identifican a QUÉ número/canal llegó el mensaje. El shape exacto
+  // se confirma contra un webhook real (por eso miramos varios candidatos en
+  // getDestinationNumber/getChannelUuid). Los dejamos opcionales/laxos.
+  to?: string | null; // número de negocio destino (E.164) en algunas versiones
+  channelUuid?: string;
+  channel_uuid?: string;
   [key: string]: unknown;
 }
 
@@ -70,4 +78,96 @@ export function isOutbound(payload?: CallbellMessagePayload): boolean {
  */
 export function isInboundMessageEvent(body: CallbellWebhookBody): boolean {
   return body.event === "message_created" && !isOutbound(body.payload);
+}
+
+// ---------------------------------------------------------------------------
+// Filtro por número de la IA
+//
+// Callbell tiene varios números en la cuenta y **un solo webhook**: este endpoint
+// recibe inbound de TODOS los números. Solo debemos responder a los que llegan al
+// número de la IA. El shape del webhook no está 100% confirmado, así que:
+//  1º intentamos por el número de negocio destino (si el payload lo trae),
+//  2º si no, por el `channel_uuid` (el canal del número de la IA),
+//  3º si no se puede determinar y hay filtro configurado → `indeterminate`
+//     (el caller decide; por defecto procesa y loguea para confirmar el campo).
+// ---------------------------------------------------------------------------
+
+/** Camina varias rutas candidatas del payload y devuelve el primer string no vacío. */
+function firstString(...candidates: Array<unknown>): string | null {
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim().length > 0) return c.trim();
+  }
+  return null;
+}
+
+/**
+ * Número de negocio destino (a QUÉ número escribió el cliente), si el webhook lo
+ * incluye. Devuelve E.164 sin '+' o null. Campo exacto a confirmar contra un
+ * webhook real; por eso probamos varios candidatos.
+ */
+export function getDestinationNumber(payload?: CallbellMessagePayload): string | null {
+  if (!payload) return null;
+  const channelObj = asObject(payload.channel);
+  const raw = firstString(
+    payload.to,
+    payload.channelPhoneNumber,
+    payload.channelSource,
+    channelObj?.phoneNumber,
+    channelObj?.number,
+    channelObj?.source,
+  );
+  return normalizePhone(raw);
+}
+
+/** UUID del canal por el que entró el mensaje (identifica el número), si viene. */
+export function getChannelUuid(payload?: CallbellMessagePayload): string | null {
+  if (!payload) return null;
+  const channelObj = asObject(payload.channel);
+  return firstString(payload.channelUuid, payload.channel_uuid, channelObj?.uuid);
+}
+
+/** Devuelve el valor como objeto indexable si lo es (algunas versiones mandan `channel` como objeto). */
+function asObject(v: unknown): Record<string, unknown> | undefined {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+}
+
+export type InboxDecision = "match" | "reject" | "indeterminate";
+
+export interface InboxClassification {
+  decision: InboxDecision;
+  dest: string | null;
+  channelUuid: string | null;
+}
+
+/**
+ * Decide si un inbound es para el número de la IA.
+ * @param agentNumber      número de la IA (E.164 sin '+') o undefined (filtro off).
+ * @param agentChannelUuid channel_uuid del número de la IA (fallback) o undefined.
+ */
+export function classifyInbox(
+  payload: CallbellMessagePayload | undefined,
+  agentNumber: string | undefined,
+  agentChannelUuid: string | undefined,
+): InboxClassification {
+  const dest = getDestinationNumber(payload);
+  const channelUuid = getChannelUuid(payload);
+
+  // Sin filtro configurado (dev): procesar todo.
+  if (!agentNumber && !agentChannelUuid) {
+    return { decision: "match", dest, channelUuid };
+  }
+  // 1º por número destino.
+  if (agentNumber && dest) {
+    return { decision: dest === agentNumber ? "match" : "reject", dest, channelUuid };
+  }
+  // 2º por channel_uuid.
+  if (agentChannelUuid && channelUuid) {
+    return {
+      decision: channelUuid === agentChannelUuid ? "match" : "reject",
+      dest,
+      channelUuid,
+    };
+  }
+  // 3º no se pudo determinar el destino con lo que trae el webhook.
+  return { decision: "indeterminate", dest, channelUuid };
 }

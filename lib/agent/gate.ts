@@ -2,7 +2,7 @@
  * Gate anti-alucinación (Sprint 4) — lógica PURA, testeable sin I/O.
  *
  * Dos reglas:
- *  1. Un `#ID:<sku>` solo se envía si el SKU EXISTE en `products`. Los que no,
+ *  1. Un `#ID` solo se envía si el SKU EXISTE en `products`. Los que no,
  *     se descartan y se loguean como `gate_blocked` (el modelo los inventó).
  *  2. Ventana de 24h: solo se puede enviar si el último inbound del cliente fue
  *     hace <= 24h; fuera de eso requeriría template (backlog) → se omite el envío.
@@ -23,7 +23,7 @@ export interface GateResult {
 }
 
 /**
- * @param skus          SKUs emitidos por el modelo (de los `#ID:`).
+ * @param skus          SKUs emitidos por el modelo (de los `#ID` inline).
  * @param knownSkus     SKUs que existen en `products`.
  * @param lastInboundAt ISO del último inbound del cliente (o null).
  * @param now           timestamp ms (se pasa para que la función sea pura).
