@@ -47,6 +47,11 @@ export const env = {
     return optional("CALLBELL_WHATSAPP_CHANNEL_UUID");
   },
 
+  // Addi (v1: solo enviar link/instrucciones; sin API — ver "No hacer en v1")
+  get ADDI_LINK() {
+    return optional("ADDI_LINK");
+  },
+
   // Admin (operaciones internas como la carga de catálogo)
   get CATALOG_ADMIN_SECRET() {
     return optional("CATALOG_ADMIN_SECRET");

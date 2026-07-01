@@ -5,6 +5,15 @@ import { generateReply } from "@/lib/openai/responses";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage } from "@/lib/callbell/sender";
+import { extractOrder } from "@/lib/openai/extractOrder";
+import {
+  buildTranscript,
+  computeOrderTotal,
+  normalizeOrderItem,
+  resolveFulfillmentMethod,
+  type TranscriptMessage,
+} from "@/lib/agent/order";
+import { env } from "@/lib/env";
 import type { Database, Json, MessageType } from "@/lib/supabase/types";
 
 type ContactUpdate = Database["public"]["Tables"]["contacts"]["Update"];
@@ -51,6 +60,14 @@ function toMessageType(type: string | null): MessageType {
  *    validar ventana 24h (`out_of_window`).
  *  - Enviar `cleanText` y, por cada `#ID` válido, la imagen por Callbell;
  *    guardar `callbell_message_uuid` y loguear (`text_sent`, `image_sent`).
+ *
+ * Responsabilidades (S5):
+ *  - `#addi` / `#compra-contra-entrega`: fijar `fulfillment_method`; con `#addi`
+ *    enviar el link si está configurado.
+ *  - `#orden-lista`: extraer la orden con una completion aparte (structured
+ *    output) y crear `orders` + `order_items`, luego handoff.
+ *  - `#humano` / `#orden-lista`: handoff (send con `team_uuid` + `bot_end`;
+ *    `status = handed_off`). El bot deja de responder en esa conversación.
  *
  * Concurrencia: limitada a 1 por `phone` para no pisar respuestas si el cliente
  * manda varios mensajes seguidos (equivale a "por conversación" en v1, donde un
@@ -331,10 +348,109 @@ export const processMessage = inngest.createFunction(
       return { ok: true, conversationId, generated: true, sent: false, reason: "out_of_window" };
     }
 
-    // 11) Enviar el texto (si hay) y registrar el uuid en el mensaje outbound.
-    if (parsed.cleanText.length > 0) {
+    // --- S5: flujos de compra + handoff -------------------------------------
+    const isHandoff = parsed.tags.ordenLista || parsed.tags.humano;
+
+    // #addi / #compra-contra-entrega → fijar el método en la conversación.
+    if (parsed.tags.addi || parsed.tags.cod) {
+      await step.run("set-fulfillment-method", async () => {
+        await supabase
+          .from("conversations")
+          .update({ fulfillment_method: parsed.tags.addi ? "addi" : "cod" })
+          .eq("id", conversationId);
+      });
+    }
+
+    // #orden-lista → extraer la orden (completion aparte) y crearla antes del handoff.
+    let orderId: string | null = null;
+    if (parsed.tags.ordenLista) {
+      orderId = await step.run("create-order", async () => {
+        const { data: msgs, error: msgsErr } = await supabase
+          .from("messages")
+          .select("direction, content")
+          .eq("conversation_id", conversationId)
+          .order("created_at", { ascending: true })
+          .limit(40);
+        if (msgsErr) throw new Error(`create-order load messages: ${msgsErr.message}`);
+
+        const transcript = buildTranscript((msgs ?? []) as TranscriptMessage[]);
+        const openai = createOpenAIClient();
+        const draft = await extractOrder(openai, transcript, cfg.model);
+
+        const { data: convRow } = await supabase
+          .from("conversations")
+          .select("fulfillment_method")
+          .eq("id", conversationId)
+          .single();
+        const method = resolveFulfillmentMethod(
+          convRow?.fulfillment_method ?? "undecided",
+          draft.fulfillment_method,
+        );
+        const total = draft.total ?? computeOrderTotal(draft.items);
+
+        const { data: order, error: ordErr } = await supabase
+          .from("orders")
+          .insert({
+            conversation_id: conversationId,
+            contact_id: contactId,
+            status: "pending_handoff",
+            fulfillment_method: method,
+            shipping_name: draft.shipping.name,
+            shipping_address: draft.shipping.address,
+            shipping_city: draft.shipping.city,
+            shipping_phone: draft.shipping.phone,
+            notes: draft.notes,
+            total,
+          })
+          .select("id")
+          .single();
+        if (ordErr) throw new Error(`create-order insert: ${ordErr.message}`);
+
+        if (draft.items.length > 0) {
+          const rows = draft.items.map((it) => {
+            const n = normalizeOrderItem(it);
+            return {
+              order_id: order.id,
+              sku: n.sku,
+              name: n.name,
+              qty: n.qty,
+              unit_price: n.unit_price,
+            };
+          });
+          const { error: itErr } = await supabase.from("order_items").insert(rows);
+          if (itErr) throw new Error(`create-order items: ${itErr.message}`);
+        }
+
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "order_created",
+          payload: { orderId: order.id, method, items: draft.items.length, total } as unknown as Json,
+        });
+        return order.id;
+      });
+    }
+
+    // Texto del agente. En handoff va con team_uuid + bot_end (reasigna + apaga bot).
+    const textToSend =
+      parsed.cleanText.length > 0
+        ? parsed.cleanText
+        : isHandoff
+          ? "¡Listo! Te paso con el equipo que confirma tu pedido y la entrega."
+          : "";
+
+    if (textToSend.length > 0) {
       const sent = await step.run("send-text", () =>
-        sendText(phone, parsed.cleanText, { conversation_id: conversationId }),
+        sendText(
+          phone,
+          textToSend,
+          isHandoff
+            ? {
+                metadata: { conversation_id: conversationId },
+                teamUuid: env.CALLBELL_LOGISTICS_TEAM_UUID,
+                botStatus: "bot_end",
+              }
+            : { metadata: { conversation_id: conversationId } },
+        ),
       );
       await step.run("save-text-sent", async () => {
         await supabase
@@ -349,40 +465,83 @@ export const processMessage = inngest.createFunction(
       });
     }
 
-    // 12) Por cada #ID válido con imagen → enviar imagen + guardar mensaje.
-    for (const sku of gate.validSkus) {
-      const product = productBySku.get(sku);
-      if (!product?.image_url) {
-        await step.run(`log-image-missing:${sku}`, async () => {
+    // Imágenes de los #ID válidos (no en handoff: la conversación se cierra).
+    if (!isHandoff) {
+      for (const sku of gate.validSkus) {
+        const product = productBySku.get(sku);
+        if (!product?.image_url) {
+          await step.run(`log-image-missing:${sku}`, async () => {
+            await supabase.from("events_log").insert({
+              conversation_id: conversationId,
+              type: "image_missing",
+              payload: { sku } as unknown as Json,
+            });
+          });
+          continue;
+        }
+
+        const imageUrl = product.image_url;
+        const caption = product.name ?? null;
+        const sent = await step.run(`send-image:${sku}`, () =>
+          sendImage(phone, imageUrl, caption),
+        );
+        await step.run(`save-image:${sku}`, async () => {
+          await supabase.from("messages").insert({
+            conversation_id: conversationId,
+            direction: "outbound",
+            role: "assistant",
+            type: "image",
+            content: caption,
+            media_url: imageUrl,
+            tags: [`#ID:${sku}`] as unknown as Json,
+            callbell_message_uuid: sent.uuid,
+          });
           await supabase.from("events_log").insert({
             conversation_id: conversationId,
-            type: "image_missing",
-            payload: { sku } as unknown as Json,
+            type: "image_sent",
+            payload: { sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
           });
         });
-        continue;
       }
 
-      const imageUrl = product.image_url;
-      const caption = product.name ?? null;
-      const sent = await step.run(`send-image:${sku}`, () =>
-        sendImage(phone, imageUrl, caption),
-      );
-      await step.run(`save-image:${sku}`, async () => {
-        await supabase.from("messages").insert({
-          conversation_id: conversationId,
-          direction: "outbound",
-          role: "assistant",
-          type: "image",
-          content: caption,
-          media_url: imageUrl,
-          tags: [`#ID:${sku}`] as unknown as Json,
-          callbell_message_uuid: sent.uuid,
+      // #addi → enviar el link/instrucciones si está configurado (v1 sin API Addi).
+      if (parsed.tags.addi && env.ADDI_LINK) {
+        const addiLink = env.ADDI_LINK;
+        const sent = await step.run("send-addi-info", () =>
+          sendText(phone, `Puedes financiar tu compra con Addi aquí: ${addiLink}`, {
+            metadata: { conversation_id: conversationId },
+          }),
+        );
+        await step.run("log-addi-sent", async () => {
+          await supabase.from("events_log").insert({
+            conversation_id: conversationId,
+            type: "addi_info_sent",
+            payload: { uuid: sent.uuid } as unknown as Json,
+          });
         });
+      }
+    }
+
+    // Handoff: apagar el bot en nuestra DB y cerrar la orden.
+    if (isHandoff) {
+      await step.run("finalize-handoff", async () => {
+        await supabase
+          .from("conversations")
+          .update({
+            status: "handed_off",
+            assigned_team_uuid: env.CALLBELL_LOGISTICS_TEAM_UUID ?? null,
+          })
+          .eq("id", conversationId);
+        if (orderId) {
+          await supabase.from("orders").update({ status: "handed_off" }).eq("id", orderId);
+        }
         await supabase.from("events_log").insert({
           conversation_id: conversationId,
-          type: "image_sent",
-          payload: { sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
+          type: "handoff",
+          payload: {
+            reason: parsed.tags.ordenLista ? "orden-lista" : "humano",
+            orderId,
+          } as unknown as Json,
         });
       });
     }
@@ -394,6 +553,8 @@ export const processMessage = inngest.createFunction(
       messageUuid,
       generated: true,
       sent: true,
+      handoff: isHandoff,
+      orderId,
       validSkus: gate.validSkus,
       blockedSkus: gate.blockedSkus,
     };
