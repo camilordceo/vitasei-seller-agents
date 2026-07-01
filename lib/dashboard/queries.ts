@@ -133,6 +133,8 @@ export interface ConversationMessage {
   type: MessageType;
   content: string | null;
   mediaUrl: string | null;
+  /** Tags crudos que emitió la IA (#ID..., #compra-contra-entrega, etc.). */
+  tags: string[];
   createdAt: string;
 }
 
@@ -170,7 +172,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     supabase.from("contacts").select("name, phone").eq("id", convo.contact_id).maybeSingle(),
     supabase
       .from("messages")
-      .select("id, direction, type, content, media_url, created_at")
+      .select("id, direction, type, content, media_url, tags, created_at")
       .eq("conversation_id", id)
       .order("created_at", { ascending: true }),
     supabase
@@ -214,6 +216,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
       type: m.type as MessageType,
       content: m.content,
       mediaUrl: m.media_url,
+      tags: Array.isArray(m.tags) ? (m.tags as string[]) : [],
       createdAt: m.created_at,
     })),
     order,

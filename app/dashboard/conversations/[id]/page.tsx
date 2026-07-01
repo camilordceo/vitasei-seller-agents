@@ -59,6 +59,20 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                       ) : m.type !== "text" ? (
                         <p className="italic opacity-80">[{m.type}]</p>
                       ) : null}
+                      {m.tags.length > 0 ? (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {m.tags.map((t, i) => (
+                            <span
+                              key={i}
+                              className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                                out ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
+                              }`}
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       <span
                         className={`mt-1 block text-[10px] ${
                           out ? "text-emerald-100" : "text-slate-400"

@@ -13,6 +13,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Changed
+- **Dashboard más robusto**: el detalle de conversación muestra los **tags** que emitió la IA
+  (`#ID...`, `#compra-contra-entrega`, etc.) como chips bajo cada mensaje; conversaciones
+  borradas muestran una página amigable "ya no existe" (`not-found`) en vez de error; las
+  conversaciones sin contacto se listan como "Sin contacto" en vez de en blanco.
+  (`lib/dashboard/queries.ts`, `app/dashboard/conversations/[id]/page.tsx`,
+  `app/dashboard/conversations/[id]/not-found.tsx`, `app/dashboard/ui.tsx`).
 - **Imagen + texto en el MISMO mensaje**: cuando el agente recomienda un producto, el texto
   viaja como *caption* de la imagen en una sola llamada a Callbell (`sendImage` con `content.text`),
   en vez de un mensaje de texto + otro de imagen. Si hay varios `#ID`, la primera imagen lleva

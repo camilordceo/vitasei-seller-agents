@@ -95,7 +95,7 @@ export function ConversationList({ rows }: { rows: ConversationRow[] }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="truncate text-sm font-medium text-slate-900">
-                  {c.contactName ?? c.phone}
+                  {c.contactName || c.phone || "Sin contacto"}
                 </span>
                 <StatusPill status={c.status} />
               </div>
