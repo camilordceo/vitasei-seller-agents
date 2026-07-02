@@ -33,6 +33,27 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Órdenes editables + reportes de ventas (ver `docs/12`, ADR-0019)**: continuación del Dashboard
+  (Sprint 6). Nueva sección **Órdenes** (`/dashboard/orders`, nav) con lista filtrable por estado
+  (todas/pendientes/con logística/confirmadas/canceladas: contacto, estado, método, ítems, ciudad,
+  fecha y total) y **detalle editable** (`/dashboard/orders/[id]`): un editor de guardado único
+  (`OrderEditor`, client component) corrige estado, método, datos de envío, **ítems**
+  (agregar/quitar/editar nombre/SKU/cantidad/precio) y total (manual o "recalcular desde los
+  ítems"). Mutación vía Server Action **`saveOrder`** (service-role, protegida por el Basic Auth;
+  reemplaza los ítems delete+insert; loguea `order_edited`; revalida rutas). Nueva sección
+  **Reportes** (`/dashboard/reports`, nav) con lógica pura **`summarizeOrders`**
+  (`lib/dashboard/report.ts`, 9 tests): ventas **confirmadas** (`confirmed`), **generadas** (todo
+  menos canceladas), **pipeline** (`pending_handoff`+`handed_off`) y canceladas; cortes por estado,
+  método, ventanas (hoy/7/30 días) y por día (últimos 14, zona `America/Bogota`); botón **copiar
+  resumen** para el equipo. Se corrige `getKpis` para **excluir canceladas** de "Ventas generadas".
+  El detalle de conversación enlaza a la orden. **Reutiliza** `orders`/`order_items` (sin migración;
+  el service-role omite RLS → nada que aplicar en Supabase). Archivos: `lib/dashboard/report.ts`
+  (+test), `lib/dashboard/queries.ts` (`getOrders`/`getOrder`/`getSalesReport`), `lib/dashboard/format.ts`
+  (`formatDate`/`formatDayKeyShort`), `app/dashboard/actions.ts` (`saveOrder`),
+  `app/dashboard/orders/*` (lista, detalle, `OrderEditor`, `types`, `not-found`),
+  `app/dashboard/reports/*` (página + `CopySummaryButton`), `app/dashboard/ui.tsx`
+  (`OrderStatusPill`/`OrderList`), `app/dashboard/layout.tsx` (nav),
+  `app/dashboard/conversations/[id]/page.tsx` (enlace a la orden).
 - **Modo manual — pausar la IA en una conversación (ver `docs/11`, ADR-0018)**: un agente
   humano puede tomar una conversación desde el tablero (botón **Pasar a manual** / **Reactivar
   IA** en el detalle + píldora **Manual** en detalle y listas). Con la IA en pausa

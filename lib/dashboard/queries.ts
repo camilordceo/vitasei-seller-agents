@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
+import { summarizeOrders, type OrderFact, type SalesReport } from "@/lib/dashboard/report";
 import type {
   ConversationStatus,
   FulfillmentMethod,
@@ -47,13 +48,14 @@ function readUsage(payload: unknown): { inputTokens: number; outputTokens: numbe
 export async function getKpis(): Promise<Kpis> {
   const supabase = createServiceClient();
   const [ordersRes, eventsRes] = await Promise.all([
-    supabase.from("orders").select("total"),
+    supabase.from("orders").select("total, status"),
     supabase.from("events_log").select("payload").eq("type", "reply_generated"),
   ]);
   if (ordersRes.error) throw new Error(`getKpis orders: ${ordersRes.error.message}`);
   if (eventsRes.error) throw new Error(`getKpis events: ${eventsRes.error.message}`);
 
-  const orders = ordersRes.data ?? [];
+  // "Ventas generadas" = órdenes NO canceladas (una cancelada no es venta).
+  const orders = (ordersRes.data ?? []).filter((o) => o.status !== "cancelled");
   const totalSales = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
 
   let inputTokens = 0;
@@ -307,4 +309,169 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     })),
     order,
   };
+}
+
+// --- Órdenes (sección dedicada, ver docs/12) --------------------------------
+
+export interface OrderRow {
+  id: string;
+  conversationId: string;
+  contactName: string | null;
+  phone: string;
+  status: OrderStatus;
+  method: FulfillmentMethod;
+  total: number | null;
+  currency: string;
+  itemsCount: number;
+  shippingCity: string | null;
+  createdAt: string;
+}
+
+/** Lista de órdenes (opcionalmente filtrada por estado), más recientes primero. */
+export async function getOrders(opts?: {
+  status?: OrderStatus;
+  limit?: number;
+}): Promise<OrderRow[]> {
+  const supabase = createServiceClient();
+  let q = supabase
+    .from("orders")
+    .select(
+      "id, conversation_id, contact_id, status, fulfillment_method, total, currency, shipping_city, created_at",
+    )
+    .order("created_at", { ascending: false })
+    .limit(opts?.limit ?? 200);
+  if (opts?.status) q = q.eq("status", opts.status);
+
+  const { data, error } = await q;
+  if (error) throw new Error(`getOrders: ${error.message}`);
+
+  const rows = data ?? [];
+  if (rows.length === 0) return [];
+
+  const contactIds = [...new Set(rows.map((r) => r.contact_id))];
+  const orderIds = rows.map((r) => r.id);
+
+  const [contactsRes, itemsRes] = await Promise.all([
+    supabase.from("contacts").select("id, name, phone").in("id", contactIds),
+    supabase.from("order_items").select("order_id").in("order_id", orderIds),
+  ]);
+  if (contactsRes.error) throw new Error(`getOrders contacts: ${contactsRes.error.message}`);
+  if (itemsRes.error) throw new Error(`getOrders items: ${itemsRes.error.message}`);
+
+  const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
+  const itemsByOrder = new Map<string, number>();
+  for (const it of itemsRes.data ?? []) {
+    itemsByOrder.set(it.order_id, (itemsByOrder.get(it.order_id) ?? 0) + 1);
+  }
+
+  return rows.map((r) => {
+    const c = contactById.get(r.contact_id);
+    return {
+      id: r.id,
+      conversationId: r.conversation_id,
+      contactName: c?.name ?? null,
+      phone: c?.phone ?? "",
+      status: r.status,
+      method: r.fulfillment_method,
+      total: r.total,
+      currency: r.currency,
+      itemsCount: itemsByOrder.get(r.id) ?? 0,
+      shippingCity: r.shipping_city,
+      createdAt: r.created_at,
+    };
+  });
+}
+
+export interface OrderItemDetail {
+  id: string;
+  sku: string;
+  name: string | null;
+  qty: number;
+  unitPrice: number | null;
+}
+
+export interface OrderDetail {
+  id: string;
+  conversationId: string;
+  status: OrderStatus;
+  method: FulfillmentMethod;
+  shippingName: string | null;
+  shippingAddress: string | null;
+  shippingCity: string | null;
+  shippingPhone: string | null;
+  notes: string | null;
+  total: number | null;
+  currency: string;
+  createdAt: string;
+  updatedAt: string;
+  contact: { name: string | null; phone: string } | null;
+  items: OrderItemDetail[];
+}
+
+export async function getOrder(id: string): Promise<OrderDetail | null> {
+  const supabase = createServiceClient();
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select(
+      "id, conversation_id, contact_id, status, fulfillment_method, shipping_name, shipping_address, shipping_city, shipping_phone, notes, total, currency, created_at, updated_at",
+    )
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`getOrder: ${error.message}`);
+  if (!order) return null;
+
+  const [contactRes, itemsRes] = await Promise.all([
+    supabase.from("contacts").select("name, phone").eq("id", order.contact_id).maybeSingle(),
+    supabase
+      .from("order_items")
+      .select("id, sku, name, qty, unit_price, created_at")
+      .eq("order_id", id)
+      .order("created_at", { ascending: true }),
+  ]);
+  if (itemsRes.error) throw new Error(`getOrder items: ${itemsRes.error.message}`);
+
+  return {
+    id: order.id,
+    conversationId: order.conversation_id,
+    status: order.status,
+    method: order.fulfillment_method,
+    shippingName: order.shipping_name,
+    shippingAddress: order.shipping_address,
+    shippingCity: order.shipping_city,
+    shippingPhone: order.shipping_phone,
+    notes: order.notes,
+    total: order.total,
+    currency: order.currency,
+    createdAt: order.created_at,
+    updatedAt: order.updated_at,
+    contact: contactRes.data
+      ? { name: contactRes.data.name, phone: contactRes.data.phone }
+      : null,
+    items: (itemsRes.data ?? []).map((it) => ({
+      id: it.id,
+      sku: it.sku,
+      name: it.name,
+      qty: it.qty,
+      unitPrice: it.unit_price,
+    })),
+  };
+}
+
+// --- Reportes de ventas -----------------------------------------------------
+
+/** Reporte de ventas agregado desde TODAS las órdenes (lógica pura en report.ts). */
+export async function getSalesReport(): Promise<SalesReport> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("orders")
+    .select("status, fulfillment_method, total, created_at");
+  if (error) throw new Error(`getSalesReport: ${error.message}`);
+
+  const facts: OrderFact[] = (data ?? []).map((o) => ({
+    status: o.status,
+    method: o.fulfillment_method,
+    total: o.total,
+    createdAt: o.created_at,
+  }));
+  return summarizeOrders(facts);
 }

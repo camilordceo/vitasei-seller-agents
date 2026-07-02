@@ -1,7 +1,12 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { ConversationRow, RetargetRow, RetargetStats } from "@/lib/dashboard/queries";
-import { formatDateTime, formatNumber, relativeTime } from "@/lib/dashboard/format";
+import type {
+  ConversationRow,
+  OrderRow,
+  RetargetRow,
+  RetargetStats,
+} from "@/lib/dashboard/queries";
+import { formatCOP, formatDate, formatDateTime, formatNumber, relativeTime } from "@/lib/dashboard/format";
 import { setConversationManual } from "./actions";
 import type {
   ConversationStatus,
@@ -98,15 +103,73 @@ export function ManualToggle({
   );
 }
 
-const ORDER_STATUS: Record<OrderStatus, string> = {
-  pending_handoff: "Pendiente de handoff",
-  handed_off: "Con logística",
-  confirmed: "Confirmada",
-  cancelled: "Cancelada",
+const ORDER_STATUS: Record<OrderStatus, { label: string; cls: string }> = {
+  pending_handoff: {
+    label: "Pendiente de handoff",
+    cls: "bg-amber-50 text-amber-700 ring-amber-600/20",
+  },
+  handed_off: { label: "Con logística", cls: "bg-indigo-50 text-indigo-700 ring-indigo-600/20" },
+  confirmed: { label: "Confirmada", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  cancelled: { label: "Cancelada", cls: "bg-rose-50 text-rose-700 ring-rose-600/20" },
 };
 
 export function orderStatusLabel(status: OrderStatus): string {
-  return ORDER_STATUS[status] ?? status;
+  return ORDER_STATUS[status]?.label ?? status;
+}
+
+export function OrderStatusPill({ status }: { status: OrderStatus }) {
+  const s = ORDER_STATUS[status] ?? { label: status, cls: "bg-slate-100 text-slate-600 ring-slate-500/20" };
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+/** Lista de órdenes (sección Órdenes). Enlaza al detalle editable. */
+export function OrderList({ rows }: { rows: OrderRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+        <p className="text-sm text-slate-500">No hay órdenes con este filtro.</p>
+        <p className="mt-1 text-xs text-slate-400">
+          El agente crea una orden cuando el cliente cierra la compra en WhatsApp.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {rows.map((o) => (
+        <li key={o.id}>
+          <Link
+            href={`/dashboard/orders/${o.id}`}
+            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="truncate text-sm font-medium text-slate-900">
+                  {o.contactName || o.phone || "Sin contacto"}
+                </span>
+                <OrderStatusPill status={o.status} />
+                <MethodPill method={o.method} />
+              </div>
+              <p className="mt-0.5 truncate text-sm text-slate-500">
+                {o.itemsCount} {o.itemsCount === 1 ? "ítem" : "ítems"}
+                {o.shippingCity ? ` · ${o.shippingCity}` : ""} · {formatDate(o.createdAt)}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <span className="text-sm font-semibold text-slate-900">{formatCOP(o.total)}</span>
+              <span className="text-xs text-slate-400">{relativeTime(o.createdAt)}</span>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export function KpiCard({

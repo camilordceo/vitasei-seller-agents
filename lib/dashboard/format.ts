@@ -25,6 +25,21 @@ export function formatDateTime(iso: string | null | undefined): string {
   }).format(new Date(iso));
 }
 
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat("es-CO", { dateStyle: "medium" }).format(new Date(iso));
+}
+
+/** "2026-07-02" (día key) → "2 jul" corto para ejes/listas. */
+export function formatDayKeyShort(dayKey: string): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  if (!y || !m || !d) return dayKey;
+  // Mediodía UTC para evitar cruces de día al formatear.
+  return new Intl.DateTimeFormat("es-CO", { day: "numeric", month: "short" }).format(
+    new Date(Date.UTC(y, m - 1, d, 12)),
+  );
+}
+
 export function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const diff = Math.max(0, Date.now() - new Date(iso).getTime());

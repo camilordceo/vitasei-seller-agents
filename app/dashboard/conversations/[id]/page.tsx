@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getConversation } from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
-import { StatusPill, MethodPill, ManualPill, ManualToggle, orderStatusLabel } from "../../ui";
+import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
 
 export const dynamic = "force-dynamic";
 
@@ -121,29 +121,39 @@ export default async function ConversationDetailPage({ params }: { params: { id:
           <div className="rounded-lg border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-semibold text-slate-700">Orden</h2>
             {convo.order ? (
-              <dl className="mt-2 space-y-1 text-sm">
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Estado</dt>
-                  <dd className="text-right text-slate-900">{orderStatusLabel(convo.order.status)}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Total</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {formatCOP(convo.order.total)}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Ítems</dt>
-                  <dd className="text-right text-slate-900">{convo.order.itemsCount}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Envío a</dt>
-                  <dd className="text-right text-slate-900">
-                    {convo.order.shippingName ?? "—"}
-                    {convo.order.shippingCity ? `, ${convo.order.shippingCity}` : ""}
-                  </dd>
-                </div>
-              </dl>
+              <>
+                <dl className="mt-2 space-y-1 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">Estado</dt>
+                    <dd className="text-right">
+                      <OrderStatusPill status={convo.order.status} />
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Total</dt>
+                    <dd className="text-right font-medium text-slate-900">
+                      {formatCOP(convo.order.total)}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Ítems</dt>
+                    <dd className="text-right text-slate-900">{convo.order.itemsCount}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Envío a</dt>
+                    <dd className="text-right text-slate-900">
+                      {convo.order.shippingName ?? "—"}
+                      {convo.order.shippingCity ? `, ${convo.order.shippingCity}` : ""}
+                    </dd>
+                  </div>
+                </dl>
+                <Link
+                  href={`/dashboard/orders/${convo.order.id}`}
+                  className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                  Ver / editar orden
+                </Link>
+              </>
             ) : (
               <p className="mt-2 text-sm text-slate-400">Sin orden todavía.</p>
             )}
