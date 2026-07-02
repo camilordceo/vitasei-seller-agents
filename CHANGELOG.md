@@ -33,6 +33,25 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Reactivaciones por plantilla — 7 y 15 días (ver `docs/14`, ADR-0021)**: feature de crecimiento
+  **apagable desde el dashboard** (OFF por defecto, aún sin aprobación). Cuando llega un cliente por
+  primera vez (conversación nueva) y el feature está encendido, se **programan** dos envíos de
+  **plantilla** de WhatsApp (día 7 y día 15) para reactivar a quien no compró, a bajo costo
+  (≈ US$0,015 c/u). El cron existente (`/api/cron/retargets`, cada 5 min) también procesa las
+  reactivaciones vencidas y envía la plantilla por **Callbell** (`sendTemplate` con `template_uuid`
+  + `optin_contact`, único envío permitido fuera de la ventana de 24h). Se **cancelan si la persona
+  compra** (se crea una orden); al enviar también se saltan si no hay plantilla, si el cliente
+  escribió hace < 24h o si venció hace > 3 días. **Config editable desde el dashboard** (tabla
+  `app_settings`, fila única): interruptor ON/OFF + **UUID de plantilla** día 7/15 (Server Action
+  `updateReactivationSettings`). **Contabilización de costos**: `cost_usd` por envío + total en el
+  dashboard (sección **Retargets → Reactivaciones**: interruptor, métricas por estado, costo y
+  lista). Nueva migración **`0008_reactivations.sql`** (`app_settings` + `reactivations`, reusa el
+  enum `retarget_status`). Lógica pura `reactivationPlan.ts` (`planReactivations`/
+  `evaluateReactivation`, 7 tests); IO en `reactivation.ts` (schedule/cancel/`runDueReactivations`).
+  Enganches en `processMessage.ts` (agenda al primer contacto; cancela al crear orden). Nuevas env
+  opcionales `REACTIVATION_STAGE1_MS`/`REACTIVATION_STAGE2_MS` (solo delays; el ON/OFF y los UUID van
+  en DB). **Requiere en Supabase** aplicar la migración; **en Callbell** crear/aprobar la(s)
+  plantilla(s) y pegar su UUID en el dashboard.
 - **Envío manual de mensajes + chat con scroll (ver `docs/13`, ADR-0020)**: el detalle de
   conversación deja de ser una página infinita — el hilo pasa a un panel de **altura fija con
   scroll propio** (`ChatPanel`, client component) con **auto-scroll** al último mensaje. Abajo, un

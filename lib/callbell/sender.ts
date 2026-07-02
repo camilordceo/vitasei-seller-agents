@@ -33,6 +33,12 @@ interface SendBody {
   metadata?: Record<string, unknown>;
   team_uuid?: string;
   bot_status?: "bot_start" | "bot_end";
+  /** Plantilla aprobada (obligatoria fuera de la ventana de 24h). */
+  template_uuid?: string;
+  /** Valores de las variables de la plantilla (si tiene). */
+  template_values?: string[];
+  /** Confirma que el contacto dio opt-in (requerido por Callbell en plantillas). */
+  optin_contact?: boolean;
 }
 
 async function send(body: SendBody): Promise<SentMessage> {
@@ -74,6 +80,38 @@ export function sendText(
     metadata: options?.metadata,
     team_uuid: options?.teamUuid ?? undefined,
     bot_status: options?.botStatus,
+  });
+}
+
+/**
+ * Envía un mensaje de PLANTILLA aprobada (WhatsApp). Es lo único permitido fuera
+ * de la ventana de 24h. `content.text` lleva el texto de respaldo/variable (como
+ * en el ejemplo de Callbell); `templateValues` es para plantillas con varias
+ * variables. `optin_contact: true` porque el cliente nos escribió primero. Ver
+ * docs/14 y ADR-0021.
+ */
+export function sendTemplate(
+  to: string,
+  templateUuid: string,
+  options?: {
+    text?: string;
+    templateValues?: string[];
+    metadata?: Record<string, unknown>;
+  },
+): Promise<SentMessage> {
+  return send({
+    to,
+    from: "whatsapp",
+    type: "text",
+    content: { text: options?.text ?? "" },
+    channel_uuid: env.CALLBELL_WHATSAPP_CHANNEL_UUID,
+    template_uuid: templateUuid,
+    template_values:
+      options?.templateValues && options.templateValues.length > 0
+        ? options.templateValues
+        : undefined,
+    optin_contact: true,
+    metadata: options?.metadata,
   });
 }
 

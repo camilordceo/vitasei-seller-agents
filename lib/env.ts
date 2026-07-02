@@ -58,6 +58,21 @@ export const env = {
     const n = raw ? Number(raw) : NaN;
     return Number.isFinite(n) && n > 0 ? n : 8 * 60 * 60 * 1000; // 8h
   },
+  // Reactivaciones por plantilla (ver ADR-0021). El ON/OFF y los UUIDs de
+  // plantilla viven en la DB (`app_settings`, editables desde el dashboard); acá
+  // solo los delays de las dos etapas (default 7 y 15 días), configurables para
+  // pruebas.
+  get REACTIVATION_STAGE1_MS() {
+    const raw = optional("REACTIVATION_STAGE1_MS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 7 * 24 * 60 * 60 * 1000; // 7 días
+  },
+  get REACTIVATION_STAGE2_MS() {
+    const raw = optional("REACTIVATION_STAGE2_MS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 15 * 24 * 60 * 60 * 1000; // 15 días
+  },
+
   // Secret del cron (Vercel lo manda como `Authorization: Bearer <CRON_SECRET>`).
   // Si está vacío, el endpoint del cron queda abierto (solo dev).
   get CRON_SECRET() {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runDueRetargets } from "@/lib/agent/retarget";
+import { runDueReactivations } from "@/lib/agent/reactivation";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -21,17 +22,29 @@ function authorized(req: Request): boolean {
 }
 
 /**
- * Cron de retargeting — procesa los seguimientos vencidos (ver ADR-0017).
- * Configurado en `vercel.json` (`/api/cron/retargets`, cada 5 min). Idempotente
- * y seguro de correr seguido: cada fila se toma con un claim atómico.
+ * Cron — procesa los seguimientos (retargets 1h/8h, ADR-0017) y las
+ * reactivaciones por plantilla (7d/15d, ADR-0021) vencidos. Configurado en
+ * `vercel.json` (`/api/cron/retargets`, cada 5 min). Idempotente y seguro de
+ * correr seguido: cada fila se toma con un claim atómico.
  */
 export async function GET(req: Request) {
   if (!authorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
-    const stats = await runDueRetargets();
-    return NextResponse.json({ status: "ok", ...stats });
+    // Independientes: un fallo en uno no debe impedir el otro.
+    const [retargets, reactivations] = await Promise.allSettled([
+      runDueRetargets(),
+      runDueReactivations(),
+    ]);
+    return NextResponse.json({
+      status: "ok",
+      retargets: retargets.status === "fulfilled" ? retargets.value : { error: String(retargets.reason) },
+      reactivations:
+        reactivations.status === "fulfilled"
+          ? reactivations.value
+          : { error: String(reactivations.reason) },
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error("[cron/retargets] failed:", message);

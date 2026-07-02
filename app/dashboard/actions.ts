@@ -141,6 +141,46 @@ export async function saveOrder(orderId: string, input: OrderEditInput): Promise
 }
 
 /**
+ * Actualiza la config del feature de reactivaciones (fila única `app_settings`):
+ * el ON/OFF global y los UUID de plantilla (día 7 y día 15), editables desde el
+ * dashboard. Service-role, protegida por el Basic Auth. Ver docs/14, ADR-0021.
+ */
+export async function updateReactivationSettings(input: {
+  enabled: boolean;
+  template7d: string;
+  template15d: string;
+}): Promise<void> {
+  const supabase = createServiceClient();
+  const clean = (s: string): string | null => {
+    const t = s.trim();
+    return t.length > 0 ? t : null;
+  };
+
+  const { error } = await supabase
+    .from("app_settings")
+    .update({
+      reactivation_enabled: input.enabled,
+      reactivation_template_7d: clean(input.template7d),
+      reactivation_template_15d: clean(input.template15d),
+    })
+    .eq("id", 1);
+  if (error) throw new Error(`updateReactivationSettings: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "reactivation_settings_updated",
+    payload: {
+      enabled: input.enabled,
+      has7d: clean(input.template7d) != null,
+      has15d: clean(input.template15d) != null,
+    } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/retargets");
+  revalidatePath("/dashboard");
+}
+
+/**
  * Envía un mensaje manual escrito por un operador al cliente por WhatsApp
  * (Callbell). Guarda el outbound marcado `manual` (para distinguirlo del bot) y
  * loguea `manual_message_sent`. No alimenta el contexto de la IA

@@ -3,10 +3,19 @@ import type { ReactNode } from "react";
 import type {
   ConversationRow,
   OrderRow,
+  ReactivationRow,
+  ReactivationStats,
   RetargetRow,
   RetargetStats,
 } from "@/lib/dashboard/queries";
-import { formatCOP, formatDate, formatDateTime, formatNumber, relativeTime } from "@/lib/dashboard/format";
+import {
+  formatCOP,
+  formatDate,
+  formatDateTime,
+  formatNumber,
+  formatUsd,
+  relativeTime,
+} from "@/lib/dashboard/format";
 import { setConversationManual } from "./actions";
 import type {
   ConversationStatus,
@@ -297,6 +306,96 @@ export function RetargetList({ rows }: { rows: RetargetRow[] }) {
                 {relativeTime(r.status === "sent" ? r.sentAt : r.scheduledAt)}
               </span>
             </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// --- Reactivaciones por plantilla (7/15 días) ------------------------------
+
+export function ReactivationStagePill({ stage }: { stage: number }) {
+  const label = stage === 1 ? "Día 7" : stage === 2 ? "Día 15" : `Etapa ${stage}`;
+  return (
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20">
+      {label}
+    </span>
+  );
+}
+
+export function ReactivationStatsBar({ stats }: { stats: ReactivationStats }) {
+  const items = [
+    {
+      label: "Programadas",
+      value: formatNumber(stats.scheduled + stats.processing),
+      cls: "text-sky-700",
+    },
+    { label: "Enviadas", value: formatNumber(stats.sent), cls: "text-emerald-700" },
+    { label: "Canceladas", value: formatNumber(stats.cancelled), cls: "text-slate-600" },
+    {
+      label: "Saltadas / fallidas",
+      value: formatNumber(stats.skipped + stats.failed),
+      cls: "text-slate-600",
+    },
+    { label: "Costo plantillas", value: formatUsd(stats.costUsd), cls: "text-slate-900" },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      {items.map((it) => (
+        <div key={it.label} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <p className="text-xs font-medium text-slate-500">{it.label}</p>
+          <p className={`mt-1 text-xl font-semibold tracking-tight ${it.cls}`}>{it.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function reactivationDetail(r: ReactivationRow): string {
+  switch (r.status) {
+    case "sent":
+      return `Enviada ${formatDateTime(r.sentAt)}${r.costUsd != null ? ` · ${formatUsd(r.costUsd)}` : ""}`;
+    case "scheduled":
+    case "processing":
+      return `Se dispara ${formatDateTime(r.scheduledAt)}`;
+    default:
+      return r.error ? `Motivo: ${r.error}` : "—";
+  }
+}
+
+export function ReactivationList({ rows }: { rows: ReactivationRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+        <p className="text-sm text-slate-500">Aún no hay reactivaciones.</p>
+        <p className="mt-1 text-xs text-slate-400">
+          Se agendan al primer contacto cuando el feature está encendido.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {rows.map((r) => (
+        <li key={r.id}>
+          <Link
+            href={`/dashboard/conversations/${r.conversationId}`}
+            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="truncate text-sm font-medium text-slate-900">
+                  {r.contactName || r.phone || "Sin contacto"}
+                </span>
+                <RetargetStatusPill status={r.status} />
+                <ReactivationStagePill stage={r.stage} />
+              </div>
+              <p className="mt-0.5 truncate text-sm text-slate-500">{reactivationDetail(r)}</p>
+            </div>
+            <span className="shrink-0 text-xs text-slate-400">
+              {relativeTime(r.status === "sent" ? r.sentAt : r.scheduledAt)}
+            </span>
           </Link>
         </li>
       ))}

@@ -9,6 +9,7 @@ import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage } from "@/lib/callbell/sender";
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
+import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
 import {
   buildTranscript,
   computeOrderTotal,
@@ -136,6 +137,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
   //    marcador del debounce (último mensaje).
   const nowIso = new Date(receivedAt).toISOString();
   let conversationId: string;
+  let conversationIsNew = false;
   {
     const { data: existing, error: selErr } = await supabase
       .from("conversations")
@@ -173,6 +175,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
         .single();
       if (insErr) throw new Error(`upsert-conversation insert: ${insErr.message}`);
       conversationId = inserted.id;
+      conversationIsNew = true;
     }
   }
 
@@ -211,6 +214,19 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
       "[ingestInboundMessage] cancel retargets failed:",
       e instanceof Error ? e.message : String(e),
     );
+  }
+
+  // 7) Reactivaciones: primer contacto (conversación nueva) → agenda las
+  //    plantillas 7d/15d si el feature está encendido. Best-effort.
+  if (conversationIsNew) {
+    try {
+      await scheduleReactivations(supabase, { conversationId, contactId, phone, fromMs: receivedAt });
+    } catch (e) {
+      console.error(
+        "[ingestInboundMessage] schedule reactivations failed:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
   }
 
   return { conversationId, contactId, duplicate: false };
@@ -535,6 +551,16 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       type: "order_created",
       payload: { orderId: order.id, method, items: draft.items.length, total } as unknown as Json,
     });
+
+    // Compró → cancela las reactivaciones pendientes (7d/15d). Best-effort.
+    try {
+      await cancelScheduledReactivations(supabase, conversationId, "converted");
+    } catch (e) {
+      console.error(
+        "[generateAndSend] cancel reactivations failed:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
   }
 
   // Texto del agente. En handoff va con team_uuid + bot_end (reasigna + apaga bot).

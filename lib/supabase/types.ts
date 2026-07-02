@@ -422,6 +422,81 @@ export interface Database {
         };
         Relationships: [];
       };
+      app_settings: {
+        Row: {
+          id: number;
+          reactivation_enabled: boolean;
+          reactivation_template_7d: string | null;
+          reactivation_template_15d: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: number;
+          reactivation_enabled?: boolean;
+          reactivation_template_7d?: string | null;
+          reactivation_template_15d?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: number;
+          reactivation_enabled?: boolean;
+          reactivation_template_7d?: string | null;
+          reactivation_template_15d?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      reactivations: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          contact_id: string;
+          phone: string;
+          stage: number;
+          status: RetargetStatus;
+          scheduled_at: string;
+          template_uuid: string | null;
+          sent_at: string | null;
+          cost_usd: number | null;
+          error: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          conversation_id: string;
+          contact_id: string;
+          phone: string;
+          stage: number;
+          status?: RetargetStatus;
+          scheduled_at: string;
+          template_uuid?: string | null;
+          sent_at?: string | null;
+          cost_usd?: number | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          conversation_id?: string;
+          contact_id?: string;
+          phone?: string;
+          stage?: number;
+          status?: RetargetStatus;
+          scheduled_at?: string;
+          template_uuid?: string | null;
+          sent_at?: string | null;
+          cost_usd?: number | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

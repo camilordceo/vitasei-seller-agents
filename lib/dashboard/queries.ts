@@ -509,3 +509,109 @@ export async function getConversionReport(): Promise<ConversionReport> {
   }));
   return summarizeConversion(facts);
 }
+
+// --- Reactivaciones por plantilla (7/15 días, ver docs/14) -------------------
+
+export interface ReactivationConfig {
+  enabled: boolean;
+  template7d: string | null;
+  template15d: string | null;
+}
+
+/** Config editable del feature (fila única `app_settings`). */
+export async function getReactivationConfig(): Promise<ReactivationConfig> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("reactivation_enabled, reactivation_template_7d, reactivation_template_15d")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) throw new Error(`getReactivationConfig: ${error.message}`);
+  return {
+    enabled: data?.reactivation_enabled ?? false,
+    template7d: data?.reactivation_template_7d ?? null,
+    template15d: data?.reactivation_template_15d ?? null,
+  };
+}
+
+export interface ReactivationStats {
+  scheduled: number;
+  processing: number;
+  sent: number;
+  skipped: number;
+  cancelled: number;
+  failed: number;
+  /** Costo total de las plantillas enviadas (USD). */
+  costUsd: number;
+}
+
+/** Conteo por estado + costo total de las reactivaciones (tally en JS). */
+export async function getReactivationStats(): Promise<ReactivationStats> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.from("reactivations").select("status, cost_usd");
+  if (error) throw new Error(`getReactivationStats: ${error.message}`);
+
+  const counts: Record<RetargetStatus, number> = {
+    scheduled: 0,
+    processing: 0,
+    sent: 0,
+    skipped: 0,
+    cancelled: 0,
+    failed: 0,
+  };
+  let costUsd = 0;
+  for (const row of data ?? []) {
+    const s = row.status as RetargetStatus;
+    if (s in counts) counts[s] += 1;
+    if (row.cost_usd != null) costUsd += Number(row.cost_usd) || 0;
+  }
+  return { ...counts, costUsd };
+}
+
+export interface ReactivationRow {
+  id: string;
+  conversationId: string;
+  contactName: string | null;
+  phone: string;
+  stage: number;
+  status: RetargetStatus;
+  scheduledAt: string;
+  sentAt: string | null;
+  costUsd: number | null;
+  error: string | null;
+}
+
+/** Reactivaciones recientes (por `scheduled_at` desc). */
+export async function getRecentReactivations(limit = 50): Promise<ReactivationRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("reactivations")
+    .select("id, conversation_id, contact_id, phone, stage, status, scheduled_at, sent_at, cost_usd, error")
+    .order("scheduled_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`getRecentReactivations: ${error.message}`);
+
+  const rows = data ?? [];
+  if (rows.length === 0) return [];
+
+  const contactIds = [...new Set(rows.map((r) => r.contact_id))];
+  const contactsRes = await supabase.from("contacts").select("id, name, phone").in("id", contactIds);
+  if (contactsRes.error) throw new Error(`getRecentReactivations contacts: ${contactsRes.error.message}`);
+  const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
+
+  return rows.map((r) => {
+    const c = contactById.get(r.contact_id);
+    return {
+      id: r.id,
+      conversationId: r.conversation_id,
+      contactName: c?.name ?? null,
+      phone: c?.phone ?? r.phone ?? "",
+      stage: r.stage,
+      status: r.status as RetargetStatus,
+      scheduledAt: r.scheduled_at,
+      sentAt: r.sent_at,
+      costUsd: r.cost_usd,
+      error: r.error,
+    };
+  });
+}
