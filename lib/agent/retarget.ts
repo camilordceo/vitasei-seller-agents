@@ -196,13 +196,14 @@ async function processRetargetRow(
 ): Promise<"sent" | "cancelled" | "skipped"> {
   const { data: convo, error } = await supabase
     .from("conversations")
-    .select("status, last_inbound_at, openai_previous_response_id")
+    .select("status, ai_paused, last_inbound_at, openai_previous_response_id")
     .eq("id", row.conversation_id)
     .single();
   if (error) throw new Error(`load-conversation: ${error.message}`);
 
   const decision = evaluateRetarget({
     status: convo.status,
+    aiPaused: convo.ai_paused,
     lastInboundAt: convo.last_inbound_at,
     anchorInboundAt: row.anchor_inbound_at,
     previousResponseId: convo.openai_previous_response_id,

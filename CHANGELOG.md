@@ -33,6 +33,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Modo manual — pausar la IA en una conversación (ver `docs/11`, ADR-0018)**: un agente
+  humano puede tomar una conversación desde el tablero (botón **Pasar a manual** / **Reactivar
+  IA** en el detalle + píldora **Manual** en detalle y listas). Con la IA en pausa
+  (`conversations.ai_paused`, migración `0007_conversation_manual.sql`) el bot **no responde**
+  (`runDebouncedReply` salta y loguea `reply_skipped` reason `manual-mode`) y **no agenda ni
+  envía retargets** (se cancelan los pendientes; `evaluateRetarget` revalida con `aiPaused`),
+  pero **los mensajes del cliente se siguen guardando y viendo** (la ingesta no depende del
+  estado). Mutación vía Server Action `setConversationManual` (service-role, protegida por el
+  Basic Auth del dashboard; revalida rutas). Flag ortogonal a `status`; no toca el handoff
+  automático ni requiere env nuevas. Eventos `manual_on`/`manual_off`. Archivos:
+  `app/dashboard/actions.ts`, `app/dashboard/ui.tsx` (`ManualPill`/`ManualToggle`),
+  `app/dashboard/conversations/[id]/page.tsx`, `lib/agent/processMessage.ts`,
+  `lib/agent/retargetPlan.ts`, `lib/agent/retarget.ts`, `lib/dashboard/queries.ts`.
 - **Retargeting — seguimientos automáticos 1h/8h (ver `docs/10`, ADR-0017)**: cuando el bot
   responde y el cliente deja de responder, se agendan dos seguimientos (~1h y ~8h). Un
   **Vercel Cron** (`vercel.json` → `/api/cron/retargets`, cada 5 min) toma los vencidos y, si

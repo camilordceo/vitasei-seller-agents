@@ -75,6 +75,7 @@ export interface ConversationRow {
   phone: string;
   status: ConversationStatus;
   method: FulfillmentMethod;
+  aiPaused: boolean;
   lastActivity: string | null;
   lastMessage: string | null;
 }
@@ -83,7 +84,7 @@ export async function getRecentConversations(limit = 30): Promise<ConversationRo
   const supabase = createServiceClient();
   const { data: convos, error } = await supabase
     .from("conversations")
-    .select("id, contact_id, status, fulfillment_method, last_inbound_at, updated_at")
+    .select("id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at")
     .order("updated_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`getRecentConversations: ${error.message}`);
@@ -122,6 +123,7 @@ export async function getRecentConversations(limit = 30): Promise<ConversationRo
       phone: c?.phone ?? "",
       status: r.status,
       method: r.fulfillment_method,
+      aiPaused: r.ai_paused,
       lastActivity: r.last_inbound_at ?? r.updated_at,
       lastMessage: lm ? (lm.type === "text" ? lm.content : `[${lm.type}]`) : null,
     };
@@ -234,6 +236,7 @@ export interface ConversationDetail {
   id: string;
   status: ConversationStatus;
   method: FulfillmentMethod;
+  aiPaused: boolean;
   createdAt: string;
   contact: { name: string | null; phone: string } | null;
   messages: ConversationMessage[];
@@ -244,7 +247,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   const supabase = createServiceClient();
   const { data: convo, error } = await supabase
     .from("conversations")
-    .select("id, contact_id, status, fulfillment_method, created_at")
+    .select("id, contact_id, status, fulfillment_method, ai_paused, created_at")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`getConversation: ${error.message}`);
@@ -288,6 +291,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     id: convo.id,
     status: convo.status,
     method: convo.fulfillment_method,
+    aiPaused: convo.ai_paused,
     createdAt: convo.created_at,
     contact: contactRes.data
       ? { name: contactRes.data.name, phone: contactRes.data.phone }

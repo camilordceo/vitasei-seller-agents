@@ -243,7 +243,9 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
     // Estado + "quién gana": ¿sigo siendo el último inbound?
     const { data: convo, error: convoErr } = await supabase
       .from("conversations")
-      .select("status, last_inbound_message_uuid, openai_previous_response_id, last_inbound_at")
+      .select(
+        "status, ai_paused, last_inbound_message_uuid, openai_previous_response_id, last_inbound_at",
+      )
       .eq("id", conversationId)
       .single();
     if (convoErr) throw new Error(`load-conversation-state: ${convoErr.message}`);
@@ -253,6 +255,17 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
 
     // Conversación cerrada / handoff → el bot no responde.
     if (convo.status !== "active") return;
+
+    // Modo manual: un agente humano tomó la conversación. La IA calla, pero el
+    // inbound ya quedó guardado (se ve en el dashboard). Ver docs/11 y ADR-0018.
+    if (convo.ai_paused) {
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "reply_skipped",
+        payload: { reason: "manual-mode" } as unknown as Json,
+      });
+      return;
+    }
 
     const { data: cfg, error: cfgErr } = await supabase
       .from("agent_config")

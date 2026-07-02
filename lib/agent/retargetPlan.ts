@@ -34,6 +34,7 @@ export type RetargetDecision =
 /**
  * Decide qué hacer con un seguimiento vencido, sin I/O:
  *  - conversación no activa (handoff/cerrada) → cancel.
+ *  - en modo manual (un humano la tomó) → cancel.
  *  - el cliente respondió después de agendar (`last_inbound_at` cambió) → cancel.
  *  - sin `previous_response_id` (no hay contexto que encadenar) → cancel.
  *  - fuera de la ventana de 24h (requeriría template) → skip.
@@ -41,12 +42,15 @@ export type RetargetDecision =
  */
 export function evaluateRetarget(p: {
   status: string;
+  aiPaused: boolean;
   lastInboundAt: string | null;
   anchorInboundAt: string | null;
   previousResponseId: string | null;
   now: number;
 }): RetargetDecision {
   if (p.status !== "active") return { action: "cancel", reason: `conversation-${p.status}` };
+
+  if (p.aiPaused) return { action: "cancel", reason: "manual-mode" };
 
   const anchorMs = p.anchorInboundAt ? Date.parse(p.anchorInboundAt) : null;
   const lastMs = p.lastInboundAt ? Date.parse(p.lastInboundAt) : null;

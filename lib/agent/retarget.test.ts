@@ -22,6 +22,7 @@ describe("planRetargets", () => {
 describe("evaluateRetarget", () => {
   const base = {
     status: "active",
+    aiPaused: false,
     lastInboundAt: ANCHOR,
     anchorInboundAt: ANCHOR,
     previousResponseId: "resp_123",
@@ -36,6 +37,13 @@ describe("evaluateRetarget", () => {
     expect(evaluateRetarget({ ...base, status: "handed_off" })).toEqual({
       action: "cancel",
       reason: "conversation-handed_off",
+    });
+  });
+
+  it("cancela si la conversación está en modo manual (humano al mando)", () => {
+    expect(evaluateRetarget({ ...base, aiPaused: true })).toEqual({
+      action: "cancel",
+      reason: "manual-mode",
     });
   });
 

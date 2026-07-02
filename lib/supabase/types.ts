@@ -78,6 +78,7 @@ export interface Database {
           callbell_conversation_href: string | null;
           status: ConversationStatus;
           fulfillment_method: FulfillmentMethod;
+          ai_paused: boolean;
           openai_previous_response_id: string | null;
           assigned_team_uuid: string | null;
           last_inbound_at: string | null;
@@ -91,6 +92,7 @@ export interface Database {
           callbell_conversation_href?: string | null;
           status?: ConversationStatus;
           fulfillment_method?: FulfillmentMethod;
+          ai_paused?: boolean;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
@@ -104,6 +106,7 @@ export interface Database {
           callbell_conversation_href?: string | null;
           status?: ConversationStatus;
           fulfillment_method?: FulfillmentMethod;
+          ai_paused?: boolean;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;

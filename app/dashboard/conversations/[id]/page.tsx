@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getConversation } from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
-import { StatusPill, MethodPill, orderStatusLabel } from "../../ui";
+import { StatusPill, MethodPill, ManualPill, ManualToggle, orderStatusLabel } from "../../ui";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +28,17 @@ export default async function ConversationDetailPage({ params }: { params: { id:
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         <StatusPill status={convo.status} />
         <MethodPill method={convo.method} />
+        {convo.aiPaused ? <ManualPill /> : null}
+        <div className="ml-auto">
+          <ManualToggle conversationId={convo.id} paused={convo.aiPaused} />
+        </div>
       </div>
+      {convo.aiPaused ? (
+        <p className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800">
+          La IA está en pausa: un agente humano atiende esta conversación. Los mensajes del
+          cliente se siguen registrando aquí, pero el bot no responde.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Hilo de mensajes */}

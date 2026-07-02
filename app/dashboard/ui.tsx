@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import type { ConversationRow, RetargetRow, RetargetStats } from "@/lib/dashboard/queries";
 import { formatDateTime, formatNumber, relativeTime } from "@/lib/dashboard/format";
+import { setConversationManual } from "./actions";
 import type {
   ConversationStatus,
   FulfillmentMethod,
@@ -39,6 +40,61 @@ export function MethodPill({ method }: { method: FulfillmentMethod }) {
     <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20">
       {METHOD[method] ?? METHOD.undecided}
     </span>
+  );
+}
+
+/** Píldora "Manual": la IA está pausada y un humano atiende la conversación. */
+export function ManualPill() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700 ring-1 ring-inset ring-purple-600/20">
+      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <path d="M8 6v12M16 6v12" strokeLinecap="round" />
+      </svg>
+      Manual
+    </span>
+  );
+}
+
+/**
+ * Botón para pasar la conversación a manual (IA en silencio) o reactivarla.
+ * Usa la Server Action `setConversationManual` vía `<form action>` (funciona sin
+ * JS; revalida las rutas del dashboard al terminar).
+ */
+export function ManualToggle({
+  conversationId,
+  paused,
+}: {
+  conversationId: string;
+  paused: boolean;
+}) {
+  const action = setConversationManual.bind(null, conversationId, !paused);
+  return (
+    <form action={action}>
+      <button
+        type="submit"
+        className={
+          paused
+            ? "inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+            : "inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        }
+      >
+        {paused ? (
+          <>
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M8 5v14l11-7-11-7Z" strokeLinejoin="round" />
+            </svg>
+            Reactivar IA
+          </>
+        ) : (
+          <>
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M8 6v12M16 6v12" strokeLinecap="round" />
+            </svg>
+            Pasar a manual
+          </>
+        )}
+      </button>
+    </form>
   );
 }
 
@@ -210,6 +266,7 @@ export function ConversationList({ rows }: { rows: ConversationRow[] }) {
                   {c.contactName || c.phone || "Sin contacto"}
                 </span>
                 <StatusPill status={c.status} />
+                {c.aiPaused ? <ManualPill /> : null}
               </div>
               <p className="mt-0.5 truncate text-sm text-slate-500">
                 {c.lastMessage ?? "Sin mensajes"}
