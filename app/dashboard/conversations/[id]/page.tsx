@@ -3,14 +3,23 @@ import { notFound } from "next/navigation";
 import { getConversation } from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
 import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
+import { ChatPanel } from "./ChatPanel";
 
 export const dynamic = "force-dynamic";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default async function ConversationDetailPage({ params }: { params: { id: string } }) {
   const convo = await getConversation(params.id);
   if (!convo) notFound();
 
   const title = convo.contact?.name ?? convo.contact?.phone ?? "Conversación";
+
+  // Ventana de 24 h de WhatsApp: desde el último mensaje entrante del cliente.
+  const lastInbound = [...convo.messages].reverse().find((m) => m.direction === "inbound");
+  const within24h = lastInbound
+    ? Date.now() - new Date(lastInbound.createdAt).getTime() < DAY_MS
+    : false;
 
   return (
     <div className="space-y-4">
@@ -41,61 +50,13 @@ export default async function ConversationDetailPage({ params }: { params: { id:
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Hilo de mensajes */}
+        {/* Hilo de mensajes + compositor (chat con scroll propio) */}
         <div className="lg:col-span-2">
-          <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4">
-            {convo.messages.length === 0 ? (
-              <p className="py-8 text-center text-sm text-slate-400">Sin mensajes.</p>
-            ) : (
-              convo.messages.map((m) => {
-                const out = m.direction === "outbound";
-                return (
-                  <div key={m.id} className={`flex ${out ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
-                        out ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-900"
-                      }`}
-                    >
-                      {m.type === "image" && m.mediaUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={m.mediaUrl}
-                          alt="Imagen enviada"
-                          className="mb-1 max-h-56 rounded-lg"
-                        />
-                      ) : null}
-                      {m.content ? (
-                        <p className="whitespace-pre-wrap break-words">{m.content}</p>
-                      ) : m.type !== "text" ? (
-                        <p className="italic opacity-80">[{m.type}]</p>
-                      ) : null}
-                      {m.tags.length > 0 ? (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {m.tags.map((t, i) => (
-                            <span
-                              key={i}
-                              className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                                out ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
-                              }`}
-                            >
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      <span
-                        className={`mt-1 block text-[10px] ${
-                          out ? "text-emerald-100" : "text-slate-400"
-                        }`}
-                      >
-                        {formatDateTime(m.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+          <ChatPanel
+            conversationId={convo.id}
+            messages={convo.messages}
+            within24h={within24h}
+          />
         </div>
 
         {/* Panel lateral */}

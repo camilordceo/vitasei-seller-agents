@@ -33,6 +33,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Envío manual de mensajes + chat con scroll (ver `docs/13`, ADR-0020)**: el detalle de
+  conversación deja de ser una página infinita — el hilo pasa a un panel de **altura fija con
+  scroll propio** (`ChatPanel`, client component) con **auto-scroll** al último mensaje. Abajo, un
+  **compositor** para enviarle un mensaje libre al cliente por WhatsApp con un botón **Enviar**
+  (Enter envía · Shift+Enter salto de línea), usando la API de **Callbell** (`sendText`). Mutación
+  vía Server Action **`sendManualMessage`** (service-role, protegida por el Basic Auth): guarda el
+  outbound marcado `tags:["manual"]` (se distingue del bot con una etiqueta **Manual** en la
+  burbuja) y loguea `manual_message_sent`. Avisa si pasaron **+24 h** del último inbound (WhatsApp
+  puede exigir plantilla) pero intenta el envío igual; los errores de Callbell se muestran en la UI.
+  El mensaje manual **no** entra al contexto de la IA (`previous_response_id`). Sin cambios en
+  Supabase ni envs nuevas (usa `CALLBELL_API_KEY`). Archivos: `app/dashboard/conversations/[id]/ChatPanel.tsx`,
+  `app/dashboard/conversations/[id]/page.tsx`, `app/dashboard/actions.ts` (`sendManualMessage`).
 - **Órdenes editables + reportes de ventas (ver `docs/12`, ADR-0019)**: continuación del Dashboard
   (Sprint 6). Nueva sección **Órdenes** (`/dashboard/orders`, nav) con lista filtrable por estado
   (todas/pendientes/con logística/confirmadas/canceladas: contacto, estado, método, ítems, ciudad,

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
+import { sendText } from "@/lib/callbell/sender";
 import type { Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
 
@@ -137,4 +138,60 @@ export async function saveOrder(orderId: string, input: OrderEditInput): Promise
   revalidatePath("/dashboard/reports");
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/conversations/${conversationId}`);
+}
+
+/**
+ * Envía un mensaje manual escrito por un operador al cliente por WhatsApp
+ * (Callbell). Guarda el outbound marcado `manual` (para distinguirlo del bot) y
+ * loguea `manual_message_sent`. No alimenta el contexto de la IA
+ * (`previous_response_id`): es una intervención humana fuera de banda. Corre
+ * server-side con service-role, protegida por el Basic Auth. Ver docs/13, ADR-0020.
+ */
+export async function sendManualMessage(conversationId: string, text: string): Promise<void> {
+  const clean = text.trim();
+  if (clean.length === 0) throw new Error("El mensaje está vacío.");
+
+  const supabase = createServiceClient();
+
+  const { data: convo, error: convoErr } = await supabase
+    .from("conversations")
+    .select("id, contact_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (convoErr) throw new Error(`sendManualMessage convo: ${convoErr.message}`);
+  if (!convo) throw new Error("La conversación no existe.");
+
+  const { data: contact, error: contactErr } = await supabase
+    .from("contacts")
+    .select("phone")
+    .eq("id", convo.contact_id)
+    .maybeSingle();
+  if (contactErr) throw new Error(`sendManualMessage contact: ${contactErr.message}`);
+  if (!contact?.phone) throw new Error("El contacto no tiene teléfono.");
+
+  // Enviar por Callbell (lanza si la API responde error, p. ej. fuera de la ventana 24h).
+  const sent = await sendText(contact.phone, clean, {
+    metadata: { conversation_id: conversationId, source: "dashboard-manual" },
+  });
+
+  const { error: msgErr } = await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    direction: "outbound",
+    role: "assistant",
+    type: "text",
+    content: clean,
+    tags: ["manual"] as unknown as Json,
+    callbell_message_uuid: sent.uuid,
+  });
+  if (msgErr) throw new Error(`sendManualMessage save: ${msgErr.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "manual_message_sent",
+    payload: { uuid: sent.uuid, status: sent.status, chars: clean.length } as unknown as Json,
+  });
+
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+  revalidatePath("/dashboard");
 }
