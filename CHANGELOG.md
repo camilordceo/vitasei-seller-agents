@@ -33,6 +33,33 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Comprensión de audio e imágenes — multimodal (ver `docs/15`, ADR-0022)**: el bot ahora
+  **escucha** las notas de voz y **ve** las imágenes que manda el cliente, y usa ese contenido
+  para responder (caso estrella: la **captura del comprobante de pago**). El webhook extrae el
+  adjunto de `payload.attachments` (array de URLs) → se guarda en `messages.media_url`
+  (`getAttachments` en `lib/callbell/types.ts`, `InboundMessage.mediaUrl`, ingesta). En la fase
+  de respuesta (`gatherPendingContent`, reemplaza a `gatherPendingInput`): las **notas de voz**
+  se transcriben con OpenAI (`audio.transcriptions.create`, `OPENAI_TRANSCRIBE_MODEL` default
+  `whisper-1`, `language: es`) y el texto se **persiste** en `messages.content` (visible en el
+  dashboard, reutilizable por la orden, idempotente); las **imágenes** se descargan y entran como
+  **visión** (`input_image` data URL base64) en la MISMA llamada de Responses (`generateReply`
+  acepta `imageDataUrls`; `buildResponsesInput` arma el input multimodal). Ahora se **responde a
+  mensajes solo-media** (antes se descartaban por `input.length === 0`). Video/documentos: nota
+  pidiendo texto (fuera de alcance v1). Se mantiene la **IA simple**: una sola llamada de
+  razonamiento; la transcripción es pre-proceso (como `extractOrder`) y la imagen va dentro del
+  turno. Descarga best-effort con guarda de tamaño (`fetchMedia` en `lib/callbell/mediaFetch.ts`,
+  helpers puros en `lib/callbell/media.ts`) y reintento autenticado si el host es de Callbell; un
+  fallo no rompe el turno (se responde con nota y se loguea `audio_transcribed`/
+  `audio_transcribe_failed`/`image_received`/`image_fetch_failed`). **Kill switch**
+  `MEDIA_UNDERSTANDING_ENABLED` (default ON) + `MEDIA_MAX_BYTES` (default 20 MB). El dashboard ya
+  renderiza imágenes inbound (`ChatPanel`, `media_url`). Nuevas env **opcionales**
+  (`OPENAI_TRANSCRIBE_MODEL`, `MEDIA_UNDERSTANDING_ENABLED`, `MEDIA_MAX_BYTES`) — con defaults el
+  deploy funciona. **Requiere en Supabase** aplicar `0009_update_agent_prompt_media.sql` (agrega
+  la sección IMÁGENES Y NOTAS DE VOZ al prompt: comprobantes de pago). Módulos nuevos:
+  `lib/callbell/media.ts` (+test), `lib/callbell/mediaFetch.ts`, `lib/openai/transcribe.ts`,
+  `lib/openai/responsesInput.ts` (+test). Tocados: `lib/callbell/types.ts`,
+  `app/api/webhooks/callbell/route.ts`, `lib/agent/processMessage.ts`, `lib/openai/responses.ts`,
+  `lib/env.ts`. 13 tests nuevos.
 - **Reactivaciones por plantilla — 7 y 15 días (ver `docs/14`, ADR-0021)**: feature de crecimiento
   **apagable desde el dashboard** (OFF por defecto, aún sin aprobación). Cuando llega un cliente por
   primera vez (conversación nueva) y el feature está encendido, se **programan** dos envíos de

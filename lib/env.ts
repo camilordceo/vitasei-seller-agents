@@ -32,6 +32,23 @@ export const env = {
   get OPENAI_VECTOR_STORE_ID() {
     return optional("OPENAI_VECTOR_STORE_ID");
   },
+  // Transcripción de notas de voz (ver docs/15, ADR-0022). Whisper por defecto.
+  get OPENAI_TRANSCRIBE_MODEL() {
+    return optional("OPENAI_TRANSCRIBE_MODEL") ?? "whisper-1";
+  },
+
+  // Comprensión de audio e imágenes (multimodal). Kill switch global (default ON):
+  // con "false"/"0" el bot ignora el media y responde solo al texto. `MEDIA_MAX_BYTES`
+  // limita la descarga de un adjunto (default 20 MB; Whisper admite hasta 25 MB).
+  get MEDIA_UNDERSTANDING_ENABLED() {
+    const raw = optional("MEDIA_UNDERSTANDING_ENABLED");
+    return !(raw === "false" || raw === "0");
+  },
+  get MEDIA_MAX_BYTES() {
+    const raw = optional("MEDIA_MAX_BYTES");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 20 * 1024 * 1024; // 20 MB
+  },
 
   // Debounce: ms que esperamos tras un inbound para agrupar mensajes seguidos
   // y responder una sola vez (ver ADR-0013). Default 12s.

@@ -4,9 +4,12 @@ import type OpenAI from "openai";
 import { createServiceClient } from "@/lib/supabase/server";
 import { createOpenAIClient } from "@/lib/openai/client";
 import { generateReply } from "@/lib/openai/responses";
+import { transcribeAudioUrl } from "@/lib/openai/transcribe";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage } from "@/lib/callbell/sender";
+import { toDataUrl } from "@/lib/callbell/media";
+import { fetchMedia } from "@/lib/callbell/mediaFetch";
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
@@ -38,6 +41,8 @@ export interface InboundMessage {
   messageUuid: string;
   text: string | null;
   messageType: string | null;
+  /** URL del adjunto (imagen/audio/…) si el mensaje trae media. Ver docs/15. */
+  mediaUrl: string | null;
   contactName: string | null;
   callbellContactUuid: string | null;
   conversationHref: string | null;
@@ -83,6 +88,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
     messageUuid,
     text,
     messageType,
+    mediaUrl,
     contactName,
     callbellContactUuid,
     conversationHref,
@@ -193,6 +199,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
       role: "user",
       type: toMessageType(messageType),
       content: text,
+      media_url: mediaUrl,
       callbell_message_uuid: messageUuid,
     });
     if (error) throw new Error(`save-inbound-message: ${error.message}`);
@@ -300,11 +307,12 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
     }
 
     // Juntar los mensajes pendientes (inbound desde la última respuesta) en un
-    // solo turno. `previous_response_id` aporta el contexto previo.
-    const input = await gatherPendingInput(supabase, conversationId);
-    if (input.length === 0) return; // nada de texto que responder (p.ej. solo media)
-
+    // solo turno MULTIMODAL: texto + notas de voz transcritas + imágenes (visión).
+    // El `previous_response_id` aporta el contexto previo. Ver docs/15.
     const openai = createOpenAIClient();
+    const content = await gatherPendingContent(supabase, openai, conversationId);
+    if (!content.hasContent) return; // nada que responder (ni texto ni media legible)
+
     await generateAndSend({
       supabase,
       openai,
@@ -315,7 +323,8 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
       previousResponseId: convo.openai_previous_response_id,
       lastInboundAt: convo.last_inbound_at,
       cfg,
-      input,
+      input: content.text,
+      imageDataUrls: content.imageDataUrls,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -331,8 +340,28 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
   }
 }
 
-/** Junta los inbound sin responder (posteriores a la última respuesta) en un turno. */
-async function gatherPendingInput(supabase: DB, conversationId: string): Promise<string> {
+interface PendingContent {
+  /** Texto del turno: texto/captions + transcripciones de audio + notas de media. */
+  text: string;
+  /** Imágenes del turno como data URLs base64 para la visión de Responses. */
+  imageDataUrls: string[];
+  /** ¿Hay algo que responder? (texto o al menos una imagen). */
+  hasContent: boolean;
+}
+
+/**
+ * Junta los inbound sin responder (posteriores a la última respuesta) en un turno
+ * MULTIMODAL: el texto tal cual, las notas de voz **transcritas** (se persisten en
+ * `messages.content` — visibles en el dashboard, reutilizables por la orden e
+ * idempotentes ante reintentos) y las imágenes **descargadas** como data URLs para
+ * la visión. Video/documentos no se procesan (v1): se deja una nota para que el
+ * agente pida texto. Ver docs/15, ADR-0022.
+ */
+async function gatherPendingContent(
+  supabase: DB,
+  openai: OpenAI,
+  conversationId: string,
+): Promise<PendingContent> {
   const { data: lastOut } = await supabase
     .from("messages")
     .select("created_at")
@@ -344,18 +373,140 @@ async function gatherPendingInput(supabase: DB, conversationId: string): Promise
 
   let q = supabase
     .from("messages")
-    .select("content, created_at")
+    .select("id, type, content, media_url, created_at")
     .eq("conversation_id", conversationId)
     .eq("direction", "inbound")
     .order("created_at", { ascending: true });
   if (lastOut?.created_at) q = q.gt("created_at", lastOut.created_at);
 
   const { data, error } = await q;
-  if (error) throw new Error(`gather-pending-input: ${error.message}`);
-  return (data ?? [])
-    .map((m) => (m.content ?? "").trim())
-    .filter((s) => s.length > 0)
-    .join("\n");
+  if (error) throw new Error(`gather-pending-content: ${error.message}`);
+
+  const mediaOn = env.MEDIA_UNDERSTANDING_ENABLED;
+  const textParts: string[] = [];
+  const imageDataUrls: string[] = [];
+
+  for (const m of data ?? []) {
+    const type = m.type as MessageType;
+    const content = (m.content ?? "").trim();
+
+    if (type === "audio") {
+      // Nota de voz: transcribir (si no está ya) y usar el texto como del cliente.
+      let transcript = content;
+      if (!transcript && m.media_url && mediaOn) {
+        transcript = await transcribeAudioAndPersist(
+          supabase,
+          openai,
+          conversationId,
+          m.id,
+          m.media_url,
+        );
+      }
+      if (transcript) textParts.push(transcript);
+      else if (m.media_url)
+        textParts.push(
+          "(El cliente envió una nota de voz que no se pudo entender; pídele amablemente que la reenvíe o la escriba.)",
+        );
+    } else if (type === "image") {
+      // Imagen: caption (si vino) + la imagen como visión.
+      if (content) textParts.push(content);
+      if (m.media_url && mediaOn) {
+        const dataUrl = await fetchImageDataUrl(supabase, conversationId, m.media_url);
+        if (dataUrl) imageDataUrls.push(dataUrl);
+        else
+          textParts.push(
+            "(El cliente envió una imagen que no se pudo procesar; pídele que la reenvíe.)",
+          );
+      }
+    } else if (type === "video" || type === "document") {
+      if (content) textParts.push(content);
+      textParts.push(
+        `(El cliente envió un ${type} que no puedo ver; pídele que te cuente por texto lo que necesita.)`,
+      );
+    } else {
+      // text | other
+      if (content) textParts.push(content);
+    }
+  }
+
+  const text = textParts.join("\n");
+  return { text, imageDataUrls, hasContent: text.length > 0 || imageDataUrls.length > 0 };
+}
+
+/**
+ * Transcribe una nota de voz y persiste el texto en `messages.content`. Best-effort:
+ * ante un fallo loguea y devuelve "" (el turno sigue con una nota). Idempotente: si
+ * ya había `content` no se llama (lo decide `gatherPendingContent`).
+ */
+async function transcribeAudioAndPersist(
+  supabase: DB,
+  openai: OpenAI,
+  conversationId: string,
+  messageId: string,
+  url: string,
+): Promise<string> {
+  try {
+    const transcript = await transcribeAudioUrl(openai, url);
+    if (transcript) {
+      await supabase.from("messages").update({ content: transcript }).eq("id", messageId);
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "audio_transcribed",
+        payload: { messageId, chars: transcript.length } as unknown as Json,
+      });
+      return transcript;
+    }
+    await supabase.from("events_log").insert({
+      conversation_id: conversationId,
+      type: "audio_transcribe_failed",
+      payload: { messageId, reason: "empty-or-unfetchable" } as unknown as Json,
+    });
+    return "";
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[gatherPendingContent] transcription failed:", message);
+    await supabase
+      .from("events_log")
+      .insert({
+        conversation_id: conversationId,
+        type: "audio_transcribe_failed",
+        payload: { messageId, error: message } as unknown as Json,
+      })
+      .then(() => undefined, () => undefined);
+    return "";
+  }
+}
+
+/**
+ * Descarga una imagen inbound y la vuelve data URL base64 para la visión.
+ * Best-effort: null si no se pudo bajar o no es imagen (se loguea).
+ */
+async function fetchImageDataUrl(
+  supabase: DB,
+  conversationId: string,
+  url: string,
+): Promise<string | null> {
+  try {
+    const media = await fetchMedia(url);
+    if (!media || media.kind !== "image") {
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "image_fetch_failed",
+        payload: { kind: media?.kind ?? null } as unknown as Json,
+      });
+      return null;
+    }
+    await supabase.from("events_log").insert({
+      conversation_id: conversationId,
+      type: "image_received",
+      payload: { bytes: media.bytes.length, contentType: media.contentType } as unknown as Json,
+    });
+    return toDataUrl(media.bytes, media.contentType);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[gatherPendingContent] image fetch failed:", message);
+    return null;
+  }
 }
 
 interface GenerateContext {
@@ -373,7 +524,10 @@ interface GenerateContext {
     vector_store_id: string | null;
     temperature: number;
   };
+  /** Texto del turno (con las notas de voz ya transcritas). */
   input: string;
+  /** Imágenes del turno como data URLs para la visión (input_image). */
+  imageDataUrls: string[];
 }
 
 /**
@@ -393,14 +547,17 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     lastInboundAt,
     cfg,
     input,
+    imageDataUrls,
   } = ctx;
 
   // GENERAR: una sola llamada a Responses (file_search hosted). El vector store
-  // sale de agent_config o, si no, de OPENAI_VECTOR_STORE_ID.
+  // sale de agent_config o, si no, de OPENAI_VECTOR_STORE_ID. Las imágenes del
+  // cliente entran como visión en esta MISMA llamada (input_image). Ver docs/15.
   const gen = await generateReply(openai, {
     model: cfg.model,
     systemPrompt: cfg.system_prompt,
     input,
+    imageDataUrls,
     vectorStoreId: cfg.vector_store_id ?? env.OPENAI_VECTOR_STORE_ID ?? null,
     previousResponseId,
     temperature: cfg.temperature,

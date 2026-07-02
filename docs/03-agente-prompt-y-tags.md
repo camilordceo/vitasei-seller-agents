@@ -94,6 +94,17 @@ REGLAS
 - Después de #orden-lista, el equipo de logística toma la conversación; despídete cordial.
 ```
 
+## 5.1 Imágenes y notas de voz (multimodal — ver `docs/15`, ADR-0022)
+
+El agente **ve** las imágenes y **escucha** las notas de voz del cliente:
+- **Audio** → se transcribe (Whisper, español) y entra como texto del cliente; la transcripción
+  queda en `messages.content` (visible en el dashboard).
+- **Imagen** → entra como **visión** en la MISMA llamada de Responses (el modelo la ve).
+- La migración **`0009`** agrega al `system_prompt` una sección **IMÁGENES Y NOTAS DE VOZ**:
+  ante un **comprobante de pago** el agente confirma que lo **recibió** (NO confirma el cobro —
+  eso es de logística); ante una foto de producto responde con base en el catálogo; si la imagen
+  no es legible, pide reenviarla; nunca inventa lo que no ve.
+
 ## 6. Parsing de tags (backend)
 
 - **`#ID` inline:** `/#ID\d+/g` en cualquier parte del texto → `skus[]` (token completo, dedup,

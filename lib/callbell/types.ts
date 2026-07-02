@@ -19,6 +19,9 @@ export interface CallbellMessagePayload {
   text?: string | null;
   type?: string; // text | image | audio | video | document | ...
   status?: string; // received | sent | ...
+  // Adjuntos del mensaje (imagen/audio/video/documento): array de URLs. WhatsApp
+  // manda un adjunto por mensaje. Ver docs/04 §1 y docs/15.
+  attachments?: string[] | null;
   // Según la versión de Callbell puede venir como string ("whatsapp") o como
   // objeto con datos del canal (uuid/phoneNumber). Lo tratamos defensivamente.
   channel?: string | Record<string, unknown>;
@@ -78,6 +81,16 @@ export function isOutbound(payload?: CallbellMessagePayload): boolean {
  */
 export function isInboundMessageEvent(body: CallbellWebhookBody): boolean {
   return body.event === "message_created" && !isOutbound(body.payload);
+}
+
+/**
+ * URLs de adjuntos del mensaje (imagen/audio/video/documento). Defensivo: solo
+ * strings no vacíos. Ver docs/15.
+ */
+export function getAttachments(payload?: CallbellMessagePayload): string[] {
+  const raw = payload?.attachments;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((u): u is string => typeof u === "string" && u.trim().length > 0);
 }
 
 // ---------------------------------------------------------------------------

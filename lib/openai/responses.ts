@@ -1,5 +1,8 @@
 import "server-only";
 import type OpenAI from "openai";
+import { buildResponsesInput } from "./responsesInput";
+
+export { buildResponsesInput } from "./responsesInput";
 
 /**
  * Generación de la respuesta del agente (Sprint 3).
@@ -12,8 +15,14 @@ import type OpenAI from "openai";
 export interface GenerateReplyParams {
   model: string;
   systemPrompt: string;
-  /** Texto del turno actual (el inbound del cliente). */
+  /** Texto del turno actual (el inbound del cliente, ya con audios transcritos). */
   input: string;
+  /**
+   * Imágenes del turno como data URLs base64 (`data:image/...;base64,...`) o URLs.
+   * Cuando hay, el input va como mensaje multimodal (input_text + input_image) y
+   * el modelo "ve" las imágenes en la MISMA llamada. Ver docs/15, ADR-0022.
+   */
+  imageDataUrls?: string[];
   /** Vector store del catálogo; si falta, se genera sin `file_search`. */
   vectorStoreId?: string | null;
   /** Para encadenar la conversación (si no hay, arranca limpio). */
@@ -52,7 +61,7 @@ export async function generateReply(
   const response = await openai.responses.create({
     model: params.model,
     instructions: params.systemPrompt,
-    input: params.input,
+    input: buildResponsesInput(params.input, params.imageDataUrls),
     previous_response_id: params.previousResponseId ?? undefined,
     tools,
     temperature: params.temperature,

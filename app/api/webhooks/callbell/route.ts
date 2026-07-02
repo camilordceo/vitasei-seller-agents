@@ -3,6 +3,7 @@ import { waitUntil } from "@vercel/functions";
 import {
   type CallbellWebhookBody,
   classifyInbox,
+  getAttachments,
   isInboundMessageEvent,
   normalizePhone,
 } from "@/lib/callbell/types";
@@ -104,6 +105,10 @@ export async function POST(req: Request) {
 
   const receivedAt = Date.now();
 
+  // Adjunto (imagen/audio/…): Callbell lo trae en `attachments` (array de URLs).
+  // Tomamos la primera; el resto queda en el `raw` del events_log. Ver docs/15.
+  const mediaUrl = getAttachments(payload)[0] ?? null;
+
   // 6) Ingesta síncrona. Un error no debe tumbar el webhook: se registra y 200.
   try {
     const ingest = await ingestInboundMessage({
@@ -111,6 +116,7 @@ export async function POST(req: Request) {
       messageUuid,
       text: payload.text ?? null,
       messageType: payload.type ?? null,
+      mediaUrl,
       contactName: payload.contact?.name ?? null,
       callbellContactUuid: payload.contact?.uuid ?? null,
       conversationHref: payload.conversationHref ?? null,

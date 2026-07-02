@@ -14,6 +14,24 @@ Base URL: `https://api.callbell.eu/v1` · Auth: `Authorization: Bearer <CALLBELL
   destino o, si no viene en el payload, por `channel_uuid` (`CALLBELL_WHATSAPP_CHANNEL_UUID`).
   El resto se descarta con `inbox_rejected`. Ver **ADR-0015** y `docs/09`.
 - Normalizar teléfono a E.164 sin `+`.
+- **Adjuntos (media):** imagen/audio/video/documento llegan en `payload.attachments`
+  (**array de URLs**), con `payload.type` = `image|audio|...` y `payload.text` = caption (opcional).
+  Se guarda la primera URL en `messages.media_url`; el bot transcribe el audio y ve las imágenes.
+  Ver **ADR-0022** y `docs/15`.
+
+Ejemplo (imagen con caption):
+```json
+{
+  "event": "message_created",
+  "payload": {
+    "type": "image",
+    "text": "¿este me sirve?",
+    "attachments": ["https://.../archivo.jpg"],
+    "contact": { "phoneNumber": "+57...", "uuid": "..." },
+    "uuid": "..."
+  }
+}
+```
 
 ```ts
 // pseudo — procesamiento inline (sin cola async; ver ADR-0012)
