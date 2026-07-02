@@ -42,10 +42,13 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   ítems"). Mutación vía Server Action **`saveOrder`** (service-role, protegida por el Basic Auth;
   reemplaza los ítems delete+insert; loguea `order_edited`; revalida rutas). Nueva sección
   **Reportes** (`/dashboard/reports`, nav) con lógica pura **`summarizeOrders`**
-  (`lib/dashboard/report.ts`, 9 tests): ventas **confirmadas** (`confirmed`), **generadas** (todo
+  (`lib/dashboard/report.ts`): ventas **confirmadas** (`confirmed`), **generadas** (todo
   menos canceladas), **pipeline** (`pending_handoff`+`handed_off`) y canceladas; cortes por estado,
   método, ventanas (hoy/7/30 días) y por día (últimos 14, zona `America/Bogota`); botón **copiar
-  resumen** para el equipo. Se corrige `getKpis` para **excluir canceladas** de "Ventas generadas".
+  resumen** para el equipo. **Conversión** (`summarizeConversion`/`getConversionReport`): tabla por
+  periodo (hoy/7/30 días/total) y gráfico por día de **conversaciones vs. transacciones** y
+  **% de conversión** (conversaciones con orden no cancelada ÷ conversaciones). Se corrige `getKpis`
+  para **excluir canceladas** de "Ventas generadas". Lógica pura con 15 tests.
   El detalle de conversación enlaza a la orden. **Reutiliza** `orders`/`order_items` (sin migración;
   el service-role omite RLS → nada que aplicar en Supabase). Archivos: `lib/dashboard/report.ts`
   (+test), `lib/dashboard/queries.ts` (`getOrders`/`getOrder`/`getSalesReport`), `lib/dashboard/format.ts`

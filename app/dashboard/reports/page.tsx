@@ -1,6 +1,11 @@
-import { getSalesReport } from "@/lib/dashboard/queries";
-import { ORDER_STATUSES, FULFILLMENT_METHODS, type SalesReport } from "@/lib/dashboard/report";
-import { formatCOP, formatNumber, formatDayKeyShort } from "@/lib/dashboard/format";
+import { getConversionReport, getSalesReport } from "@/lib/dashboard/queries";
+import {
+  ORDER_STATUSES,
+  FULFILLMENT_METHODS,
+  type ConversionReport,
+  type SalesReport,
+} from "@/lib/dashboard/report";
+import { formatCOP, formatNumber, formatDayKeyShort, formatPercent } from "@/lib/dashboard/format";
 import { orderStatusLabel } from "../ui";
 import { CopySummaryButton } from "./CopySummaryButton";
 import type { FulfillmentMethod } from "@/lib/supabase/types";
@@ -35,20 +40,28 @@ function ReportCard({
   );
 }
 
-function buildSummary(r: SalesReport): string {
+function buildSummary(r: SalesReport, c: ConversionReport): string {
   return [
     "Reporte de ventas — Vitasei",
     `Ventas confirmadas: ${r.confirmed.count} · ${formatCOP(r.confirmed.revenue)}`,
     `En curso (sin confirmar): ${r.pipeline.count} · ${formatCOP(r.pipeline.revenue)}`,
     `Órdenes generadas: ${r.generated.count} · ${formatCOP(r.generated.revenue)}`,
     `Canceladas: ${r.cancelled.count}`,
+    `Conversión: ${formatPercent(c.total.rate)} (${c.total.transactions}/${c.total.conversations} conversaciones)`,
     `Hoy: ${r.today.count} (${formatCOP(r.today.revenue)}) · 7 días: ${r.last7.count} (${formatCOP(r.last7.revenue)}) · 30 días: ${r.last30.count} (${formatCOP(r.last30.revenue)})`,
   ].join("\n");
 }
 
 export default async function ReportsPage() {
-  const r = await getSalesReport();
+  const [r, conv] = await Promise.all([getSalesReport(), getConversionReport()]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
+  const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
+  const convWindows = [
+    { label: "Hoy", w: conv.today },
+    { label: "Últimos 7 días", w: conv.last7 },
+    { label: "Últimos 30 días", w: conv.last30 },
+    { label: "Total", w: conv.total },
+  ];
 
   return (
     <div className="space-y-6">
@@ -59,7 +72,7 @@ export default async function ReportsPage() {
             Ventas generadas por el agente. Comparte el resumen con el equipo.
           </p>
         </div>
-        <CopySummaryButton summary={buildSummary(r)} />
+        <CopySummaryButton summary={buildSummary(r, conv)} />
       </div>
 
       {/* Titulares */}
@@ -106,6 +119,97 @@ export default async function ReportsPage() {
             </p>
           </div>
         ))}
+      </section>
+
+      {/* Conversión: conversaciones → transacciones */}
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-700">Conversión</h2>
+            <p className="text-xs text-slate-400">
+              Conversaciones que terminaron en transacción (orden no cancelada).
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-semibold tracking-tight text-emerald-700">
+              {formatPercent(conv.total.rate)}
+            </p>
+            <p className="text-xs text-slate-500">
+              {formatNumber(conv.total.transactions)} de {formatNumber(conv.total.conversations)}{" "}
+              conversaciones
+            </p>
+          </div>
+        </div>
+
+        {/* Tabla por periodo */}
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500">
+                <th className="pb-2 font-medium">Periodo</th>
+                <th className="pb-2 text-right font-medium">Conversaciones</th>
+                <th className="pb-2 text-right font-medium">Transacciones</th>
+                <th className="pb-2 text-right font-medium">Conversión</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {convWindows.map((row) => (
+                <tr key={row.label}>
+                  <td className="py-2 text-slate-700">{row.label}</td>
+                  <td className="py-2 text-right tabular-nums text-slate-900">
+                    {formatNumber(row.w.conversations)}
+                  </td>
+                  <td className="py-2 text-right tabular-nums text-slate-900">
+                    {formatNumber(row.w.transactions)}
+                  </td>
+                  <td className="py-2 text-right font-medium tabular-nums text-emerald-700">
+                    {formatPercent(row.w.rate)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Gráfico por día */}
+        <div className="mt-5">
+          <div className="mb-2 flex items-center gap-4 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm bg-slate-300" aria-hidden="true" />
+              Conversaciones
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" aria-hidden="true" />
+              Transacciones
+            </span>
+            <span className="ml-auto">Últimos 14 días</span>
+          </div>
+          <ul className="space-y-1.5">
+            {conv.perDay.map((d) => (
+              <li key={d.date} className="flex items-center gap-3">
+                <span className="w-14 shrink-0 text-xs text-slate-500">
+                  {formatDayKeyShort(d.date)}
+                </span>
+                <div className="relative h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                  <div
+                    className="absolute inset-y-0 left-0 rounded bg-slate-300"
+                    style={{ width: `${Math.round((d.conversations / maxConvDay) * 100)}%` }}
+                  />
+                  <div
+                    className="absolute inset-y-0 left-0 rounded bg-emerald-500"
+                    style={{ width: `${Math.round((d.transactions / maxConvDay) * 100)}%` }}
+                  />
+                </div>
+                <span className="w-12 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                  {d.transactions}/{d.conversations}
+                </span>
+                <span className="w-14 shrink-0 text-right text-xs font-medium tabular-nums text-slate-700">
+                  {formatPercent(d.rate)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">

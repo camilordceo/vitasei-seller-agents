@@ -1,6 +1,13 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
-import { summarizeOrders, type OrderFact, type SalesReport } from "@/lib/dashboard/report";
+import {
+  summarizeConversion,
+  summarizeOrders,
+  type ConversationFact,
+  type ConversionReport,
+  type OrderFact,
+  type SalesReport,
+} from "@/lib/dashboard/report";
 import type {
   ConversationStatus,
   FulfillmentMethod,
@@ -474,4 +481,31 @@ export async function getSalesReport(): Promise<SalesReport> {
     createdAt: o.created_at,
   }));
   return summarizeOrders(facts);
+}
+
+/**
+ * Embudo de conversión: conversaciones vs. transacciones (conversaciones con al
+ * menos una orden no cancelada) por ventana de tiempo y por día. Lógica pura en
+ * report.ts. Volumen v1 bajo → se cuenta en JS.
+ */
+export async function getConversionReport(): Promise<ConversionReport> {
+  const supabase = createServiceClient();
+  const [convRes, ordersRes] = await Promise.all([
+    supabase.from("conversations").select("id, created_at"),
+    supabase.from("orders").select("conversation_id, status"),
+  ]);
+  if (convRes.error) throw new Error(`getConversionReport conversations: ${convRes.error.message}`);
+  if (ordersRes.error) throw new Error(`getConversionReport orders: ${ordersRes.error.message}`);
+
+  // Conversaciones que convirtieron = tienen alguna orden NO cancelada.
+  const converting = new Set<string>();
+  for (const o of ordersRes.data ?? []) {
+    if (o.status !== "cancelled") converting.add(o.conversation_id);
+  }
+
+  const facts: ConversationFact[] = (convRes.data ?? []).map((c) => ({
+    createdAt: c.created_at,
+    converted: converting.has(c.id),
+  }));
+  return summarizeConversion(facts);
 }

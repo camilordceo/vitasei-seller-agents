@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { bogotaDayKey, summarizeOrders, type OrderFact } from "./report";
+import {
+  bogotaDayKey,
+  summarizeConversion,
+  summarizeOrders,
+  type ConversationFact,
+  type OrderFact,
+} from "./report";
 
 // Ancla fija: 2026-07-02 15:00 UTC = 2026-07-02 10:00 en Bogota (UTC-5).
 const NOW = Date.parse("2026-07-02T15:00:00Z");
@@ -76,5 +82,54 @@ describe("summarizeOrders", () => {
     // hace 3 días (2026-06-29): la pendiente sin total.
     const d = r.perDay.find((x) => x.date === "2026-06-29");
     expect(d).toEqual({ date: "2026-06-29", count: 1, revenue: 0 });
+  });
+});
+
+describe("summarizeConversion", () => {
+  const facts: ConversationFact[] = [
+    { createdAt: "2026-07-02T14:00:00Z", converted: true }, // hoy, convirtió
+    { createdAt: "2026-07-02T09:00:00Z", converted: false }, // hoy, no
+    { createdAt: "2026-06-29T12:00:00Z", converted: true }, // hace 3 días, convirtió
+    { createdAt: "2026-06-12T12:00:00Z", converted: false }, // hace 20 días, no
+  ];
+  const c = summarizeConversion(facts, NOW);
+
+  it("total: 4 conversaciones, 2 transacciones, 50%", () => {
+    expect(c.total).toEqual({ conversations: 4, transactions: 2, rate: 0.5 });
+  });
+
+  it("hoy: 2 conversaciones, 1 transacción, 50%", () => {
+    expect(c.today).toEqual({ conversations: 2, transactions: 1, rate: 0.5 });
+  });
+
+  it("7 días: 3 conversaciones, 2 transacciones", () => {
+    expect(c.last7.conversations).toBe(3);
+    expect(c.last7.transactions).toBe(2);
+    expect(c.last7.rate).toBeCloseTo(2 / 3, 5);
+  });
+
+  it("30 días incluye las 4", () => {
+    expect(c.last30).toEqual({ conversations: 4, transactions: 2, rate: 0.5 });
+  });
+
+  it("rate = 0 cuando no hay conversaciones", () => {
+    const empty = summarizeConversion([], NOW);
+    expect(empty.total).toEqual({ conversations: 0, transactions: 0, rate: 0 });
+  });
+
+  it("perDay ubica conversaciones y transacciones por día", () => {
+    expect(c.perDay).toHaveLength(14);
+    expect(c.perDay[0]).toEqual({
+      date: "2026-07-02",
+      conversations: 2,
+      transactions: 1,
+      rate: 0.5,
+    });
+    expect(c.perDay.find((x) => x.date === "2026-06-29")).toEqual({
+      date: "2026-06-29",
+      conversations: 1,
+      transactions: 1,
+      rate: 1,
+    });
   });
 });

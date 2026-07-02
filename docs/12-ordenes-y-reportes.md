@@ -41,7 +41,12 @@ Agrega **todas** las órdenes (lógica pura `summarizeOrders` en `lib/dashboard/
 - **Ventanas:** hoy, últimos 7 y 30 días (órdenes generadas).
 - **Por estado** y **por método** (este último sobre órdenes activas, sin canceladas).
 - **Últimos 14 días:** órdenes generadas por día (barras), zona `America/Bogota`.
-- **Copiar resumen:** botón que copia un resumen en texto plano para pegar en WhatsApp/Slack.
+- **Conversión:** tabla por periodo (hoy / 7 / 30 días / total) y gráfico por día de
+  **conversaciones vs. transacciones** y **% de conversión**. Conversión = conversaciones que
+  generaron una orden no cancelada ÷ total de conversaciones del periodo (por `created_at` de la
+  conversación). Lógica pura `summarizeConversion`; datos con `getConversionReport`.
+- **Copiar resumen:** botón que copia un resumen en texto plano (incluye la conversión) para pegar
+  en WhatsApp/Slack.
 
 ## Qué NO hace (v1)
 - No confirma la venta ni la logística automáticamente (eso es de otro equipo; ver `docs/00`).

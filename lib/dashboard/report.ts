@@ -160,3 +160,98 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
     perDay: dayKeys.map((k) => dayIndex.get(k)!),
   };
 }
+
+// --- Conversión (conversaciones → transacciones) ----------------------------
+
+export interface ConversationFact {
+  /** ISO del `created_at` de la conversación. */
+  createdAt: string;
+  /** true si la conversación generó al menos una orden NO cancelada. */
+  converted: boolean;
+}
+
+export interface ConversionWindow {
+  conversations: number;
+  transactions: number;
+  /** transactions / conversations, en 0..1 (0 si no hay conversaciones). */
+  rate: number;
+}
+
+export interface ConversionDay {
+  date: string;
+  conversations: number;
+  transactions: number;
+  rate: number;
+}
+
+export interface ConversionReport {
+  total: ConversionWindow;
+  today: ConversionWindow;
+  last7: ConversionWindow;
+  last30: ConversionWindow;
+  /** Últimos 14 días (más reciente primero). */
+  perDay: ConversionDay[];
+}
+
+function rate(transactions: number, conversations: number): number {
+  return conversations > 0 ? transactions / conversations : 0;
+}
+
+interface Tally {
+  conversations: number;
+  transactions: number;
+}
+
+function bumpTally(t: Tally, converted: boolean): void {
+  t.conversations += 1;
+  if (converted) t.transactions += 1;
+}
+
+function toWindow(t: Tally): ConversionWindow {
+  return { conversations: t.conversations, transactions: t.transactions, rate: rate(t.transactions, t.conversations) };
+}
+
+/**
+ * Embudo de conversión: por ventana de tiempo y por día, cuántas conversaciones
+ * hubo y cuántas terminaron en transacción (orden no cancelada). `nowMs` inyectable.
+ */
+export function summarizeConversion(
+  facts: ConversationFact[],
+  nowMs: number = Date.now(),
+): ConversionReport {
+  const total: Tally = { conversations: 0, transactions: 0 };
+  const today: Tally = { conversations: 0, transactions: 0 };
+  const last7: Tally = { conversations: 0, transactions: 0 };
+  const last30: Tally = { conversations: 0, transactions: 0 };
+
+  const dayKeys: string[] = [];
+  const dayIndex = new Map<string, Tally>();
+  for (let i = 0; i < 14; i++) {
+    const key = bogotaDayKey(nowMs - i * DAY_MS);
+    dayKeys.push(key);
+    dayIndex.set(key, { conversations: 0, transactions: 0 });
+  }
+  const todayKey = dayKeys[0];
+
+  for (const f of facts) {
+    bumpTally(total, f.converted);
+    const createdMs = Date.parse(f.createdAt);
+    if (!Number.isFinite(createdMs)) continue;
+    if (bogotaDayKey(createdMs) === todayKey) bumpTally(today, f.converted);
+    if (createdMs >= nowMs - 7 * DAY_MS) bumpTally(last7, f.converted);
+    if (createdMs >= nowMs - 30 * DAY_MS) bumpTally(last30, f.converted);
+    const day = dayIndex.get(bogotaDayKey(createdMs));
+    if (day) bumpTally(day, f.converted);
+  }
+
+  return {
+    total: toWindow(total),
+    today: toWindow(today),
+    last7: toWindow(last7),
+    last30: toWindow(last30),
+    perDay: dayKeys.map((k) => {
+      const d = dayIndex.get(k)!;
+      return { date: k, conversations: d.conversations, transactions: d.transactions, rate: rate(d.transactions, d.conversations) };
+    }),
+  };
+}

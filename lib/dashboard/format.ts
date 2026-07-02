@@ -17,6 +17,15 @@ export function formatUsd(n: number | null | undefined): string {
   return `US$ ${(Number(n) || 0).toFixed(2)}`;
 }
 
+/** Ratio 0..1 → "12,5 %" (es-CO). */
+export function formatPercent(ratio: number | null | undefined): string {
+  const v = typeof ratio === "number" && Number.isFinite(ratio) ? ratio : 0;
+  return new Intl.NumberFormat("es-CO", {
+    style: "percent",
+    maximumFractionDigits: 1,
+  }).format(v);
+}
+
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Intl.DateTimeFormat("es-CO", {
