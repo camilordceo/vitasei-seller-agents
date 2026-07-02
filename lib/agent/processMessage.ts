@@ -7,9 +7,16 @@ import { generateReply } from "@/lib/openai/responses";
 import { transcribeAudioUrl } from "@/lib/openai/transcribe";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
-import { sendText, sendImage } from "@/lib/callbell/sender";
+import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
 import { toDataUrl } from "@/lib/callbell/media";
 import { fetchMedia } from "@/lib/callbell/mediaFetch";
+import {
+  loadAgentForConversation,
+  agentCallbellCreds,
+  agentTeamUuid,
+  agentVectorStoreId,
+  type Agent,
+} from "@/lib/agent/agents";
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
@@ -39,6 +46,8 @@ export interface InboundMessage {
   phone: string;
   /** UUID del mensaje en Callbell — clave de idempotencia y del debounce. */
   messageUuid: string;
+  /** Agente (marca/número) al que pertenece este inbound. Ver docs/16. */
+  agentId: string;
   text: string | null;
   messageType: string | null;
   /** URL del adjunto (imagen/audio/…) si el mensaje trae media. Ver docs/15. */
@@ -86,6 +95,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
   const {
     phone,
     messageUuid,
+    agentId,
     text,
     messageType,
     mediaUrl,
@@ -145,10 +155,13 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
   let conversationId: string;
   let conversationIsNew = false;
   {
+    // Scope por agente: un mismo teléfono puede hablarle a dos marcas → una
+    // conversación activa por (contacto, agente). Ver docs/16.
     const { data: existing, error: selErr } = await supabase
       .from("conversations")
       .select("id")
       .eq("contact_id", contactId)
+      .eq("agent_id", agentId)
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(1)
@@ -172,6 +185,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
         .from("conversations")
         .insert({
           contact_id: contactId,
+          agent_id: agentId,
           status: "active",
           last_inbound_at: nowIso,
           last_inbound_message_uuid: messageUuid,
@@ -267,7 +281,7 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
     const { data: convo, error: convoErr } = await supabase
       .from("conversations")
       .select(
-        "status, ai_paused, last_inbound_message_uuid, openai_previous_response_id, last_inbound_at",
+        "status, ai_paused, agent_id, last_inbound_message_uuid, openai_previous_response_id, last_inbound_at",
       )
       .eq("id", conversationId)
       .single();
@@ -290,18 +304,14 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
       return;
     }
 
-    const { data: cfg, error: cfgErr } = await supabase
-      .from("agent_config")
-      .select("system_prompt, model, vector_store_id, temperature")
-      .eq("is_active", true)
-      .maybeSingle();
-    if (cfgErr) throw new Error(`load-agent-config: ${cfgErr.message}`);
-
-    if (!cfg) {
+    // Config de IA + credenciales de ESTE agente (multi-marca). Fallback al
+    // agente seed si la conversación no tiene agent_id (datos legados). Ver docs/16.
+    const agent = await loadAgentForConversation(supabase, convo.agent_id);
+    if (!agent) {
       await supabase.from("events_log").insert({
         conversation_id: conversationId,
         type: "reply_skipped",
-        payload: { reason: "no-active-agent-config" } as unknown as Json,
+        payload: { reason: "no-agent" } as unknown as Json,
       });
       return;
     }
@@ -322,7 +332,7 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
       receivedAt,
       previousResponseId: convo.openai_previous_response_id,
       lastInboundAt: convo.last_inbound_at,
-      cfg,
+      agent,
       input: content.text,
       imageDataUrls: content.imageDataUrls,
     });
@@ -518,12 +528,8 @@ interface GenerateContext {
   receivedAt: number;
   previousResponseId: string | null;
   lastInboundAt: string | null;
-  cfg: {
-    system_prompt: string;
-    model: string;
-    vector_store_id: string | null;
-    temperature: number;
-  };
+  /** Agente (marca) que responde: config de IA + credenciales de Callbell. */
+  agent: Agent;
   /** Texto del turno (con las notas de voz ya transcritas). */
   input: string;
   /** Imágenes del turno como data URLs para la visión (input_image). */
@@ -545,22 +551,25 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     receivedAt,
     previousResponseId,
     lastInboundAt,
-    cfg,
+    agent,
     input,
     imageDataUrls,
   } = ctx;
 
+  // Credenciales de Callbell de ESTE agente (API key + canal; fallback a env).
+  const creds = agentCallbellCreds(agent);
+
   // GENERAR: una sola llamada a Responses (file_search hosted). El vector store
-  // sale de agent_config o, si no, de OPENAI_VECTOR_STORE_ID. Las imágenes del
-  // cliente entran como visión en esta MISMA llamada (input_image). Ver docs/15.
+  // sale del agente o, si no, de OPENAI_VECTOR_STORE_ID. Las imágenes del cliente
+  // entran como visión en esta MISMA llamada (input_image). Ver docs/15 y docs/16.
   const gen = await generateReply(openai, {
-    model: cfg.model,
-    systemPrompt: cfg.system_prompt,
+    model: agent.model,
+    systemPrompt: agent.system_prompt,
     input,
     imageDataUrls,
-    vectorStoreId: cfg.vector_store_id ?? env.OPENAI_VECTOR_STORE_ID ?? null,
+    vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
-    temperature: cfg.temperature,
+    temperature: agent.temperature,
   });
 
   // Parsear tags + cleanText (puro) y guardar el outbound + encadenar.
@@ -607,6 +616,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     const { data, error } = await supabase
       .from("products")
       .select("sku, image_url, name")
+      .eq("agent_id", agent.id) // catálogo por marca
       .in("sku", parsed.tags.skus);
     if (error) throw new Error(`load-products-for-skus: ${error.message}`);
     found = data as ProductLookup[];
@@ -656,7 +666,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     if (msgsErr) throw new Error(`create-order load messages: ${msgsErr.message}`);
 
     const transcript = buildTranscript((msgs ?? []) as TranscriptMessage[]);
-    const draft = await extractOrder(openai, transcript, cfg.model);
+    const draft = await extractOrder(openai, transcript, agent.model);
 
     const { data: convRow } = await supabase
       .from("conversations")
@@ -733,9 +743,9 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   if (isHandoff) {
     // Handoff: solo texto (reasigna + apaga el bot). Sin imágenes: se cierra.
     if (textToSend.length > 0) {
-      const sent = await sendText(phone, textToSend, {
+      const sent = await sendText(creds, phone, textToSend, {
         ...meta,
-        teamUuid: env.CALLBELL_LOGISTICS_TEAM_UUID,
+        teamUuid: agentTeamUuid(agent),
         botStatus: "bot_end",
       });
       await supabase
@@ -775,7 +785,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       const [first, ...rest] = validImages;
       // La primera imagen lleva el texto como caption → reutilizamos el mensaje
       // outbound (que ya guardaba el texto) marcándolo como imagen.
-      const sent = await sendImage(phone, first.imageUrl, textToSend, meta);
+      const sent = await sendImage(creds, phone, first.imageUrl, textToSend, meta);
       await supabase
         .from("messages")
         .update({ type: "image", media_url: first.imageUrl, callbell_message_uuid: sent.uuid })
@@ -792,12 +802,12 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       });
       // Imágenes adicionales: mensajes aparte con el nombre del producto.
       for (const img of rest) {
-        await sendProductImage(supabase, conversationId, phone, img, meta);
+        await sendProductImage(supabase, creds, conversationId, phone, img, meta);
       }
     } else {
       // Texto (si hay) como su propio mensaje.
       if (textToSend.length > 0) {
-        const sent = await sendText(phone, textToSend, meta);
+        const sent = await sendText(creds, phone, textToSend, meta);
         await supabase
           .from("messages")
           .update({ callbell_message_uuid: sent.uuid })
@@ -810,7 +820,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       }
       // Imágenes por separado (con el nombre del producto como caption).
       for (const img of validImages) {
-        await sendProductImage(supabase, conversationId, phone, img, meta);
+        await sendProductImage(supabase, creds, conversationId, phone, img, meta);
       }
     }
 
@@ -818,6 +828,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     if (parsed.tags.addi && env.ADDI_LINK) {
       const addiLink = env.ADDI_LINK;
       const sent = await sendText(
+        creds,
         phone,
         `Puedes financiar tu compra con Addi aquí: ${addiLink}`,
         meta,
@@ -836,7 +847,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       .from("conversations")
       .update({
         status: "handed_off",
-        assigned_team_uuid: env.CALLBELL_LOGISTICS_TEAM_UUID ?? null,
+        assigned_team_uuid: agentTeamUuid(agent),
       })
       .eq("id", conversationId);
     if (orderId) {
@@ -883,12 +894,13 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
  */
 async function sendProductImage(
   supabase: DB,
+  creds: CallbellCreds,
   conversationId: string,
   phone: string,
   img: { sku: string; imageUrl: string; name: string | null },
   opts: { metadata?: Record<string, unknown> },
 ): Promise<void> {
-  const sent = await sendImage(phone, img.imageUrl, img.name, opts);
+  const sent = await sendImage(creds, phone, img.imageUrl, img.name, opts);
   await supabase.from("messages").insert({
     conversation_id: conversationId,
     direction: "outbound",

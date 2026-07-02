@@ -93,8 +93,9 @@ describe("buildProductDocument", () => {
 
 describe("productToRow", () => {
   it("mapea a la fila de products sin campos de imagen/vector", () => {
-    const row = productToRow(product());
+    const row = productToRow(product(), "agent-1");
     expect(row.sku).toBe("VITA-001");
+    expect(row.agent_id).toBe("agent-1");
     expect(row.currency).toBe("COP");
     expect(row).not.toHaveProperty("image_url");
     expect(row).not.toHaveProperty("vector_store_file_id");

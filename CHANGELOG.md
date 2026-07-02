@@ -33,6 +33,34 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Multi-agente / multi-marca — enrutamiento dinámico por número (ver `docs/16`, ADR-0023)**:
+  la plataforma pasa de "un agente" a "muchos agentes". Nueva tabla **`agents`** (migración
+  **`0010_agents.sql`**): cada fila es una marca/número con su **enrutamiento** (`whatsapp_number`,
+  `callbell_channel_uuid`), sus **credenciales** (`callbell_api_key` —otras líneas viven en otra
+  cuenta de Callbell—, `logistics_team_uuid`), su **catálogo** (`vector_store_id`) y su **IA**
+  (`system_prompt`, `model`, `temperature`, `enabled`). La API key de **OpenAI sigue global**; la de
+  **Callbell + canal son por agente**. El webhook resuelve el agente del inbound por canal/número
+  (`matchAgent` puro + testeado en `lib/callbell/routing.ts`; `resolveAgentForInbound` en
+  `lib/agent/agents.ts`) y guarda `conversations.agent_id`; la respuesta carga **ese** agente
+  (no una config global) y envía con **sus** credenciales. `sendText/sendImage/sendTemplate` ahora
+  reciben `CallbellCreds` (API key + canal); `credsFromEnv()` es el fallback. **Catálogo por marca**:
+  `products.agent_id` + `unique (agent_id, sku)`; el gate de `#ID` y las imágenes filtran por agente;
+  `/api/catalog/load` y `scripts/import-catalog-csv.mjs --agent <id>` apuntan a un agente. **Cero
+  downtime**: enrutamiento/envío resuelven **DB primero, env como fallback** — el agente seed arranca
+  con `callbell_*` en NULL y usa las env de Vercel hasta que se peguen los IDs en el dashboard.
+  Retargets, reactivaciones y envío manual usan las credenciales del agente de la conversación.
+  Nueva sección de dashboard **Agentes** (`/dashboard/agents`, nav): lista + **detalle editable** +
+  **crear**, con la **API key enmascarada** (write-only; las queries nunca devuelven el valor crudo);
+  Server Actions `saveAgent`/`createAgent`. RLS de `agents` **sin** lectura `authenticated` (protege
+  el secreto; el dashboard usa service-role). `agent_config` queda **legacy** (el runtime ya no la
+  lee). Archivos nuevos: `lib/callbell/routing.ts` (+test), `lib/agent/agents.ts`,
+  `app/dashboard/agents/*` (`page`, `[id]`, `new`, `AgentEditor`, `types`, `not-found`),
+  `docs/16`, ADR-0023. Tocados: `lib/callbell/sender.ts`, `lib/callbell/types.ts`,
+  `app/api/webhooks/callbell/route.ts`, `lib/agent/{processMessage,retarget,reactivation}.ts`,
+  `lib/openai/{catalog,catalogLoader}.ts`, `app/api/catalog/load/route.ts`,
+  `app/dashboard/{actions,layout}.tsx`, `lib/dashboard/queries.ts`, `lib/supabase/types.ts`.
+  **Requiere en Supabase** aplicar `0010_agents.sql`; luego pegar en el dashboard los IDs del agente
+  actual (o dejar el fallback a env). 6 tests nuevos de enrutamiento.
 - **Comprensión de audio e imágenes — multimodal (ver `docs/15`, ADR-0022)**: el bot ahora
   **escucha** las notas de voz y **ve** las imágenes que manda el cliente, y usa ese contenido
   para responder (caso estrella: la **captura del comprobante de pago**). El webhook extrae el

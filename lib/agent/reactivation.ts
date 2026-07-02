@@ -1,7 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
-import { sendTemplate } from "@/lib/callbell/sender";
+import { sendTemplate, credsFromEnv } from "@/lib/callbell/sender";
+import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
 import { evaluateReactivation, planReactivations } from "@/lib/agent/reactivationPlan";
 import { env } from "@/lib/env";
 import type { Database, Json } from "@/lib/supabase/types";
@@ -208,7 +209,7 @@ async function processReactivationRow(
 
   const { data: convo, error: convoErr } = await supabase
     .from("conversations")
-    .select("last_inbound_at")
+    .select("last_inbound_at, agent_id")
     .eq("id", row.conversation_id)
     .single();
   if (convoErr) throw new Error(`load-conversation: ${convoErr.message}`);
@@ -249,7 +250,12 @@ async function processReactivationRow(
     .maybeSingle();
   const firstName = (contact?.name ?? "").trim().split(/\s+/)[0] ?? "";
 
-  const sent = await sendTemplate(row.phone, templateUuid as string, {
+  // Credenciales de Callbell del agente de la conversación (cuenta/canal). La
+  // plantilla debe existir en esa cuenta. Fallback a env si no hay agente.
+  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+  const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
+
+  const sent = await sendTemplate(creds, row.phone, templateUuid as string, {
     text: firstName,
     metadata: { conversation_id: row.conversation_id, reactivation_stage: row.stage },
   });

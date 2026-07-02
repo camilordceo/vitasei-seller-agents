@@ -33,6 +33,8 @@ export interface CatalogProductInput {
 
 export interface CatalogLoadRequest {
   filename?: string | null;
+  /** Agente (marca) dueño del catálogo. Si falta, el loader usa el agente seed. */
+  agentId?: string | null;
   products: CatalogProductInput[];
 }
 
@@ -175,8 +177,9 @@ function stringifyMetaValue(v: unknown): string {
 }
 
 /** Mapea un producto normalizado a la fila `products` (sin campos de imagen/vector). */
-export function productToRow(p: NormalizedProduct): ProductInsert {
+export function productToRow(p: NormalizedProduct, agentId: string): ProductInsert {
   return {
+    agent_id: agentId,
     sku: p.sku,
     name: p.name,
     description: p.description,

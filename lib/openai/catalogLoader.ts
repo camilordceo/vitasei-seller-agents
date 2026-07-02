@@ -10,7 +10,7 @@ import {
   validateCatalog,
   type CatalogLoadRequest,
 } from "./catalog";
-import { env } from "@/lib/env";
+import { loadAgent, loadSeedAgent, agentVectorStoreId } from "@/lib/agent/agents";
 import type { Database } from "@/lib/supabase/types";
 
 type DB = SupabaseClient<Database>;
@@ -44,13 +44,25 @@ export async function runCatalogImport(
     return emptyResult(false, null, errors, warnings);
   }
 
+  // Agente destino (catálogo por marca): el indicado o, si no, el seed.
+  const agent = input.agentId
+    ? await loadAgent(supabase, input.agentId)
+    : await loadSeedAgent(supabase);
+  if (!agent) {
+    const err = input.agentId
+      ? `No existe el agente ${input.agentId}.`
+      : "No hay ningún agente configurado (aplica la migración 0010).";
+    await recordImport(supabase, input.filename ?? null, "failed", 0, err);
+    return emptyResult(false, null, [err], warnings);
+  }
+
   const importId = await recordImport(supabase, input.filename ?? null, "processing", 0, null);
 
   try {
     const openai = createOpenAIClient();
 
-    // 2) Vector store: reusar el de agent_config activo / env, o crear uno nuevo.
-    const existingVsId = await resolveExistingVectorStoreId(supabase);
+    // 2) Vector store: reusar el del agente / env, o crear uno nuevo.
+    const existingVsId = agentVectorStoreId(agent);
     const vectorStoreId = await getOrCreateVectorStore(openai, existingVsId);
 
     const done: CatalogImportResult["products"] = [];
@@ -72,20 +84,22 @@ export async function runCatalogImport(
       const img = await uploadProductImage(supabase, p);
       if (img.warning) warnings.push(img.warning);
 
-      // 2c) Upsert por SKU (gate: el SKU del texto == el de products).
+      // 2c) Upsert por (agente, SKU): catálogo por marca (gate: el SKU del texto == el de products).
       const row = {
-        ...productToRow(p),
+        ...productToRow(p, agent.id),
         vector_store_file_id: fileId,
         image_url: img.imageUrl,
       };
-      const { error } = await supabase.from("products").upsert(row, { onConflict: "sku" });
+      const { error } = await supabase
+        .from("products")
+        .upsert(row, { onConflict: "agent_id,sku" });
       if (error) throw new Error(`upsert products ${p.sku}: ${error.message}`);
 
       done.push({ sku: p.sku, vectorStoreFileId: fileId, imageUrl: img.imageUrl });
     }
 
-    // 3) Persistir el vector_store_id en agent_config activo (si existe).
-    await persistVectorStoreId(supabase, vectorStoreId);
+    // 3) Persistir el vector_store_id en el agente.
+    await persistVectorStoreId(supabase, agent.id, vectorStoreId);
 
     await supabase
       .from("catalog_imports")
@@ -138,18 +152,10 @@ async function recordImport(
   return data.id;
 }
 
-async function resolveExistingVectorStoreId(supabase: DB): Promise<string | null> {
-  const { data } = await supabase
-    .from("agent_config")
-    .select("vector_store_id")
-    .eq("is_active", true)
-    .maybeSingle();
-  return data?.vector_store_id ?? env.OPENAI_VECTOR_STORE_ID ?? null;
-}
-
-async function persistVectorStoreId(supabase: DB, vectorStoreId: string): Promise<void> {
-  await supabase
-    .from("agent_config")
-    .update({ vector_store_id: vectorStoreId })
-    .eq("is_active", true);
+async function persistVectorStoreId(
+  supabase: DB,
+  agentId: string,
+  vectorStoreId: string,
+): Promise<void> {
+  await supabase.from("agents").update({ vector_store_id: vectorStoreId }).eq("id", agentId);
 }

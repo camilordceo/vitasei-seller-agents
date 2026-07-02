@@ -10,6 +10,7 @@
  * Uso:
  *   npm run import:catalog                 # usa el CSV por defecto y localhost:3000
  *   node scripts/import-catalog-csv.mjs --file ./otro.csv --url https://app/api/catalog/load
+ *   node scripts/import-catalog-csv.mjs --agent <agent_id>   # catálogo de esa marca (multi-agente)
  *   node scripts/import-catalog-csv.mjs --dry     # solo mapea y muestra, no llama a la API
  *
  * Env (o se leen de .env.local): CATALOG_ADMIN_SECRET, CATALOG_API_URL
@@ -35,6 +36,10 @@ function flag(name, fallback = undefined) {
 }
 const DRY = Boolean(flag("dry", false));
 const FILE = resolve(String(flag("file", "vitasei-productos-actualizado.csv")));
+const AGENT_ID = (() => {
+  const v = flag("agent", "");
+  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
+})();
 
 // --- env (best-effort desde .env.local) --------------------------------------
 loadDotEnvLocal();
@@ -94,6 +99,7 @@ for (const row of rows.slice(1)) {
 
 // --- resumen -----------------------------------------------------------------
 console.log(`\nCSV: ${FILE}`);
+console.log(`Agente destino: ${AGENT_ID ?? "(seed — el actual)"}`);
 console.log(`Productos mapeados: ${products.length}   Omitidos: ${skipped.length}`);
 for (const p of products) {
   const img = p.image_url ? "img✓" : "img✗";
@@ -126,7 +132,11 @@ const res = await fetch(API_URL, {
     "Content-Type": "application/json",
     ...(ADMIN_SECRET ? { Authorization: `Bearer ${ADMIN_SECRET}` } : {}),
   },
-  body: JSON.stringify({ filename: FILE.split(/[\\/]/).pop(), products }),
+  body: JSON.stringify({
+    filename: FILE.split(/[\\/]/).pop(),
+    ...(AGENT_ID ? { agentId: AGENT_ID } : {}),
+    products,
+  }),
 }).catch((e) => {
   console.error(`✗ No se pudo conectar a ${API_URL}: ${e.message}`);
   console.error("  ¿Está el server arriba (npm run dev) o la URL es correcta (--url)?");

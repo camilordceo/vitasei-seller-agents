@@ -110,9 +110,9 @@ export const env = {
     return optional("CALLBELL_WHATSAPP_CHANNEL_UUID");
   },
 
-  // Número de WhatsApp de la IA (E.164 sin '+'). En Callbell hay varios números
-  // y un solo webhook: solo procesamos los inbound que llegan a ESTE número.
-  // Si está vacío, el filtro queda desactivado (procesa todo — solo dev).
+  // Número de WhatsApp de la IA (E.164 sin '+'). Multi-agente (docs/16, ADR-0023):
+  // el enrutamiento vive en la tabla `agents`; esta env es el FALLBACK del agente
+  // seed (para no caer producción mientras se pegan los IDs en el dashboard).
   get AGENT_WHATSAPP_NUMBER() {
     return optional("AGENT_WHATSAPP_NUMBER");
   },

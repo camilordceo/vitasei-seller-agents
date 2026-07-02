@@ -48,6 +48,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               >
                 Retargets
               </Link>
+              <Link
+                href="/dashboard/agents"
+                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                Agentes
+              </Link>
             </nav>
           </div>
           <span className="text-xs text-slate-400">Interno</span>

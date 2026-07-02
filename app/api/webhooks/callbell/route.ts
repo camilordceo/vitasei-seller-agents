@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import {
   type CallbellWebhookBody,
-  classifyInbox,
   getAttachments,
+  getChannelUuid,
+  getDestinationNumber,
   isInboundMessageEvent,
   normalizePhone,
 } from "@/lib/callbell/types";
@@ -11,8 +12,8 @@ import {
   ingestInboundMessage,
   runDebouncedReply,
 } from "@/lib/agent/processMessage";
+import { resolveAgentForInbound } from "@/lib/agent/agents";
 import { createServiceClient } from "@/lib/supabase/server";
-import { env } from "@/lib/env";
 import type { Json } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
@@ -81,27 +82,38 @@ export async function POST(req: Request) {
   const phone = normalizePhone(payload.contact?.phoneNumber);
   const messageUuid = payload.uuid ?? null;
 
-  // 5) Filtro de número: Callbell tiene varios números y un solo webhook. Solo
-  //    respondemos a los que llegan al número de la IA (por número destino o, si
-  //    no viene, por channel_uuid). Ver ADR-0015.
-  const inbox = classifyInbox(
-    payload,
-    env.AGENT_WHATSAPP_NUMBER,
-    env.CALLBELL_WHATSAPP_CHANNEL_UUID,
-  );
-  if (inbox.decision === "reject") {
-    // No es el número de la IA: no procesar. Logueamos (best-effort) para auditar.
-    await logInbox("inbox_rejected", { phone, messageUuid, inbox, body });
-    return ok();
-  }
-  if (inbox.decision === "indeterminate") {
-    // No pudimos determinar el destino con este webhook. Procesamos igual
-    // (fail-open) pero dejamos el crudo para confirmar el campo y endurecer.
-    await logInbox("inbox_indeterminate", { phone, messageUuid, inbox, body });
-  }
-
   // Sin teléfono o sin uuid no podemos procesar de forma idempotente → ack y salir.
   if (!phone || !messageUuid) return ok();
+
+  // 5) Enrutamiento multi-agente: ¿a qué agente pertenece este inbound? Callbell
+  //    tiene varios números/marcas y un solo webhook. Se resuelve por canal o
+  //    número destino contra la tabla `agents` (con fallback a las env de Vercel
+  //    para el agente actual). Sin agente → no es un número nuestro. Ver docs/16.
+  const supabase = createServiceClient();
+  let agentId: string;
+  try {
+    const agent = await resolveAgentForInbound(supabase, payload);
+    if (!agent) {
+      await logInbox("inbox_rejected", {
+        phone,
+        messageUuid,
+        channelUuid: getChannelUuid(payload),
+        dest: getDestinationNumber(payload),
+      });
+      return ok();
+    }
+    agentId = agent.id;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[callbell webhook] resolve-agent failed:", message);
+    await logInbox("process_error", {
+      phase: "resolve-agent",
+      phone,
+      messageUuid,
+      error: message,
+    });
+    return ok();
+  }
 
   const receivedAt = Date.now();
 
@@ -114,6 +126,7 @@ export async function POST(req: Request) {
     const ingest = await ingestInboundMessage({
       phone,
       messageUuid,
+      agentId,
       text: payload.text ?? null,
       messageType: payload.type ?? null,
       mediaUrl,

@@ -75,6 +75,7 @@ export interface Database {
         Row: {
           id: string;
           contact_id: string;
+          agent_id: string | null;
           callbell_conversation_href: string | null;
           status: ConversationStatus;
           fulfillment_method: FulfillmentMethod;
@@ -89,6 +90,7 @@ export interface Database {
         Insert: {
           id?: string;
           contact_id: string;
+          agent_id?: string | null;
           callbell_conversation_href?: string | null;
           status?: ConversationStatus;
           fulfillment_method?: FulfillmentMethod;
@@ -103,6 +105,7 @@ export interface Database {
         Update: {
           id?: string;
           contact_id?: string;
+          agent_id?: string | null;
           callbell_conversation_href?: string | null;
           status?: ConversationStatus;
           fulfillment_method?: FulfillmentMethod;
@@ -161,6 +164,7 @@ export interface Database {
       products: {
         Row: {
           id: string;
+          agent_id: string;
           sku: string;
           name: string;
           description: string | null;
@@ -175,6 +179,7 @@ export interface Database {
         };
         Insert: {
           id?: string;
+          agent_id: string;
           sku: string;
           name: string;
           description?: string | null;
@@ -189,6 +194,7 @@ export interface Database {
         };
         Update: {
           id?: string;
+          agent_id?: string;
           sku?: string;
           name?: string;
           description?: string | null;
@@ -284,6 +290,60 @@ export interface Database {
           qty?: number;
           unit_price?: number | null;
           created_at?: string;
+        };
+        Relationships: [];
+      };
+      agents: {
+        Row: {
+          id: string;
+          name: string;
+          brand: string | null;
+          country: string | null;
+          whatsapp_number: string | null;
+          callbell_channel_uuid: string | null;
+          callbell_api_key: string | null;
+          logistics_team_uuid: string | null;
+          vector_store_id: string | null;
+          model: string;
+          system_prompt: string;
+          temperature: number;
+          enabled: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          brand?: string | null;
+          country?: string | null;
+          whatsapp_number?: string | null;
+          callbell_channel_uuid?: string | null;
+          callbell_api_key?: string | null;
+          logistics_team_uuid?: string | null;
+          vector_store_id?: string | null;
+          model?: string;
+          system_prompt: string;
+          temperature?: number;
+          enabled?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          brand?: string | null;
+          country?: string | null;
+          whatsapp_number?: string | null;
+          callbell_channel_uuid?: string | null;
+          callbell_api_key?: string | null;
+          logistics_team_uuid?: string | null;
+          vector_store_id?: string | null;
+          model?: string;
+          system_prompt?: string;
+          temperature?: number;
+          enabled?: boolean;
+          created_at?: string;
+          updated_at?: string;
         };
         Relationships: [];
       };

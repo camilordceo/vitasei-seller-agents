@@ -4,9 +4,11 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
-import { sendText } from "@/lib/callbell/sender";
+import { sendText, credsFromEnv } from "@/lib/callbell/sender";
+import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
 import type { Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
+import type { AgentEditInput } from "./agents/types";
 
 /**
  * Server Actions del dashboard.
@@ -180,6 +182,90 @@ export async function updateReactivationSettings(input: {
   revalidatePath("/dashboard");
 }
 
+/** Normaliza la temperatura a [0, 2] (default 0.3 si viene inválida). */
+function cleanTemperature(t: number): number {
+  if (!Number.isFinite(t)) return 0.3;
+  return Math.min(2, Math.max(0, t));
+}
+
+/**
+ * Construye el patch de columnas de un agente a partir del formulario. La API key
+ * es write-only: solo se incluye si se pegó una nueva (vacío = no cambiar), para
+ * no borrar el secreto sin querer. Ver docs/16, ADR-0023.
+ */
+function agentPatch(input: AgentEditInput): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    name: input.name.trim(),
+    brand: textOrNull(input.brand),
+    country: textOrNull(input.country),
+    whatsapp_number: textOrNull(input.whatsappNumber),
+    callbell_channel_uuid: textOrNull(input.callbellChannelUuid),
+    logistics_team_uuid: textOrNull(input.logisticsTeamUuid),
+    vector_store_id: textOrNull(input.vectorStoreId),
+    model: textOrNull(input.model) ?? "gpt-5.1",
+    temperature: cleanTemperature(input.temperature),
+    system_prompt: input.systemPrompt,
+    enabled: input.enabled,
+  };
+  const newKey = input.callbellApiKey.trim();
+  if (newKey.length > 0) patch.callbell_api_key = newKey;
+  return patch;
+}
+
+/**
+ * Edita un agente (marca/número): config de IA + credenciales de Callbell. La API
+ * key solo se actualiza si se pega una nueva. Service-role, protegida por el Basic
+ * Auth del dashboard. Loguea `agent_saved`. Ver docs/16.
+ */
+export async function saveAgent(agentId: string, input: AgentEditInput): Promise<void> {
+  if (input.name.trim().length === 0) throw new Error("El nombre es obligatorio.");
+  if (input.systemPrompt.trim().length === 0) throw new Error("El prompt es obligatorio.");
+
+  const supabase = createServiceClient();
+  const { error } = await supabase
+    .from("agents")
+    .update(agentPatch(input) as never)
+    .eq("id", agentId);
+  if (error) throw new Error(`saveAgent: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "agent_saved",
+    payload: { agentId, name: input.name.trim(), enabled: input.enabled } as unknown as Json,
+  });
+
+  revalidatePath(`/dashboard/agents/${agentId}`);
+  revalidatePath("/dashboard/agents");
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Crea un agente nuevo. Devuelve su id para redirigir al detalle. Service-role,
+ * protegida por el Basic Auth. Loguea `agent_created`. Ver docs/16.
+ */
+export async function createAgent(input: AgentEditInput): Promise<string> {
+  if (input.name.trim().length === 0) throw new Error("El nombre es obligatorio.");
+  if (input.systemPrompt.trim().length === 0) throw new Error("El prompt es obligatorio.");
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("agents")
+    .insert(agentPatch(input) as never)
+    .select("id")
+    .single();
+  if (error) throw new Error(`createAgent: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "agent_created",
+    payload: { agentId: data.id, name: input.name.trim() } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/agents");
+  revalidatePath("/dashboard");
+  return data.id;
+}
+
 /**
  * Envía un mensaje manual escrito por un operador al cliente por WhatsApp
  * (Callbell). Guarda el outbound marcado `manual` (para distinguirlo del bot) y
@@ -195,7 +281,7 @@ export async function sendManualMessage(conversationId: string, text: string): P
 
   const { data: convo, error: convoErr } = await supabase
     .from("conversations")
-    .select("id, contact_id")
+    .select("id, contact_id, agent_id")
     .eq("id", conversationId)
     .maybeSingle();
   if (convoErr) throw new Error(`sendManualMessage convo: ${convoErr.message}`);
@@ -209,8 +295,12 @@ export async function sendManualMessage(conversationId: string, text: string): P
   if (contactErr) throw new Error(`sendManualMessage contact: ${contactErr.message}`);
   if (!contact?.phone) throw new Error("El contacto no tiene teléfono.");
 
+  // Credenciales de Callbell del agente de la conversación (cuenta/canal correctos).
+  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+  const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
+
   // Enviar por Callbell (lanza si la API responde error, p. ej. fuera de la ventana 24h).
-  const sent = await sendText(contact.phone, clean, {
+  const sent = await sendText(creds, contact.phone, clean, {
     metadata: { conversation_id: conversationId, source: "dashboard-manual" },
   });
 

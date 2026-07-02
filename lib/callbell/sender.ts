@@ -2,10 +2,14 @@ import "server-only";
 import { env } from "@/lib/env";
 
 /**
- * Sender de Callbell (Sprint 4) — `POST /v1/messages/send`.
- * Abstrae `sendText` y `sendImage`; cada envío devuelve el `uuid` para guardar
- * en `messages.callbell_message_uuid`. El handoff (`team_uuid` + `bot_status`)
- * es del Sprint 5.
+ * Sender de Callbell — `POST /v1/messages/send`.
+ * Abstrae `sendText`/`sendImage`/`sendTemplate`; cada envío devuelve el `uuid`
+ * para guardar en `messages.callbell_message_uuid`. El handoff (`team_uuid` +
+ * `bot_status`) es del Sprint 5.
+ *
+ * MULTI-AGENTE: cada envío recibe las credenciales del agente (`CallbellCreds`:
+ * API key + canal), porque distintas marcas viven en distintas cuentas de
+ * Callbell. `credsFromEnv()` da el fallback single-agent. Ver docs/16, ADR-0023.
  */
 
 const BASE = "https://api.callbell.eu/v1";
@@ -13,6 +17,24 @@ const BASE = "https://api.callbell.eu/v1";
 export interface SentMessage {
   uuid: string | null;
   status: string | null;
+}
+
+/**
+ * Credenciales de Callbell del agente: qué cuenta (API key) y qué número/canal
+ * (`channelUuid`) usar para enviar. `lib/agent/agents.ts` las arma por agente
+ * con fallback a env.
+ */
+export interface CallbellCreds {
+  apiKey: string;
+  channelUuid: string | null;
+}
+
+/** Fallback single-agent: credenciales desde las env globales de Vercel. */
+export function credsFromEnv(): CallbellCreds {
+  return {
+    apiKey: env.CALLBELL_API_KEY,
+    channelUuid: env.CALLBELL_WHATSAPP_CHANNEL_UUID ?? null,
+  };
 }
 
 /** Opciones de envío. `teamUuid` + `botStatus` se usan para el handoff (S5). */
@@ -41,11 +63,11 @@ interface SendBody {
   optin_contact?: boolean;
 }
 
-async function send(body: SendBody): Promise<SentMessage> {
+async function send(creds: CallbellCreds, body: SendBody): Promise<SentMessage> {
   const res = await fetch(`${BASE}/messages/send`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${env.CALLBELL_API_KEY}`,
+      Authorization: `Bearer ${creds.apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -63,20 +85,22 @@ async function send(body: SendBody): Promise<SentMessage> {
 }
 
 /**
- * Envía un mensaje de texto. Con `options.teamUuid` + `options.botStatus:"bot_end"`
- * hace el handoff (reasigna a un equipo y apaga el bot) en el mismo envío.
+ * Envía un mensaje de texto con las credenciales del agente (`creds`). Con
+ * `options.teamUuid` + `options.botStatus:"bot_end"` hace el handoff (reasigna a
+ * un equipo y apaga el bot) en el mismo envío.
  */
 export function sendText(
+  creds: CallbellCreds,
   to: string,
   text: string,
   options?: SendOptions,
 ): Promise<SentMessage> {
-  return send({
+  return send(creds, {
     to,
     from: "whatsapp",
     type: "text",
     content: { text },
-    channel_uuid: env.CALLBELL_WHATSAPP_CHANNEL_UUID,
+    channel_uuid: creds.channelUuid ?? undefined,
     metadata: options?.metadata,
     team_uuid: options?.teamUuid ?? undefined,
     bot_status: options?.botStatus,
@@ -91,6 +115,7 @@ export function sendText(
  * docs/14 y ADR-0021.
  */
 export function sendTemplate(
+  creds: CallbellCreds,
   to: string,
   templateUuid: string,
   options?: {
@@ -99,12 +124,12 @@ export function sendTemplate(
     metadata?: Record<string, unknown>;
   },
 ): Promise<SentMessage> {
-  return send({
+  return send(creds, {
     to,
     from: "whatsapp",
     type: "text",
     content: { text: options?.text ?? "" },
-    channel_uuid: env.CALLBELL_WHATSAPP_CHANNEL_UUID,
+    channel_uuid: creds.channelUuid ?? undefined,
     template_uuid: templateUuid,
     template_values:
       options?.templateValues && options.templateValues.length > 0
@@ -121,6 +146,7 @@ export function sendTemplate(
  * mensaje (una sola llamada a Callbell). Límite de caption de WhatsApp ~1024.
  */
 export function sendImage(
+  creds: CallbellCreds,
   to: string,
   url: string,
   caption?: string | null,
@@ -128,12 +154,12 @@ export function sendImage(
 ): Promise<SentMessage> {
   const content: Record<string, unknown> = { url };
   if (caption) content.text = caption;
-  return send({
+  return send(creds, {
     to,
     from: "whatsapp",
     type: "image",
     content,
-    channel_uuid: env.CALLBELL_WHATSAPP_CHANNEL_UUID,
+    channel_uuid: creds.channelUuid ?? undefined,
     metadata: options?.metadata,
   });
 }

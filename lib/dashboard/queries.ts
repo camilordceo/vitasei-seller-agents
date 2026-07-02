@@ -615,3 +615,91 @@ export async function getRecentReactivations(limit = 50): Promise<ReactivationRo
     };
   });
 }
+
+// --- Agentes (multi-marca, ver docs/16) -------------------------------------
+
+export interface AgentRow {
+  id: string;
+  name: string;
+  brand: string | null;
+  country: string | null;
+  whatsappNumber: string | null;
+  callbellChannelUuid: string | null;
+  hasCallbellApiKey: boolean;
+  logisticsTeamUuid: string | null;
+  vectorStoreId: string | null;
+  model: string;
+  enabled: boolean;
+}
+
+/** Agentes (marcas/números) para la lista del dashboard. NUNCA devuelve la API key. */
+export async function getAgents(): Promise<AgentRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("agents")
+    .select(
+      "id, name, brand, country, whatsapp_number, callbell_channel_uuid, callbell_api_key, logistics_team_uuid, vector_store_id, model, enabled, created_at",
+    )
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`getAgents: ${error.message}`);
+  return (data ?? []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    brand: a.brand,
+    country: a.country,
+    whatsappNumber: a.whatsapp_number,
+    callbellChannelUuid: a.callbell_channel_uuid,
+    hasCallbellApiKey: !!a.callbell_api_key,
+    logisticsTeamUuid: a.logistics_team_uuid,
+    vectorStoreId: a.vector_store_id,
+    model: a.model,
+    enabled: a.enabled,
+  }));
+}
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  brand: string | null;
+  country: string | null;
+  whatsappNumber: string | null;
+  callbellChannelUuid: string | null;
+  /** Últimos 4 de la API key (para mostrar sin exponer el secreto). */
+  callbellApiKeyLast4: string | null;
+  hasCallbellApiKey: boolean;
+  logisticsTeamUuid: string | null;
+  vectorStoreId: string | null;
+  model: string;
+  temperature: number;
+  systemPrompt: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Detalle de un agente para el editor. La API key va ENMASCARADA (solo last4). */
+export async function getAgent(id: string): Promise<AgentDetail | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.from("agents").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(`getAgent: ${error.message}`);
+  if (!data) return null;
+  const key = data.callbell_api_key ?? "";
+  return {
+    id: data.id,
+    name: data.name,
+    brand: data.brand,
+    country: data.country,
+    whatsappNumber: data.whatsapp_number,
+    callbellChannelUuid: data.callbell_channel_uuid,
+    callbellApiKeyLast4: key ? key.slice(-4) : null,
+    hasCallbellApiKey: key.length > 0,
+    logisticsTeamUuid: data.logistics_team_uuid,
+    vectorStoreId: data.vector_store_id,
+    model: data.model,
+    temperature: Number(data.temperature),
+    systemPrompt: data.system_prompt,
+    enabled: data.enabled,
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+  };
+}

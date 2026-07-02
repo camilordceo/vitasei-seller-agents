@@ -11,11 +11,12 @@ export const maxDuration = 300;
 /**
  * POST /api/catalog/load — carga/sincroniza el catálogo (Sprint 2).
  *
- * Body JSON: { filename?, products: [{ sku, name, description?, price?, currency?,
- *   in_stock?, metadata?, image_url? | image_base64? + image_content_type? }] }
+ * Body JSON: { filename?, agentId?, products: [{ sku, name, description?, price?,
+ *   currency?, in_stock?, metadata?, image_url? | image_base64? + image_content_type? }] }
  *
+ * `agentId` indica de qué agente/marca es el catálogo (si falta, el agente seed).
  * Sube cada producto al vector store (`file_search`), re-hospeda su imagen en
- * `product-images`, hace upsert por `sku` en `products` y registra el import.
+ * `product-images`, hace upsert por `(agent_id, sku)` en `products` y registra el import.
  *
  * Auth: si `CATALOG_ADMIN_SECRET` está seteado, exige `Authorization: Bearer <secret>`
  * (o header `x-admin-secret`). En dev sin secret, queda abierto.

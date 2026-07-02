@@ -6,7 +6,13 @@ import { createOpenAIClient } from "@/lib/openai/client";
 import { generateReply } from "@/lib/openai/responses";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
-import { sendText, sendImage } from "@/lib/callbell/sender";
+import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
+import {
+  loadAgentForConversation,
+  agentCallbellCreds,
+  agentVectorStoreId,
+  type Agent,
+} from "@/lib/agent/agents";
 import {
   buildRetargetInstruction,
   evaluateRetarget,
@@ -196,7 +202,7 @@ async function processRetargetRow(
 ): Promise<"sent" | "cancelled" | "skipped"> {
   const { data: convo, error } = await supabase
     .from("conversations")
-    .select("status, ai_paused, last_inbound_at, openai_previous_response_id")
+    .select("status, ai_paused, agent_id, last_inbound_at, openai_previous_response_id")
     .eq("id", row.conversation_id)
     .single();
   if (error) throw new Error(`load-conversation: ${error.message}`);
@@ -221,28 +227,23 @@ async function processRetargetRow(
     return status;
   }
 
-  const { data: cfg, error: cfgErr } = await supabase
-    .from("agent_config")
-    .select("system_prompt, model, vector_store_id, temperature")
-    .eq("is_active", true)
-    .maybeSingle();
-  if (cfgErr) throw new Error(`load-agent-config: ${cfgErr.message}`);
-  if (!cfg) {
+  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+  if (!agent) {
     await supabase
       .from("retargets")
-      .update({ status: "skipped", error: "no-active-agent-config" })
+      .update({ status: "skipped", error: "no-agent" })
       .eq("id", row.id);
     await supabase.from("events_log").insert({
       conversation_id: row.conversation_id,
       type: "retarget_skipped",
-      payload: { retargetId: row.id, stage: row.stage, reason: "no-active-agent-config" } as unknown as Json,
+      payload: { retargetId: row.id, stage: row.stage, reason: "no-agent" } as unknown as Json,
     });
     return "skipped";
   }
 
   return sendRetargetMessage(supabase, openai, {
     row,
-    cfg,
+    agent,
     previousResponseId: convo.openai_previous_response_id as string,
     lastInboundAt: convo.last_inbound_at,
     now,
@@ -251,12 +252,7 @@ async function processRetargetRow(
 
 interface SendCtx {
   row: DueRow;
-  cfg: {
-    system_prompt: string;
-    model: string;
-    vector_store_id: string | null;
-    temperature: number;
-  };
+  agent: Agent;
   previousResponseId: string;
   lastInboundAt: string | null;
   now: number;
@@ -274,15 +270,16 @@ async function sendRetargetMessage(
   openai: OpenAI,
   ctx: SendCtx,
 ): Promise<"sent" | "skipped"> {
-  const { row, cfg, previousResponseId, lastInboundAt, now } = ctx;
+  const { row, agent, previousResponseId, lastInboundAt, now } = ctx;
+  const creds = agentCallbellCreds(agent);
 
   const gen = await generateReply(openai, {
-    model: cfg.model,
-    systemPrompt: cfg.system_prompt,
+    model: agent.model,
+    systemPrompt: agent.system_prompt,
     input: buildRetargetInstruction(row.stage as RetargetStage),
-    vectorStoreId: cfg.vector_store_id ?? env.OPENAI_VECTOR_STORE_ID ?? null,
+    vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
-    temperature: cfg.temperature,
+    temperature: agent.temperature,
   });
 
   const parsed = parseReply(gen.text);
@@ -294,6 +291,7 @@ async function sendRetargetMessage(
     const { data, error } = await supabase
       .from("products")
       .select("sku, image_url, name")
+      .eq("agent_id", agent.id) // catálogo por marca
       .in("sku", parsed.tags.skus);
     if (error) throw new Error(`load-products-for-skus: ${error.message}`);
     found = data as ProductLookup[];
@@ -352,24 +350,24 @@ async function sendRetargetMessage(
 
   if (combine) {
     const [first, ...rest] = validImages;
-    const sent = await sendImage(row.phone, first.imageUrl, textToSend, meta);
+    const sent = await sendImage(creds, row.phone, first.imageUrl, textToSend, meta);
     await supabase
       .from("messages")
       .update({ type: "image", media_url: first.imageUrl, callbell_message_uuid: sent.uuid })
       .eq("id", outboundMessageId);
     for (const img of rest) {
-      await sendRetargetImage(supabase, row.conversation_id, row.phone, img, meta);
+      await sendRetargetImage(supabase, creds, row.conversation_id, row.phone, img, meta);
     }
   } else {
     if (textToSend.length > 0) {
-      const sent = await sendText(row.phone, textToSend, meta);
+      const sent = await sendText(creds, row.phone, textToSend, meta);
       await supabase
         .from("messages")
         .update({ callbell_message_uuid: sent.uuid })
         .eq("id", outboundMessageId);
     }
     for (const img of validImages) {
-      await sendRetargetImage(supabase, row.conversation_id, row.phone, img, meta);
+      await sendRetargetImage(supabase, creds, row.conversation_id, row.phone, img, meta);
     }
   }
 
@@ -397,12 +395,13 @@ async function sendRetargetMessage(
 /** Envía UNA imagen de producto en su propio mensaje (nombre como caption). */
 async function sendRetargetImage(
   supabase: DB,
+  creds: CallbellCreds,
   conversationId: string,
   phone: string,
   img: { sku: string; imageUrl: string; name: string | null },
   opts: { metadata?: Record<string, unknown> },
 ): Promise<void> {
-  const sent = await sendImage(phone, img.imageUrl, img.name, opts);
+  const sent = await sendImage(creds, phone, img.imageUrl, img.name, opts);
   await supabase.from("messages").insert({
     conversation_id: conversationId,
     direction: "outbound",
