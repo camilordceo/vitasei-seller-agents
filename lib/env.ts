@@ -41,6 +41,29 @@ export const env = {
     return Number.isFinite(n) && n >= 0 ? n : 12000;
   },
 
+  // Retargeting: seguimientos automáticos tras dejar de responder (ver ADR-0017).
+  // Kill switch global (default ON) + delays de las dos etapas (default 1h y 8h).
+  get RETARGET_ENABLED() {
+    const raw = optional("RETARGET_ENABLED");
+    // Activo por defecto; solo se apaga con "false"/"0".
+    return !(raw === "false" || raw === "0");
+  },
+  get RETARGET_STAGE1_MS() {
+    const raw = optional("RETARGET_STAGE1_MS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 60 * 60 * 1000; // 1h
+  },
+  get RETARGET_STAGE2_MS() {
+    const raw = optional("RETARGET_STAGE2_MS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 8 * 60 * 60 * 1000; // 8h
+  },
+  // Secret del cron (Vercel lo manda como `Authorization: Bearer <CRON_SECRET>`).
+  // Si está vacío, el endpoint del cron queda abierto (solo dev).
+  get CRON_SECRET() {
+    return optional("CRON_SECRET");
+  },
+
   // Callbell
   get CALLBELL_API_KEY() {
     return required("CALLBELL_API_KEY");

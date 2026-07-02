@@ -6,6 +6,7 @@ import type {
   MessageDirection,
   MessageType,
   OrderStatus,
+  RetargetStatus,
 } from "@/lib/supabase/types";
 
 /**
@@ -123,6 +124,87 @@ export async function getRecentConversations(limit = 30): Promise<ConversationRo
       method: r.fulfillment_method,
       lastActivity: r.last_inbound_at ?? r.updated_at,
       lastMessage: lm ? (lm.type === "text" ? lm.content : `[${lm.type}]`) : null,
+    };
+  });
+}
+
+// --- Retargets (seguimientos automáticos, ver docs/10) ---------------------
+
+export interface RetargetStats {
+  scheduled: number;
+  processing: number;
+  sent: number;
+  skipped: number;
+  cancelled: number;
+  failed: number;
+}
+
+/** Conteo por estado sobre TODOS los seguimientos (volumen v1 bajo → tally en JS). */
+export async function getRetargetStats(): Promise<RetargetStats> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.from("retargets").select("status");
+  if (error) throw new Error(`getRetargetStats: ${error.message}`);
+
+  const stats: RetargetStats = {
+    scheduled: 0,
+    processing: 0,
+    sent: 0,
+    skipped: 0,
+    cancelled: 0,
+    failed: 0,
+  };
+  for (const row of data ?? []) {
+    const s = row.status as RetargetStatus;
+    if (s in stats) stats[s] += 1;
+  }
+  return stats;
+}
+
+export interface RetargetRow {
+  id: string;
+  conversationId: string;
+  contactName: string | null;
+  phone: string;
+  stage: number;
+  status: RetargetStatus;
+  scheduledAt: string;
+  sentAt: string | null;
+  error: string | null;
+}
+
+/** Seguimientos recientes (los más próximos a dispararse / recién movidos). */
+export async function getRecentRetargets(limit = 50): Promise<RetargetRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("retargets")
+    .select("id, conversation_id, contact_id, phone, stage, status, scheduled_at, sent_at, error")
+    .order("scheduled_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`getRecentRetargets: ${error.message}`);
+
+  const rows = data ?? [];
+  if (rows.length === 0) return [];
+
+  const contactIds = [...new Set(rows.map((r) => r.contact_id))];
+  const contactsRes = await supabase
+    .from("contacts")
+    .select("id, name, phone")
+    .in("id", contactIds);
+  if (contactsRes.error) throw new Error(`getRecentRetargets contacts: ${contactsRes.error.message}`);
+  const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
+
+  return rows.map((r) => {
+    const c = contactById.get(r.contact_id);
+    return {
+      id: r.id,
+      conversationId: r.conversation_id,
+      contactName: c?.name ?? null,
+      phone: c?.phone ?? r.phone ?? "",
+      stage: r.stage,
+      status: r.status as RetargetStatus,
+      scheduledAt: r.scheduled_at,
+      sentAt: r.sent_at,
+      error: r.error,
     };
   });
 }

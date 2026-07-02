@@ -8,6 +8,7 @@ import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage } from "@/lib/callbell/sender";
 import { extractOrder } from "@/lib/openai/extractOrder";
+import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import {
   buildTranscript,
   computeOrderTotal,
@@ -200,6 +201,17 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
     type: "webhook_received",
     payload: { phone, messageUuid, raw } as unknown as Json,
   });
+
+  // 6) Retargeting: el cliente respondió → cancela seguimientos pendientes. La
+  //    próxima respuesta del bot reagenda. Best-effort: nunca tumba la ingesta.
+  try {
+    await cancelScheduledRetargets(supabase, conversationId, "client-replied");
+  } catch (e) {
+    console.error(
+      "[ingestInboundMessage] cancel retargets failed:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
 
   return { conversationId, contactId, duplicate: false };
 }
@@ -642,6 +654,29 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         orderId,
       } as unknown as Json,
     });
+  } else {
+    // Sin handoff y dentro de ventana (si no, ya habríamos vuelto arriba):
+    // agenda los seguimientos 1h/8h anclados al último inbound del cliente.
+    // Best-effort: un fallo aquí NO debe afectar la respuesta ya enviada.
+    try {
+      await scheduleRetargets(supabase, {
+        conversationId,
+        contactId,
+        phone,
+        anchorInboundAt: lastInboundAt,
+        fromMs: Date.now(),
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await supabase
+        .from("events_log")
+        .insert({
+          conversation_id: conversationId,
+          type: "retarget_schedule_error",
+          payload: { error: message } as unknown as Json,
+        })
+        .then(() => undefined, () => undefined);
+    }
   }
 }
 

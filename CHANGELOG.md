@@ -33,6 +33,26 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Retargeting — seguimientos automáticos 1h/8h (ver `docs/10`, ADR-0017)**: cuando el bot
+  responde y el cliente deja de responder, se agendan dos seguimientos (~1h y ~8h). Un
+  **Vercel Cron** (`vercel.json` → `/api/cron/retargets`, cada 5 min) toma los vencidos y, si
+  la conversación sigue activa y el cliente no respondió, **genera un mensaje dinámico** con
+  Responses encadenando `previous_response_id` (contexto completo) más una **instrucción interna
+  de seguimiento que NO revela que es automático**. Reusa el pipeline: parser de tags, gate
+  anti-alucinación de `#ID` y envío por Callbell (texto + imágenes). Guardas anti-obsolescencia:
+  ancla en `last_inbound_at`, claim atómico (`scheduled → processing`) e índice único parcial de
+  "vivos". Kill switch y delays por env (`RETARGET_ENABLED`, `RETARGET_STAGE1_MS`,
+  `RETARGET_STAGE2_MS`, `CRON_SECRET`). Nueva tabla `retargets` + enum `retarget_status`
+  (`supabase/migrations/0006_retargets.sql`). Lógica pura testeada en `lib/agent/retargetPlan.ts`
+  (`planRetargets`/`evaluateRetarget`/`buildRetargetInstruction`); IO en `lib/agent/retarget.ts`.
+  Enganches en `lib/agent/processMessage.ts` (agenda tras responder sin handoff; cancela al
+  recibir inbound). Sin servicios extra (consistente con ADR-0012). Eventos `retarget_sent`/
+  `retarget_skipped`/`retarget_cancelled`/`retarget_error`.
+- **Dashboard — sección Retargets** (`/dashboard/retargets`, nav): barra de conteos por estado
+  (programados/enviados/cancelados/saltados/fallidos) + lista de seguimientos recientes con
+  píldora de estado y etapa (~1h/~8h), enlazando a la conversación. Consultas
+  `getRetargetStats`/`getRecentRetargets` (`lib/dashboard/queries.ts`), componentes
+  `RetargetStatsBar`/`RetargetList`/`RetargetStatusPill`/`StagePill` (`app/dashboard/ui.tsx`).
 - **Ajustes v1.1 — datos reales (ver `docs/09`)**:
   - **Filtro por número de la IA** en el webhook: la cuenta de Callbell tiene varios números y
     un solo webhook; solo se procesan los inbound al número de la IA

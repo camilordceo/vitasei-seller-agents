@@ -25,6 +25,13 @@ export type OrderStatus =
   | "handed_off"
   | "confirmed"
   | "cancelled";
+export type RetargetStatus =
+  | "scheduled"
+  | "processing"
+  | "sent"
+  | "skipped"
+  | "cancelled"
+  | "failed";
 
 export type Json =
   | string
@@ -337,6 +344,51 @@ export interface Database {
         };
         Relationships: [];
       };
+      retargets: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          contact_id: string;
+          phone: string;
+          stage: number;
+          status: RetargetStatus;
+          scheduled_at: string;
+          anchor_inbound_at: string | null;
+          sent_at: string | null;
+          error: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          conversation_id: string;
+          contact_id: string;
+          phone: string;
+          stage: number;
+          status?: RetargetStatus;
+          scheduled_at: string;
+          anchor_inbound_at?: string | null;
+          sent_at?: string | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          conversation_id?: string;
+          contact_id?: string;
+          phone?: string;
+          stage?: number;
+          status?: RetargetStatus;
+          scheduled_at?: string;
+          anchor_inbound_at?: string | null;
+          sent_at?: string | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       catalog_imports: {
         Row: {
           id: string;
@@ -377,6 +429,7 @@ export interface Database {
       message_type: MessageType;
       fulfillment_method: FulfillmentMethod;
       order_status: OrderStatus;
+      retarget_status: RetargetStatus;
     };
   };
 }
