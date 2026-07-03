@@ -12,6 +12,23 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Added
+- **Aviso de venta al dueño por WhatsApp**: cuando el agente cierra una orden (`#orden-lista`),
+  envía un WhatsApp a `SALES_NOTIFY_PHONE` (default `573103565492`) con el número del cliente y el
+  resumen del pedido (método, total, productos con precio y datos de envío). Se envía por el mismo
+  Callbell del agente que hizo la venta; best-effort (nunca rompe el flujo del pedido) y se registra
+  en `events_log` (`sales_notification_sent`/`_failed`). El texto lo arma `buildSaleNotification`
+  (puro, con test). OJO: es un mensaje libre → WhatsApp solo lo entrega dentro de la ventana de 24h
+  del dueño; para entrega garantizada, migrar a una plantilla aprobada. (`lib/agent/order.ts`,
+  `lib/agent/processMessage.ts`, `lib/env.ts`).
+- **Reportes → "Costo IA" desglosado**: nueva sección con las TRES fuentes de costo del agente —
+  **texto** (tokens del modelo), **imágenes** (visión, estimado) y **audio** (transcripción whisper,
+  costo real por minuto) — más el **total** de todo el costo IA. El costo de audio se captura por
+  duración (`verbose_json` de whisper) y se guarda en `audio_transcribed.payload.costUsd`; el de
+  imágenes se estima repartiendo el costo de tokens (`EST_IMAGE_INPUT_TOKENS`/imagen) sin alterar el
+  total. Precios centralizados en `lib/openai/pricing.ts`. (`lib/dashboard/queries.ts`,
+  `app/dashboard/reports/page.tsx`, `lib/openai/transcribe.ts`, `lib/openai/pricing.ts`).
+
 ### Changed
 - **Costo de tokens real y completo**: el KPI "Costo de tokens" del dashboard usa el pricing real
   de gpt-5-mini ($0.25/1M input, $2/1M output) en vez del placeholder anterior (2.5/10), y ahora

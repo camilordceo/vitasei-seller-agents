@@ -122,6 +122,15 @@ export const env = {
     return optional("ADDI_LINK");
   },
 
+  // Notificación al dueño cuando el agente genera una venta (E.164 sin '+').
+  // Se envía por el MISMO Callbell del agente que hizo la venta. Vacío = apagado.
+  // OJO: es un mensaje libre → WhatsApp solo lo ENTREGA dentro de la ventana de 24h
+  // desde que este número le escribió al negocio; para 100% de entrega, migrar a
+  // una plantilla aprobada (sendTemplate). Ver notas en processMessage/notifyOwnerOfSale.
+  get SALES_NOTIFY_PHONE() {
+    return optional("SALES_NOTIFY_PHONE") ?? "573103565492";
+  },
+
   // Admin (operaciones internas como la carga de catálogo)
   get CATALOG_ADMIN_SECRET() {
     return optional("CATALOG_ADMIN_SECRET");

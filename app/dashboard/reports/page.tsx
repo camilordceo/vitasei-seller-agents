@@ -1,11 +1,17 @@
-import { getConversionReport, getSalesReport } from "@/lib/dashboard/queries";
+import { getAiCostReport, getConversionReport, getSalesReport } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
   FULFILLMENT_METHODS,
   type ConversionReport,
   type SalesReport,
 } from "@/lib/dashboard/report";
-import { formatCOP, formatNumber, formatDayKeyShort, formatPercent } from "@/lib/dashboard/format";
+import {
+  formatCOP,
+  formatNumber,
+  formatDayKeyShort,
+  formatPercent,
+  formatUsd4,
+} from "@/lib/dashboard/format";
 import { orderStatusLabel } from "../ui";
 import { CopySummaryButton } from "./CopySummaryButton";
 import type { FulfillmentMethod } from "@/lib/supabase/types";
@@ -53,7 +59,11 @@ function buildSummary(r: SalesReport, c: ConversionReport): string {
 }
 
 export default async function ReportsPage() {
-  const [r, conv] = await Promise.all([getSalesReport(), getConversionReport()]);
+  const [r, conv, ai] = await Promise.all([
+    getSalesReport(),
+    getConversionReport(),
+    getAiCostReport(),
+  ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
   const convWindows = [
@@ -119,6 +129,40 @@ export default async function ReportsPage() {
             </p>
           </div>
         ))}
+      </section>
+
+      {/* Costo IA: las tres fuentes que consume el agente + total */}
+      <section>
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold text-slate-700">Costo IA</h2>
+          <p className="text-xs text-slate-400">
+            Consumo real del agente con gpt-5-mini. El costo de imágenes (visión) es estimado
+            (sus tokens vienen dentro de los del modelo); el total es exacto.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <ReportCard
+            label="Texto (respuestas)"
+            value={formatUsd4(ai.textCostUsd)}
+            sub={`${formatNumber(ai.inputTokens + ai.outputTokens)} tokens`}
+          />
+          <ReportCard
+            label="Imágenes (visión)"
+            value={formatUsd4(ai.imageCostUsd)}
+            sub={`${formatNumber(ai.imageCount)} ${ai.imageCount === 1 ? "imagen" : "imágenes"} · estimado`}
+          />
+          <ReportCard
+            label="Audio (transcripción)"
+            value={formatUsd4(ai.audioCostUsd)}
+            sub={`${formatNumber(ai.audioCount)} ${ai.audioCount === 1 ? "audio" : "audios"} · ${formatNumber(Math.round(ai.audioSeconds))} s`}
+          />
+          <ReportCard
+            label="Costo IA total"
+            value={formatUsd4(ai.totalCostUsd)}
+            sub="texto + imágenes + audio"
+            accent="text-indigo-700"
+          />
+        </div>
       </section>
 
       {/* Conversión: conversaciones → transacciones */}

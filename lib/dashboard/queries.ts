@@ -1,6 +1,11 @@
 import "server-only";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
+  EST_IMAGE_INPUT_TOKENS,
+  GPT5_MINI_INPUT_PER_1M,
+  tokenCostUsd,
+} from "@/lib/openai/pricing";
+import {
   summarizeConversion,
   summarizeOrders,
   type ConversationFact,
@@ -25,16 +30,14 @@ import type {
  * mover a vistas/RPC en Postgres.
  */
 
-// Precios de gpt-5-mini (USD por 1M tokens). Fuente: pricing OpenAI.
-// Si cambias de modelo, actualiza estos valores.
-const PRICE_INPUT_PER_1M = 0.25;
-const PRICE_OUTPUT_PER_1M = 2;
+// Precios en `lib/openai/pricing.ts` (punto único). Costo real de gpt-5-mini.
 
 export interface Kpis {
   totalSales: number;
   txCount: number;
   inputTokens: number;
   outputTokens: number;
+  /** Costo IA total (tokens del modelo + transcripción de audio). */
   estCostUsd: number;
 }
 
@@ -52,34 +55,130 @@ function readUsage(payload: unknown): { inputTokens: number; outputTokens: numbe
   return { inputTokens: 0, outputTokens: 0 };
 }
 
+/** # de imágenes (visión) que registró el evento (`payload.images`). */
+function readImages(payload: unknown): number {
+  if (payload && typeof payload === "object" && "images" in payload) {
+    const n = (payload as { images?: unknown }).images;
+    return typeof n === "number" ? n : 0;
+  }
+  return 0;
+}
+
+/** Costo/duración que registró un evento de audio (`payload.costUsd/durationSec`). */
+function readAudio(payload: unknown): { costUsd: number; durationSec: number } {
+  if (payload && typeof payload === "object") {
+    const p = payload as { costUsd?: unknown; durationSec?: unknown };
+    return {
+      costUsd: typeof p.costUsd === "number" ? p.costUsd : 0,
+      durationSec: typeof p.durationSec === "number" ? p.durationSec : 0,
+    };
+  }
+  return { costUsd: 0, durationSec: 0 };
+}
+
 // Eventos que registran `usage` (tokens gpt-5-mini): respuesta normal, seguimiento
 // dinámico (retarget con IA) y extracción de la orden. TODOS suman al costo real.
 const TOKEN_EVENT_TYPES = ["reply_generated", "retarget_sent", "order_created"] as const;
 
 export async function getKpis(): Promise<Kpis> {
   const supabase = createServiceClient();
-  const [ordersRes, eventsRes] = await Promise.all([
+  const [ordersRes, cost] = await Promise.all([
     supabase.from("orders").select("total, status"),
-    supabase.from("events_log").select("payload").in("type", TOKEN_EVENT_TYPES as unknown as string[]),
+    getAiCostReport(),
   ]);
   if (ordersRes.error) throw new Error(`getKpis orders: ${ordersRes.error.message}`);
-  if (eventsRes.error) throw new Error(`getKpis events: ${eventsRes.error.message}`);
 
   // "Ventas generadas" = órdenes NO canceladas (una cancelada no es venta).
   const orders = (ordersRes.data ?? []).filter((o) => o.status !== "cancelled");
   const totalSales = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
 
+  return {
+    totalSales,
+    txCount: orders.length,
+    inputTokens: cost.inputTokens,
+    outputTokens: cost.outputTokens,
+    estCostUsd: cost.totalCostUsd, // tokens + audio
+  };
+}
+
+export interface AiCostReport {
+  inputTokens: number;
+  outputTokens: number;
+  /** # de imágenes (visión) procesadas por el bot. */
+  imageCount: number;
+  /** # de audios transcritos. */
+  audioCount: number;
+  /** Segundos de audio transcritos. */
+  audioSeconds: number;
+  /** Costo de tokens de solo texto (tokens del modelo − estimado de imágenes). */
+  textCostUsd: number;
+  /** Costo estimado de la visión (imágenes) — repartición del costo de tokens. */
+  imageCostUsd: number;
+  /** Costo real de la transcripción de audio (whisper por minuto). */
+  audioCostUsd: number;
+  /** Costo IA total = texto + imágenes + audio (exacto: repartición no lo altera). */
+  totalCostUsd: number;
+}
+
+/**
+ * Costo IA desglosado en las TRES fuentes que consume el agente:
+ *  - **Texto**: tokens del modelo (respuesta normal + retarget dinámico + extracción de orden).
+ *  - **Imágenes (visión)**: sus tokens ya vienen dentro de los del modelo; se ESTIMAN
+ *    (`EST_IMAGE_INPUT_TOKENS`/imagen) para separarlos del texto. La repartición es
+ *    aproximada, pero el TOTAL sigue exacto (imágenes se resta del texto, no se suma aparte).
+ *  - **Audio**: transcripción (whisper) con costo real por minuto (`audio_transcribed.costUsd`).
+ * Las reactivaciones no entran acá: son plantilla de WhatsApp, costo fijo aparte.
+ */
+export async function getAiCostReport(): Promise<AiCostReport> {
+  const supabase = createServiceClient();
+  const [tokenRes, audioRes] = await Promise.all([
+    supabase.from("events_log").select("payload").in("type", TOKEN_EVENT_TYPES as unknown as string[]),
+    supabase.from("events_log").select("payload").eq("type", "audio_transcribed"),
+  ]);
+  if (tokenRes.error) throw new Error(`getAiCostReport tokens: ${tokenRes.error.message}`);
+  if (audioRes.error) throw new Error(`getAiCostReport audio: ${audioRes.error.message}`);
+
   let inputTokens = 0;
   let outputTokens = 0;
-  for (const row of eventsRes.data ?? []) {
+  let imageCount = 0;
+  for (const row of tokenRes.data ?? []) {
     const u = readUsage(row.payload);
     inputTokens += u.inputTokens;
     outputTokens += u.outputTokens;
+    imageCount += readImages(row.payload);
   }
-  const estCostUsd =
-    (inputTokens / 1e6) * PRICE_INPUT_PER_1M + (outputTokens / 1e6) * PRICE_OUTPUT_PER_1M;
 
-  return { totalSales, txCount: orders.length, inputTokens, outputTokens, estCostUsd };
+  let audioCostUsd = 0;
+  let audioSeconds = 0;
+  let audioCount = 0;
+  for (const row of audioRes.data ?? []) {
+    const a = readAudio(row.payload);
+    audioCostUsd += a.costUsd;
+    audioSeconds += a.durationSec;
+    audioCount += 1;
+  }
+
+  const tokenCost = tokenCostUsd(inputTokens, outputTokens);
+  // Imágenes: estimado en tokens de entrada → costo, acotado a que no exceda el
+  // costo de tokens (así el texto nunca queda negativo y el total no se infla).
+  const imageInputTokensEst = imageCount * EST_IMAGE_INPUT_TOKENS;
+  const imageCostUsd = Math.min(
+    tokenCost,
+    (imageInputTokensEst / 1e6) * GPT5_MINI_INPUT_PER_1M,
+  );
+  const textCostUsd = tokenCost - imageCostUsd;
+
+  return {
+    inputTokens,
+    outputTokens,
+    imageCount,
+    audioCount,
+    audioSeconds,
+    textCostUsd,
+    imageCostUsd,
+    audioCostUsd,
+    totalCostUsd: tokenCost + audioCostUsd,
+  };
 }
 
 export interface ConversationRow {

@@ -50,9 +50,9 @@ export default async function DashboardPage() {
           icon={IconReceipt}
         />
         <KpiCard
-          label="Costo de tokens (estimado)"
+          label="Costo IA (estimado)"
           value={formatUsd(kpis.estCostUsd)}
-          sub={`${formatNumber(totalTokens)} tokens · gpt-5 mini`}
+          sub={`${formatNumber(totalTokens)} tokens + audio · ver Reportes`}
           icon={IconChip}
         />
       </section>

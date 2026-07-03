@@ -17,6 +17,11 @@ export function formatUsd(n: number | null | undefined): string {
   return `US$ ${(Number(n) || 0).toFixed(2)}`;
 }
 
+/** USD con 4 decimales — para costos de IA (fracciones de centavo). */
+export function formatUsd4(n: number | null | undefined): string {
+  return `US$ ${(Number(n) || 0).toFixed(4)}`;
+}
+
 /** Ratio 0..1 → "12,5 %" (es-CO). */
 export function formatPercent(ratio: number | null | undefined): string {
   const v = typeof ratio === "number" && Number.isFinite(ratio) ? ratio : 0;

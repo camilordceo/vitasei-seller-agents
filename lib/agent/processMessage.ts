@@ -5,6 +5,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { createOpenAIClient } from "@/lib/openai/client";
 import { generateReply } from "@/lib/openai/responses";
 import { transcribeAudioUrl } from "@/lib/openai/transcribe";
+import { audioCostUsd } from "@/lib/openai/pricing";
+import type { OrderDraft } from "@/lib/openai/extractOrder";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
@@ -21,6 +23,7 @@ import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
 import {
+  buildSaleNotification,
   buildTranscript,
   computeOrderTotal,
   normalizeOrderItem,
@@ -456,13 +459,21 @@ async function transcribeAudioAndPersist(
   url: string,
 ): Promise<string> {
   try {
-    const transcript = await transcribeAudioUrl(openai, url);
+    const result = await transcribeAudioUrl(openai, url);
+    const transcript = result?.text ?? "";
     if (transcript) {
       await supabase.from("messages").update({ content: transcript }).eq("id", messageId);
+      // Costo real del audio (whisper por minuto) → suma al "Costo IA" del dashboard.
+      const costUsd = result?.durationSec != null ? audioCostUsd(result.durationSec) : null;
       await supabase.from("events_log").insert({
         conversation_id: conversationId,
         type: "audio_transcribed",
-        payload: { messageId, chars: transcript.length } as unknown as Json,
+        payload: {
+          messageId,
+          chars: transcript.length,
+          durationSec: result?.durationSec ?? null,
+          costUsd,
+        } as unknown as Json,
       });
       return transcript;
     }
@@ -607,6 +618,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       skus: parsed.tags.skus,
       tags: parsed.tags.raw,
       usage: gen.usage, // tokens para el KPI de costo del dashboard
+      images: imageDataUrls.length, // # de imágenes (visión) para repartir el costo
     } as unknown as Json,
   });
 
@@ -734,6 +746,16 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         e instanceof Error ? e.message : String(e),
       );
     }
+
+    // Aviso al dueño: nueva venta con cliente + resumen de la orden. Best-effort:
+    // un fallo aquí NUNCA rompe el flujo del pedido (se loguea y sigue).
+    await notifyOwnerOfSale(supabase, creds, conversationId, {
+      clientPhone: phone,
+      orderId: order.id,
+      method,
+      total,
+      draft,
+    });
   }
 
   // Texto del agente. En handoff va con team_uuid + bot_end (reasigna + apaga bot).
@@ -922,4 +944,50 @@ async function sendProductImage(
     type: "image_sent",
     payload: { sku: img.sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
   });
+}
+
+/**
+ * Envía el aviso de venta al dueño (`SALES_NOTIFY_PHONE`) por el Callbell del
+ * agente que hizo la venta. Best-effort: loguea el desenlace y JAMÁS lanza.
+ *
+ * OJO (WhatsApp): es un mensaje libre → solo se ENTREGA dentro de la ventana de
+ * 24h desde que el dueño le escribió al número del negocio. Para entrega
+ * garantizada a cualquier hora, migrar a una plantilla aprobada (`sendTemplate`).
+ */
+async function notifyOwnerOfSale(
+  supabase: DB,
+  creds: CallbellCreds,
+  conversationId: string,
+  info: {
+    clientPhone: string;
+    orderId: string;
+    method: string;
+    total: number | null;
+    draft: OrderDraft;
+  },
+): Promise<void> {
+  const ownerPhone = env.SALES_NOTIFY_PHONE;
+  if (!ownerPhone) return; // feature apagado (env vacío)
+  try {
+    const text = buildSaleNotification(info);
+    const sent = await sendText(creds, ownerPhone, text, {
+      metadata: { conversation_id: conversationId, sales_notification: true },
+    });
+    await supabase.from("events_log").insert({
+      conversation_id: conversationId,
+      type: "sales_notification_sent",
+      payload: { ownerPhone, orderId: info.orderId, uuid: sent.uuid } as unknown as Json,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[notifyOwnerOfSale] failed:", message);
+    await supabase
+      .from("events_log")
+      .insert({
+        conversation_id: conversationId,
+        type: "sales_notification_failed",
+        payload: { ownerPhone, orderId: info.orderId, error: message } as unknown as Json,
+      })
+      .then(() => undefined, () => undefined);
+  }
 }

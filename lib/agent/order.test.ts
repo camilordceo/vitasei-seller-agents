@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSaleNotification,
   buildTranscript,
   computeOrderTotal,
   normalizeOrderItem,
   normalizeQty,
   resolveFulfillmentMethod,
 } from "./order";
+import type { OrderDraft } from "@/lib/openai/extractOrder";
 
 describe("buildTranscript", () => {
   it("etiqueta Cliente/Asesor y omite vacíos", () => {
@@ -62,5 +64,53 @@ describe("normalizeOrderItem", () => {
       .toEqual({ sku: "VITA-001", name: "Colágeno", qty: 1, unit_price: 89000 });
     expect(normalizeOrderItem({ sku: null, name: null, qty: 3, unit_price: null }))
       .toEqual({ sku: "", name: null, qty: 3, unit_price: null });
+  });
+});
+
+describe("buildSaleNotification", () => {
+  const draft: OrderDraft = {
+    items: [
+      { sku: "#ID123", name: "Colágeno", qty: 2, unit_price: 89000 },
+      { sku: null, name: "Envío", qty: 1, unit_price: null },
+    ],
+    shipping: { name: "Ana Pérez", address: "Cra 1 #2-3", city: "Bogotá", phone: "573001112233" },
+    fulfillment_method: "cod",
+    notes: "Entregar en la tarde",
+    total: 178000,
+  };
+
+  it("incluye cliente, método, total, productos y envío", () => {
+    const msg = buildSaleNotification({
+      clientPhone: "573001112233",
+      method: "cod",
+      total: 178000,
+      draft,
+    });
+    expect(msg).toContain("+573001112233");
+    expect(msg).toContain("Ana Pérez");
+    expect(msg).toContain("Contra entrega");
+    expect(msg).toContain("2x Colágeno #ID123");
+    expect(msg).toContain("Cra 1 #2-3, Bogotá");
+    expect(msg).toContain("Entregar en la tarde");
+    // El total se formatea como COP (contiene los dígitos, sin importar separadores).
+    expect(msg.replace(/\D/g, "")).toContain("178000");
+  });
+
+  it("sin total ni envío no rompe", () => {
+    const msg = buildSaleNotification({
+      clientPhone: "573009998877",
+      method: "undecided",
+      total: null,
+      draft: {
+        items: [],
+        shipping: { name: null, address: null, city: null, phone: null },
+        fulfillment_method: null,
+        notes: null,
+        total: null,
+      },
+    });
+    expect(msg).toContain("+573009998877");
+    expect(msg).toContain("por confirmar");
+    expect(msg).toContain("Sin definir");
   });
 });
