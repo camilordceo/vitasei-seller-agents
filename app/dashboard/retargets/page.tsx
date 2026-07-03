@@ -1,7 +1,7 @@
 import {
+  getAgentsReactivationConfig,
   getRecentReactivations,
   getRecentRetargets,
-  getReactivationConfig,
   getReactivationStats,
   getRetargetStats,
 } from "@/lib/dashboard/queries";
@@ -16,10 +16,10 @@ import { ReactivationSettings } from "./ReactivationSettings";
 export const dynamic = "force-dynamic";
 
 export default async function RetargetsPage() {
-  const [stats, rows, reactConfig, reactStats, reactRows] = await Promise.all([
+  const [stats, rows, agentsReact, reactStats, reactRows] = await Promise.all([
     getRetargetStats(),
     getRecentRetargets(100),
-    getReactivationConfig(),
+    getAgentsReactivationConfig(),
     getReactivationStats(),
     getRecentReactivations(100),
   ]);
@@ -37,8 +37,8 @@ export default async function RetargetsPage() {
           <span className="text-sm text-slate-400">{rows.length}</span>
         </div>
 
-        <RetargetStatsBar stats={stats} />
         <RetargetList rows={rows} />
+        <RetargetStatsBar stats={stats} />
       </section>
 
       <section className="space-y-4 border-t border-slate-200 pt-6">
@@ -52,7 +52,7 @@ export default async function RetargetsPage() {
           </p>
         </div>
 
-        <ReactivationSettings initial={reactConfig} />
+        <ReactivationSettings agents={agentsReact} />
         <ReactivationStatsBar stats={reactStats} />
         <ReactivationList rows={reactRows} />
       </section>

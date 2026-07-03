@@ -2,21 +2,28 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendTemplate, credsFromEnv } from "@/lib/callbell/sender";
-import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
+import {
+  loadAgentForConversation,
+  agentCallbellCreds,
+  agentReactivationSettings,
+  loadAgentReactivationSettings,
+} from "@/lib/agent/agents";
+import { isAgentActiveNow } from "@/lib/agent/schedule";
 import { evaluateReactivation, planReactivations } from "@/lib/agent/reactivationPlan";
 import { env } from "@/lib/env";
 import type { Database, Json } from "@/lib/supabase/types";
 
 /**
- * Reactivaciones por plantilla (ver ADR-0021, docs/14).
+ * Reactivaciones por plantilla (ver ADR-0021, docs/14). El ON/OFF y los UUID de
+ * plantilla son POR AGENTE (columnas en `agents`): la plantilla solo existe en la
+ * cuenta de Callbell de ese agente. Ver ADR-0030.
  *
- * Cuando llega un cliente por primera vez (nueva conversación) y el feature está
- * ENCENDIDO (`app_settings.reactivation_enabled`), se agendan dos envíos de
- * plantilla: a 7 y 15 días. El cron toma los vencidos y, si la persona no compró
- * y sigue inactiva, envía la plantilla aprobada por Callbell (único envío
- * permitido fuera de la ventana de 24h). Se cancelan si crea una orden (compra).
- *
- * El ON/OFF y los UUID de plantilla se editan desde el dashboard (DB, no env).
+ * Cuando llega un cliente por primera vez (nueva conversación) y el agente tiene
+ * las reactivaciones ENCENDIDAS, se agendan dos envíos: a 7 y 15 días. El cron
+ * toma los vencidos y, si la persona no compró, sigue inactiva y el agente está
+ * DENTRO de su horario, envía la plantilla aprobada por Callbell (único envío
+ * permitido fuera de la ventana de 24h). Se cancelan si crea una orden (compra) y
+ * se APLAZAN si el agente está fuera de horario (ADR-0029).
  */
 
 type DB = SupabaseClient<Database>;
@@ -24,48 +31,29 @@ type DB = SupabaseClient<Database>;
 /** Costo estimado de cada plantilla enviada (control de costos del dashboard). */
 export const REACTIVATION_COST_USD = 0.015;
 
-export interface ReactivationSettings {
-  enabled: boolean;
-  template7d: string | null;
-  template15d: string | null;
-}
-
-/** Lee la config (fila única `app_settings` id=1). Default: apagado. */
-export async function getReactivationSettings(supabase: DB): Promise<ReactivationSettings> {
-  const { data, error } = await supabase
-    .from("app_settings")
-    .select("reactivation_enabled, reactivation_template_7d, reactivation_template_15d")
-    .eq("id", 1)
-    .maybeSingle();
-  if (error) throw new Error(`get-reactivation-settings: ${error.message}`);
-  return {
-    enabled: data?.reactivation_enabled ?? false,
-    template7d: data?.reactivation_template_7d ?? null,
-    template15d: data?.reactivation_template_15d ?? null,
-  };
-}
-
 // --- Agendar / cancelar -----------------------------------------------------
 
 export interface ScheduleReactivationArgs {
   conversationId: string;
   contactId: string;
   phone: string;
+  /** Agente dueño de la conversación (define si las reactivaciones están ON). */
+  agentId: string;
   /** epoch ms desde el que se cuentan los delays (creación de la conversación). */
   fromMs: number;
 }
 
 /**
  * Agenda las reactivaciones (7 y 15 días) de una conversación nueva. Solo si el
- * feature está encendido. Best-effort: el llamador debe envolverlo para que un
- * fallo aquí NUNCA rompa la ingesta.
+ * AGENTE tiene el feature encendido. Best-effort: el llamador debe envolverlo para
+ * que un fallo aquí NUNCA rompa la ingesta.
  */
 export async function scheduleReactivations(
   supabase: DB,
   args: ScheduleReactivationArgs,
 ): Promise<void> {
-  const settings = await getReactivationSettings(supabase);
-  if (!settings.enabled) return;
+  const settings = await loadAgentReactivationSettings(supabase, args.agentId);
+  if (!settings?.enabled) return;
 
   const plan = planReactivations(
     args.fromMs,
@@ -106,14 +94,15 @@ export interface ReactivationRunStats {
   sent: number;
   cancelled: number;
   skipped: number;
+  deferred: number;
   failed: number;
 }
 
 /**
- * Procesa las reactivaciones vencidas (`scheduled` y `scheduled_at <= now`). Si
- * el feature está apagado, no hace nada y DEJA las filas agendadas (al reactivar
- * el feature retoman). Claim atómico (`scheduled` → `processing`) contra doble
- * envío por cron solapado.
+ * Procesa las reactivaciones vencidas (`scheduled` y `scheduled_at <= now`). El
+ * ON/OFF es por agente y se evalúa por fila (vía el agente de la conversación). Si
+ * el agente está fuera de horario, la fila se APLAZA (vuelve a `scheduled`). Claim
+ * atómico (`scheduled` → `processing`) contra doble envío por cron solapado.
  */
 export async function runDueReactivations(opts?: {
   limit?: number;
@@ -124,12 +113,11 @@ export async function runDueReactivations(opts?: {
     sent: 0,
     cancelled: 0,
     skipped: 0,
+    deferred: 0,
     failed: 0,
   };
 
   const supabase = createServiceClient();
-  const settings = await getReactivationSettings(supabase);
-  if (!settings.enabled) return stats;
 
   const now = opts?.nowMs ?? Date.now();
   const nowIso = new Date(now).toISOString();
@@ -157,7 +145,7 @@ export async function runDueReactivations(opts?: {
 
     stats.processed++;
     try {
-      const outcome = await processReactivationRow(supabase, row, settings, now);
+      const outcome = await processReactivationRow(supabase, row, now);
       stats[outcome]++;
     } catch (e) {
       stats.failed++;
@@ -194,9 +182,8 @@ interface DueReactivation {
 async function processReactivationRow(
   supabase: DB,
   row: DueReactivation,
-  settings: ReactivationSettings,
   now: number,
-): Promise<"sent" | "cancelled" | "skipped"> {
+): Promise<"sent" | "cancelled" | "skipped" | "deferred"> {
   // ¿Compró? (orden no cancelada en la conversación)
   const { data: order, error: orderErr } = await supabase
     .from("orders")
@@ -206,6 +193,7 @@ async function processReactivationRow(
     .limit(1)
     .maybeSingle();
   if (orderErr) throw new Error(`load-order: ${orderErr.message}`);
+  const converted = !!order;
 
   const { data: convo, error: convoErr } = await supabase
     .from("conversations")
@@ -214,11 +202,30 @@ async function processReactivationRow(
     .single();
   if (convoErr) throw new Error(`load-conversation: ${convoErr.message}`);
 
+  // Agente de la conversación: define ON/OFF, plantillas, credenciales y horario.
+  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+
+  // Fuera de horario y sin compra → APLAZAR (revertir a `scheduled`) para reintentar
+  // cuando el agente vuelva a estar activo (acotado por STALE_MS). Ver ADR-0029.
+  if (!converted && agent && !isAgentActiveNow(agent)) {
+    await supabase.from("reactivations").update({ status: "scheduled" }).eq("id", row.id);
+    await supabase.from("events_log").insert({
+      conversation_id: row.conversation_id,
+      type: "reactivation_deferred",
+      payload: { reactivationId: row.id, stage: row.stage, reason: "agent-inactive" } as unknown as Json,
+    });
+    return "deferred";
+  }
+
+  const settings = agent
+    ? agentReactivationSettings(agent)
+    : { enabled: false, template7d: null, template15d: null };
   const templateUuid = row.stage === 1 ? settings.template7d : settings.template15d;
 
   const decision = evaluateReactivation({
-    converted: !!order,
-    templateConfigured: !!templateUuid,
+    converted,
+    // Requiere que el agente tenga reactivaciones ON y la plantilla de la etapa.
+    templateConfigured: settings.enabled && !!templateUuid,
     lastInboundAt: convo.last_inbound_at,
     scheduledAt: row.scheduled_at,
     now,
@@ -250,9 +257,8 @@ async function processReactivationRow(
     .maybeSingle();
   const firstName = (contact?.name ?? "").trim().split(/\s+/)[0] ?? "";
 
-  // Credenciales de Callbell del agente de la conversación (cuenta/canal). La
-  // plantilla debe existir en esa cuenta. Fallback a env si no hay agente.
-  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+  // Credenciales de Callbell del agente (cuenta/canal). La plantilla debe existir
+  // en esa cuenta. Fallback a env si no hay agente (datos legados).
   const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
 
   const sent = await sendTemplate(creds, row.phone, templateUuid as string, {

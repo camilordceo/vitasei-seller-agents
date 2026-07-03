@@ -13,6 +13,7 @@ import {
   agentVectorStoreId,
   type Agent,
 } from "@/lib/agent/agents";
+import { isAgentActiveNow } from "@/lib/agent/schedule";
 import {
   buildRetargetInstruction,
   evaluateRetarget,
@@ -114,6 +115,7 @@ export interface RunStats {
   sent: number;
   cancelled: number;
   skipped: number;
+  deferred: number;
   failed: number;
 }
 
@@ -127,7 +129,7 @@ export async function runDueRetargets(opts?: {
   limit?: number;
   nowMs?: number;
 }): Promise<RunStats> {
-  const stats: RunStats = { processed: 0, sent: 0, cancelled: 0, skipped: 0, failed: 0 };
+  const stats: RunStats = { processed: 0, sent: 0, cancelled: 0, skipped: 0, deferred: 0, failed: 0 };
   if (!env.RETARGET_ENABLED) return stats;
 
   const supabase = createServiceClient();
@@ -199,7 +201,7 @@ async function processRetargetRow(
   openai: OpenAI,
   row: DueRow,
   now: number,
-): Promise<"sent" | "cancelled" | "skipped"> {
+): Promise<"sent" | "cancelled" | "skipped" | "deferred"> {
   const { data: convo, error } = await supabase
     .from("conversations")
     .select("status, ai_paused, agent_id, last_inbound_at, openai_previous_response_id")
@@ -239,6 +241,18 @@ async function processRetargetRow(
       payload: { retargetId: row.id, stage: row.stage, reason: "no-agent" } as unknown as Json,
     });
     return "skipped";
+  }
+
+  // Fuera de horario → APLAZAR (revertir a `scheduled`) para reintentar cuando el
+  // agente vuelva a estar activo (acotado por la ventana de 24h). Ver ADR-0029.
+  if (!isAgentActiveNow(agent)) {
+    await supabase.from("retargets").update({ status: "scheduled" }).eq("id", row.id);
+    await supabase.from("events_log").insert({
+      conversation_id: row.conversation_id,
+      type: "retarget_deferred",
+      payload: { retargetId: row.id, stage: row.stage, reason: "agent-inactive" } as unknown as Json,
+    });
+    return "deferred";
   }
 
   return sendRetargetMessage(supabase, openai, {

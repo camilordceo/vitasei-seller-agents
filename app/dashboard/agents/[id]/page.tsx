@@ -5,6 +5,8 @@ import { formatDateTime } from "@/lib/dashboard/format";
 import { AgentEditor, type AgentEditorInitial } from "../AgentEditor";
 
 export const dynamic = "force-dynamic";
+// Recargar el catálogo (polling del vector store) puede tardar; damos margen.
+export const maxDuration = 300;
 
 export default async function AgentDetailPage({ params }: { params: { id: string } }) {
   const agent = await getAgent(params.id);
@@ -24,6 +26,9 @@ export default async function AgentDetailPage({ params }: { params: { id: string
     temperature: agent.temperature,
     systemPrompt: agent.systemPrompt,
     enabled: agent.enabled,
+    scheduleEnabled: agent.scheduleEnabled,
+    scheduleTimezone: agent.scheduleTimezone,
+    schedule: agent.schedule,
   };
 
   return (

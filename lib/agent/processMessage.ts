@@ -22,6 +22,7 @@ import {
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
+import { isAgentActiveNow } from "@/lib/agent/schedule";
 import {
   buildSaleNotification,
   buildTranscript,
@@ -244,7 +245,7 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
   //    plantillas 7d/15d si el feature está encendido. Best-effort.
   if (conversationIsNew) {
     try {
-      await scheduleReactivations(supabase, { conversationId, contactId, phone, fromMs: receivedAt });
+      await scheduleReactivations(supabase, { conversationId, contactId, phone, fromMs: receivedAt, agentId });
     } catch (e) {
       console.error(
         "[ingestInboundMessage] schedule reactivations failed:",
@@ -315,6 +316,18 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
         conversation_id: conversationId,
         type: "reply_skipped",
         payload: { reason: "no-agent" } as unknown as Json,
+      });
+      return;
+    }
+
+    // Horario del agente: fuera de su ventana activa el bot calla (el inbound ya
+    // quedó guardado; lo atiende un humano). Con el horario apagado, siempre activo.
+    // Ver ADR-0029.
+    if (!isAgentActiveNow(agent)) {
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "reply_skipped",
+        payload: { reason: "agent-inactive" } as unknown as Json,
       });
       return;
     }

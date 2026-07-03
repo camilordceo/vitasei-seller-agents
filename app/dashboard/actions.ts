@@ -7,9 +7,10 @@ import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { sendText, credsFromEnv } from "@/lib/callbell/sender";
 import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
 import { regenerateReply } from "@/lib/agent/processMessage";
+import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
 import type { Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
-import type { AgentEditInput } from "./agents/types";
+import type { AgentEditInput, AgentCatalogInput } from "./agents/types";
 
 /**
  * Server Actions del dashboard.
@@ -160,15 +161,18 @@ export async function saveOrder(orderId: string, input: OrderEditInput): Promise
 }
 
 /**
- * Actualiza la config del feature de reactivaciones (fila única `app_settings`):
- * el ON/OFF global y los UUID de plantilla (día 7 y día 15), editables desde el
- * dashboard. Service-role, protegida por el Basic Auth. Ver docs/14, ADR-0021.
+ * Actualiza la config de reactivaciones de UN AGENTE (ON/OFF + UUID de plantilla
+ * día 7 y día 15). Las plantillas son por agente porque viven en su cuenta de
+ * Callbell. Service-role, protegida por el Basic Auth. Ver docs/14, ADR-0030.
  */
-export async function updateReactivationSettings(input: {
-  enabled: boolean;
-  template7d: string;
-  template15d: string;
-}): Promise<void> {
+export async function updateReactivationSettings(
+  agentId: string,
+  input: {
+    enabled: boolean;
+    template7d: string;
+    template15d: string;
+  },
+): Promise<void> {
   const supabase = createServiceClient();
   const clean = (s: string): string | null => {
     const t = s.trim();
@@ -176,19 +180,20 @@ export async function updateReactivationSettings(input: {
   };
 
   const { error } = await supabase
-    .from("app_settings")
+    .from("agents")
     .update({
       reactivation_enabled: input.enabled,
       reactivation_template_7d: clean(input.template7d),
       reactivation_template_15d: clean(input.template15d),
     })
-    .eq("id", 1);
+    .eq("id", agentId);
   if (error) throw new Error(`updateReactivationSettings: ${error.message}`);
 
   await supabase.from("events_log").insert({
     conversation_id: null,
     type: "reactivation_settings_updated",
     payload: {
+      agentId,
       enabled: input.enabled,
       has7d: clean(input.template7d) != null,
       has15d: clean(input.template15d) != null,
@@ -196,6 +201,7 @@ export async function updateReactivationSettings(input: {
   });
 
   revalidatePath("/dashboard/retargets");
+  revalidatePath("/dashboard/agents");
   revalidatePath("/dashboard");
 }
 
@@ -223,6 +229,11 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
     temperature: cleanTemperature(input.temperature),
     system_prompt: input.systemPrompt,
     enabled: input.enabled,
+    // Horario (encendido/apagado por agente). Las columnas de reactivación NO se
+    // tocan aquí: se editan en la página de Retargets (ADR-0030).
+    schedule_enabled: input.scheduleEnabled,
+    schedule_timezone: textOrNull(input.scheduleTimezone) ?? "America/Bogota",
+    schedule: input.schedule as unknown as Json,
   };
   const newKey = input.callbellApiKey.trim();
   if (newKey.length > 0) patch.callbell_api_key = newKey;
@@ -281,6 +292,34 @@ export async function createAgent(input: AgentEditInput): Promise<string> {
   revalidatePath("/dashboard/agents");
   revalidatePath("/dashboard");
   return data.id;
+}
+
+/**
+ * Carga el catálogo de productos de un agente desde el dashboard, en dos flujos:
+ *  - `create`: crea el vector store del agente (si no tiene), sube cada producto como
+ *    documento a OpenAI (`file_search`) y hace upsert en `products`; guarda el `vector_store_id`.
+ *  - `existing`: el agente ya tiene un `vector_store_id`; los productos se cargan SOLO a
+ *    `products` (Supabase) sin re-subir documentos al store.
+ *
+ * Reusa `runCatalogImport` (idempotente por `(agent_id, sku)`). Corre server-side con
+ * service-role, protegida por el Basic Auth del dashboard. Devuelve el resultado para
+ * mostrar en la UI (N cargados, vector store, avisos/errores). Ver docs/16, ADR-0028.
+ */
+export async function loadAgentCatalog(
+  agentId: string,
+  input: AgentCatalogInput,
+): Promise<CatalogImportResult> {
+  const vectorStoreMode = input.mode === "create" ? "create" : "supabase-only";
+
+  const result = await runCatalogImport(
+    { agentId, products: input.products, filename: input.filename ?? null },
+    { vectorStoreMode },
+  );
+
+  revalidatePath(`/dashboard/agents/${agentId}`);
+  revalidatePath("/dashboard/agents");
+  revalidatePath("/dashboard");
+  return result;
 }
 
 /**

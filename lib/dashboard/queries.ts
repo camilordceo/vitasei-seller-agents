@@ -21,6 +21,7 @@ import type {
   OrderStatus,
   RetargetStatus,
 } from "@/lib/supabase/types";
+import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
 
 /**
  * Consultas de solo lectura del dashboard (Sprint 6).
@@ -664,26 +665,34 @@ export async function getConversionReport(): Promise<ConversionReport> {
 
 // --- Reactivaciones por plantilla (7/15 días, ver docs/14) -------------------
 
-export interface ReactivationConfig {
+export interface AgentReactivationConfig {
+  agentId: string;
+  name: string;
+  brand: string | null;
   enabled: boolean;
   template7d: string | null;
   template15d: string | null;
 }
 
-/** Config editable del feature (fila única `app_settings`). */
-export async function getReactivationConfig(): Promise<ReactivationConfig> {
+/**
+ * Config de reactivación POR AGENTE (las plantillas viven en la cuenta de Callbell
+ * de cada agente). Alimenta el selector de la página de Retargets. Ver ADR-0030.
+ */
+export async function getAgentsReactivationConfig(): Promise<AgentReactivationConfig[]> {
   const supabase = createServiceClient();
   const { data, error } = await supabase
-    .from("app_settings")
-    .select("reactivation_enabled, reactivation_template_7d, reactivation_template_15d")
-    .eq("id", 1)
-    .maybeSingle();
-  if (error) throw new Error(`getReactivationConfig: ${error.message}`);
-  return {
-    enabled: data?.reactivation_enabled ?? false,
-    template7d: data?.reactivation_template_7d ?? null,
-    template15d: data?.reactivation_template_15d ?? null,
-  };
+    .from("agents")
+    .select("id, name, brand, reactivation_enabled, reactivation_template_7d, reactivation_template_15d, created_at")
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`getAgentsReactivationConfig: ${error.message}`);
+  return (data ?? []).map((a) => ({
+    agentId: a.id,
+    name: a.name,
+    brand: a.brand,
+    enabled: a.reactivation_enabled,
+    template7d: a.reactivation_template_7d,
+    template15d: a.reactivation_template_15d,
+  }));
 }
 
 export interface ReactivationStats {
@@ -825,6 +834,9 @@ export interface AgentDetail {
   temperature: number;
   systemPrompt: string;
   enabled: boolean;
+  scheduleEnabled: boolean;
+  scheduleTimezone: string;
+  schedule: AgentSchedule;
   createdAt: string;
   updatedAt: string;
 }
@@ -851,6 +863,9 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
     temperature: Number(data.temperature),
     systemPrompt: data.system_prompt,
     enabled: data.enabled,
+    scheduleEnabled: data.schedule_enabled,
+    scheduleTimezone: data.schedule_timezone,
+    schedule: parseAgentSchedule(data.schedule),
     createdAt: data.created_at,
     updatedAt: data.updated_at,
   };

@@ -24,7 +24,7 @@ type DB = SupabaseClient<Database>;
 export type Agent = Database["public"]["Tables"]["agents"]["Row"];
 
 const AGENT_COLS =
-  "id, name, brand, country, whatsapp_number, callbell_channel_uuid, callbell_api_key, logistics_team_uuid, vector_store_id, model, system_prompt, temperature, enabled, created_at, updated_at";
+  "id, name, brand, country, whatsapp_number, callbell_channel_uuid, callbell_api_key, logistics_team_uuid, vector_store_id, model, system_prompt, temperature, enabled, schedule_enabled, schedule_timezone, schedule, reactivation_enabled, reactivation_template_7d, reactivation_template_15d, created_at, updated_at";
 
 /**
  * Resuelve a qué agente pertenece un inbound (por canal o número). Si ninguno
@@ -119,4 +119,31 @@ export function agentTeamUuid(agent: Agent): string | null {
 /** Vector store del catálogo del agente con fallback a env. */
 export function agentVectorStoreId(agent: Agent): string | null {
   return agent.vector_store_id ?? env.OPENAI_VECTOR_STORE_ID ?? null;
+}
+
+export interface AgentReactivationSettings {
+  enabled: boolean;
+  template7d: string | null;
+  template15d: string | null;
+}
+
+/**
+ * Config de reactivaciones del agente (ON/OFF + plantillas 7/15d). Es por agente
+ * porque los UUID de plantilla son específicos de SU cuenta de Callbell. Ver ADR-0030.
+ */
+export function agentReactivationSettings(agent: Agent): AgentReactivationSettings {
+  return {
+    enabled: agent.reactivation_enabled,
+    template7d: agent.reactivation_template_7d,
+    template15d: agent.reactivation_template_15d,
+  };
+}
+
+/** Carga la config de reactivación de un agente por id (para agendar en la ingesta). */
+export async function loadAgentReactivationSettings(
+  supabase: DB,
+  agentId: string,
+): Promise<AgentReactivationSettings | null> {
+  const agent = await loadAgent(supabase, agentId);
+  return agent ? agentReactivationSettings(agent) : null;
 }

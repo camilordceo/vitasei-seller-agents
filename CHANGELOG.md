@@ -34,6 +34,41 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   ADR-0024).
 
 ### Added
+- **Horario de encendido/apagado por agente**: cada agente puede programar cuándo responde la IA
+  (p. ej. 8pm–8am todos los días, domingos completos, festivos), para cubrir con la IA las líneas y
+  horas "muertas" sin humanos. Se evalúa **inline** con una función pura `isAgentActiveNow`
+  (`lib/agent/schedule.ts`, client-safe) — sin cron que prenda/apague; `enabled` sigue siendo el
+  master manual. Modelo unión (ventana diaria + días completos + festivos) en columnas nuevas de
+  `agents` (`schedule_enabled`, `schedule_timezone`, `schedule` jsonb; migración 0011). Fuera de
+  horario se **apaga todo**: no responde inbound (`reply_skipped {agent-inactive}`, el mensaje igual
+  se guarda) y los seguimientos/reactivaciones se **aplazan** (`*_deferred`) hasta que el agente
+  vuelva a estar activo. UI en el editor de agente (ventana, días, festivos con prefill Colombia 2026
+  y preview "activo ahora"). Retrocompatible (`schedule_enabled=false` ⇒ siempre activo). Tests en
+  `lib/agent/schedule.test.ts`. (`lib/agent/schedule.ts`, `lib/agent/processMessage.ts`,
+  `lib/agent/retarget.ts`, `lib/agent/reactivation.ts`, `app/dashboard/agents/AgentEditor.tsx`, ADR-0029).
+- **Reactivaciones (plantillas 7/15 días) por agente**: el ON/OFF y los UUID de plantilla dejan de ser
+  globales (`app_settings`) y pasan a cada agente (columnas en `agents`, backfill en la migración 0011),
+  porque una plantilla solo existe en la cuenta de Callbell de su agente — así cada marca/línea envía
+  SU plantilla con SUS credenciales. En la página de Retargets se elige el agente con un **selector**.
+  (`lib/agent/reactivation.ts`, `lib/agent/agents.ts`, `lib/dashboard/queries.ts`,
+  `app/dashboard/actions.ts`, `app/dashboard/retargets/ReactivationSettings.tsx` + `page.tsx`, ADR-0030).
+- **Retargets: la lista se muestra arriba** de la barra de estadísticas en la página de Retargets
+  (reorden menor de UI). (`app/dashboard/retargets/page.tsx`).
+- **Crear agente con vector store y catálogo "de una vez" desde el dashboard**: el editor de agente
+  ahora provisiona el vector store y carga los productos (JSON) sin pasos manuales fuera de banda.
+  Dos flujos: **"Crear vector store nuevo"** (crea el store por marca, sube cada producto como doc a
+  OpenAI `file_search` **y** hace upsert en `products`, y guarda el `vector_store_id`) y **"Ya tengo
+  vector store"** (pega el `vs_...` y carga los productos **solo a Supabase**, sin re-subir docs).
+  Acepta el **export tipo Bubble** (`ID`/`Titulo`/`Precio`/`PrecioConDescuento`/…) además del formato
+  canónico; el precio oficial usa `PrecioConDescuento` (el de lista y el % quedan en `metadata`).
+  Reutiliza `runCatalogImport` (idempotente por `(agent_id, sku)`) con un nuevo modo
+  `vectorStoreMode` (`sync` = comportamiento previo de la route/CSV, intacto). Nueva función pura
+  `normalizeCatalogJson` (validación/preview también en el cliente), Server Action `loadAgentCatalog`
+  (service-role, dentro del Basic Auth) y `getOrCreateVectorStore` nombra el store por marca.
+  `maxDuration=300` en las páginas de agente para el polling del vector store. Sin migraciones ni
+  envs nuevas. (`lib/openai/catalog.ts`, `lib/openai/catalogLoader.ts`, `lib/openai/vectorStore.ts`,
+  `app/dashboard/actions.ts`, `app/dashboard/agents/AgentEditor.tsx`, `app/dashboard/agents/*/page.tsx`,
+  tests en `lib/openai/catalog.test.ts`, ADR-0028).
 - **Botón "Reintentar IA" en el detalle de conversación**: si un error transitorio (OpenAI/Callbell)
   dejó el mensaje del cliente sin contestar, el operador re-corre el **mismo** flujo automático con
   un clic. Nueva función `regenerateReply` (`lib/agent/processMessage.ts`) que reutiliza

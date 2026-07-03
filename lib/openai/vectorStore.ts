@@ -10,11 +10,12 @@ const VECTOR_STORE_NAME = "vitasei-catalog";
 
 /**
  * Reutiliza el vector store si ya existe (lo verifica con un retrieve);
- * si no, crea uno nuevo `vitasei-catalog`.
+ * si no, crea uno nuevo. `name` permite nombrarlo por marca (default `vitasei-catalog`).
  */
 export async function getOrCreateVectorStore(
   openai: OpenAI,
   existingId?: string | null,
+  name: string = VECTOR_STORE_NAME,
 ): Promise<string> {
   if (existingId) {
     try {
@@ -24,7 +25,7 @@ export async function getOrCreateVectorStore(
       // El id guardado ya no existe (borrado/rotado): creamos uno nuevo.
     }
   }
-  const created = await openai.vectorStores.create({ name: VECTOR_STORE_NAME });
+  const created = await openai.vectorStores.create({ name });
   return created.id;
 }
 

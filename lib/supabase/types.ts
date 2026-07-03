@@ -308,6 +308,12 @@ export interface Database {
           system_prompt: string;
           temperature: number;
           enabled: boolean;
+          schedule_enabled: boolean;
+          schedule_timezone: string;
+          schedule: Json;
+          reactivation_enabled: boolean;
+          reactivation_template_7d: string | null;
+          reactivation_template_15d: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -325,6 +331,12 @@ export interface Database {
           system_prompt: string;
           temperature?: number;
           enabled?: boolean;
+          schedule_enabled?: boolean;
+          schedule_timezone?: string;
+          schedule?: Json;
+          reactivation_enabled?: boolean;
+          reactivation_template_7d?: string | null;
+          reactivation_template_15d?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -342,6 +354,12 @@ export interface Database {
           system_prompt?: string;
           temperature?: number;
           enabled?: boolean;
+          schedule_enabled?: boolean;
+          schedule_timezone?: string;
+          schedule?: Json;
+          reactivation_enabled?: boolean;
+          reactivation_template_7d?: string | null;
+          reactivation_template_15d?: string | null;
           created_at?: string;
           updated_at?: string;
         };

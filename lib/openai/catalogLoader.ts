@@ -31,9 +31,27 @@ export interface CatalogImportResult {
   products: Array<{ sku: string; vectorStoreFileId: string; imageUrl: string | null }>;
 }
 
+/**
+ * Cómo manejar el vector store durante la importación:
+ *  - `sync` (default): reusa `agentVectorStoreId` (con fallback a env) o crea; sube docs; persiste.
+ *    Comportamiento histórico de la route `/api/catalog/load` y el script CSV.
+ *  - `create`: crea un store NUEVO por marca ignorando el fallback de env (para que un agente nuevo
+ *    tenga el suyo, no el global); sube docs; persiste. Flujo dashboard "crear vector store".
+ *  - `supabase-only`: usa `agent.vector_store_id` tal cual (no crea); valida best-effort; NO sube
+ *    docs ni pisa `vector_store_file_id`; NO persiste. Flujo dashboard "ya tengo vector store".
+ */
+export type VectorStoreMode = "sync" | "create" | "supabase-only";
+
+export interface CatalogImportOptions {
+  vectorStoreMode?: VectorStoreMode;
+}
+
 export async function runCatalogImport(
   input: CatalogLoadRequest,
+  opts: CatalogImportOptions = {},
 ): Promise<CatalogImportResult> {
+  const mode = opts.vectorStoreMode ?? "sync";
+  const syncsDocs = mode !== "supabase-only";
   const supabase = createServiceClient();
   const warnings: string[] = [];
 
@@ -56,50 +74,75 @@ export async function runCatalogImport(
     return emptyResult(false, null, [err], warnings);
   }
 
+  // En "ya tengo vector store" el agente DEBE traer el id (no se crea nada).
+  if (mode === "supabase-only" && !agent.vector_store_id) {
+    const err = "El agente no tiene vector_store_id; pega uno o usa 'crear vector store'.";
+    await recordImport(supabase, input.filename ?? null, "failed", 0, err);
+    return emptyResult(false, null, [err], warnings);
+  }
+
   const importId = await recordImport(supabase, input.filename ?? null, "processing", 0, null);
 
   try {
     const openai = createOpenAIClient();
 
-    // 2) Vector store: reusar el del agente / env, o crear uno nuevo.
-    const existingVsId = agentVectorStoreId(agent);
-    const vectorStoreId = await getOrCreateVectorStore(openai, existingVsId);
+    // 2) Resolver el vector store según el modo.
+    let vectorStoreId: string;
+    if (mode === "supabase-only") {
+      vectorStoreId = agent.vector_store_id as string;
+      // Validación best-effort: avisa si el id ya no existe, pero NO crea uno.
+      try {
+        await openai.vectorStores.retrieve(vectorStoreId);
+      } catch {
+        warnings.push(
+          `El vector_store_id ${vectorStoreId} no existe en OpenAI (los productos se cargaron solo a Supabase).`,
+        );
+      }
+    } else if (mode === "create") {
+      // Crear uno por marca, SIN el fallback de env (para no reusar el global).
+      vectorStoreId = await getOrCreateVectorStore(openai, agent.vector_store_id, vectorStoreName(agent));
+    } else {
+      // sync: comportamiento histórico (con fallback de env).
+      vectorStoreId = await getOrCreateVectorStore(openai, agentVectorStoreId(agent));
+    }
 
     const done: CatalogImportResult["products"] = [];
 
     for (const p of products) {
-      // 2a) Documento → vector store (espera `completed`).
-      const doc = buildProductDocument(p);
-      const { fileId, status } = await uploadProductDocument(
-        openai,
-        vectorStoreId,
-        `${p.sku}.md`,
-        doc,
-      );
-      if (status !== "completed") {
-        warnings.push(`vector store file ${p.sku}: status=${status}`);
+      // 2a) Documento → vector store (espera `completed`). Se omite en supabase-only.
+      let fileId: string | null = null;
+      if (syncsDocs) {
+        const doc = buildProductDocument(p);
+        const up = await uploadProductDocument(openai, vectorStoreId, `${p.sku}.md`, doc);
+        fileId = up.fileId;
+        if (up.status !== "completed") {
+          warnings.push(`vector store file ${p.sku}: status=${up.status}`);
+        }
       }
 
-      // 2b) Imagen → storage (best-effort).
+      // 2b) Imagen → storage (best-effort, en todos los modos).
       const img = await uploadProductImage(supabase, p);
       if (img.warning) warnings.push(img.warning);
 
       // 2c) Upsert por (agente, SKU): catálogo por marca (gate: el SKU del texto == el de products).
+      // En supabase-only NO incluimos `vector_store_file_id` para no pisar el existente.
       const row = {
         ...productToRow(p, agent.id),
-        vector_store_file_id: fileId,
         image_url: img.imageUrl,
+        ...(fileId ? { vector_store_file_id: fileId } : {}),
       };
       const { error } = await supabase
         .from("products")
         .upsert(row, { onConflict: "agent_id,sku" });
       if (error) throw new Error(`upsert products ${p.sku}: ${error.message}`);
 
-      done.push({ sku: p.sku, vectorStoreFileId: fileId, imageUrl: img.imageUrl });
+      done.push({ sku: p.sku, vectorStoreFileId: fileId ?? "", imageUrl: img.imageUrl });
     }
 
-    // 3) Persistir el vector_store_id en el agente.
-    await persistVectorStoreId(supabase, agent.id, vectorStoreId);
+    // 3) Persistir el vector_store_id en el agente (salvo supabase-only: ya lo tenía).
+    if (mode !== "supabase-only") {
+      await persistVectorStoreId(supabase, agent.id, vectorStoreId);
+    }
 
     await supabase
       .from("catalog_imports")
@@ -126,6 +169,12 @@ export async function runCatalogImport(
 }
 
 // --- helpers -----------------------------------------------------------------
+
+/** Nombre legible del vector store por marca (para el flujo "crear vector store"). */
+function vectorStoreName(agent: { brand: string | null; name: string }): string {
+  const base = (agent.brand ?? agent.name ?? "").trim() || "catálogo";
+  return `${base} — catálogo`;
+}
 
 function emptyResult(
   ok: boolean,

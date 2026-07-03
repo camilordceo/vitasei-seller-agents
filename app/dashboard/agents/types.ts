@@ -1,3 +1,6 @@
+import type { CatalogProductInput } from "@/lib/openai/catalog";
+import type { AgentSchedule } from "@/lib/agent/schedule";
+
 /** Datos editables de un agente (marca/número) desde el dashboard. Ver docs/16. */
 export interface AgentEditInput {
   name: string;
@@ -13,4 +16,19 @@ export interface AgentEditInput {
   temperature: number;
   systemPrompt: string;
   enabled: boolean;
+  /** Horario (encendido/apagado). Ver ADR-0029. */
+  scheduleEnabled: boolean;
+  scheduleTimezone: string;
+  schedule: AgentSchedule;
+}
+
+/** Carga de catálogo desde el editor de agente (server action `loadAgentCatalog`). */
+export interface AgentCatalogInput {
+  /**
+   * `create` = crear/usar el vector store del agente y subir los docs;
+   * `existing` = solo cargar a Supabase (el store ya existe en OpenAI).
+   */
+  mode: "create" | "existing";
+  products: CatalogProductInput[];
+  filename?: string | null;
 }

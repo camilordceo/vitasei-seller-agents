@@ -38,6 +38,151 @@ export interface CatalogLoadRequest {
   products: CatalogProductInput[];
 }
 
+/** Formato de JSON de catálogo detectado. */
+export type CatalogJsonFormat = "canonical" | "bubble" | "unknown";
+
+export interface NormalizeResult {
+  products: CatalogProductInput[];
+  format: CatalogJsonFormat;
+  /** Problemas estructurales (no es arreglo, vacío, formato desconocido, item no-objeto). */
+  errors: string[];
+}
+
+/**
+ * Normaliza un JSON de catálogo a `CatalogProductInput[]`. Acepta dos formatos:
+ *  - **canónico** del sistema (`sku`, `name`, `price`, ...).
+ *  - **export tipo Bubble** (`ID`, `Titulo`, `Descripcion`, `Precio`,
+ *    `PrecioConDescuento`, `Imagenes`, `Categoria`, ...).
+ *
+ * Decisión de negocio: el precio oficial es `PrecioConDescuento` (con fallback a
+ * `Precio`); el precio de lista, % y ahorro quedan en `metadata`.
+ *
+ * Puro y sin dependencias server-only → también corre en el cliente para preview.
+ * La validación fuerte (SKU único/presente, name, price>=0) la hace `validateCatalog`.
+ */
+export function normalizeCatalogJson(raw: unknown): NormalizeResult {
+  if (!Array.isArray(raw)) {
+    return { products: [], format: "unknown", errors: ["El JSON debe ser un arreglo de productos."] };
+  }
+  if (raw.length === 0) {
+    return { products: [], format: "unknown", errors: ["El JSON no trae productos."] };
+  }
+
+  const format = detectCatalogFormat(raw);
+  if (format === "unknown") {
+    return {
+      products: [],
+      format,
+      errors: [
+        "Formato no reconocido: cada producto debe traer `sku`+`name` (canónico) o `ID`+`Titulo` (export).",
+      ],
+    };
+  }
+
+  const errors: string[] = [];
+  const products: CatalogProductInput[] = [];
+
+  raw.forEach((item, i) => {
+    if (!item || typeof item !== "object") {
+      errors.push(`producto[${i}]: no es un objeto.`);
+      return;
+    }
+    const o = item as Record<string, unknown>;
+    products.push(format === "bubble" ? mapBubbleProduct(o) : mapCanonicalProduct(o));
+  });
+
+  return { products, format, errors };
+}
+
+/** Detecta el formato mirando el primer objeto del arreglo. */
+function detectCatalogFormat(raw: unknown[]): CatalogJsonFormat {
+  const first = raw.find((x) => x && typeof x === "object") as Record<string, unknown> | undefined;
+  if (!first) return "unknown";
+  if ("sku" in first || "name" in first) return "canonical";
+  if ("ID" in first || "Titulo" in first) return "bubble";
+  return "unknown";
+}
+
+/** Mapea un item del export Bubble a la forma canónica. */
+function mapBubbleProduct(o: Record<string, unknown>): CatalogProductInput {
+  const metadata = compactRecord({
+    categoria: str(o["Categoria"]),
+    precio_lista: parseCOP(o["Precio"]),
+    precio_con_descuento: parseCOP(o["PrecioConDescuento"]),
+    descuento: str(o["PorcentajeDescuento"]),
+    ahorro: parseCOP(o["Ahorro"]),
+    link_producto: str(o["Link_producto"]),
+    empresa: str(o["Empresa"]),
+  });
+  return {
+    sku: str(o["ID"]) ?? "",
+    name: str(o["Titulo"]) ?? "",
+    description: str(o["Descripcion"]),
+    // Precio oficial = con descuento; si no viene, el de lista.
+    price: parseCOP(o["PrecioConDescuento"]) ?? parseCOP(o["Precio"]),
+    currency: "COP",
+    in_stock: stockFromEstado(str(o["Estado"])),
+    image_url: firstNonEmpty(str(o["Imagenes"]), str(o["ImageURL"]), str(o["Imagen"])),
+    metadata,
+  };
+}
+
+/** Passthrough del formato canónico con coerción defensiva. */
+function mapCanonicalProduct(o: Record<string, unknown>): CatalogProductInput {
+  const rawMeta = o["metadata"];
+  return {
+    sku: str(o["sku"]) ?? "",
+    name: str(o["name"]) ?? "",
+    description: str(o["description"]),
+    price: typeof o["price"] === "number" ? o["price"] : parseCOP(o["price"]),
+    currency: str(o["currency"]) ?? "COP",
+    in_stock: typeof o["in_stock"] === "boolean" ? o["in_stock"] : true,
+    image_url: str(o["image_url"]),
+    image_base64: str(o["image_base64"]),
+    image_content_type: str(o["image_content_type"]),
+    metadata: rawMeta && typeof rawMeta === "object" ? (rawMeta as Record<string, unknown>) : undefined,
+  };
+}
+
+/** Convierte un precio ("245900", "$196.700", 196700) a número; null si no hay dígitos. */
+export function parseCOP(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v !== "string") return null;
+  const digits = v.replace(/[^\d]/g, ""); // quita $, puntos de miles, %, espacios
+  if (!digits) return null;
+  const n = Number(digits);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Disponibilidad a partir del texto de `Estado` (vacío/desconocido → en stock). */
+function stockFromEstado(estado: string | null): boolean {
+  if (!estado) return true;
+  const e = estado.toLowerCase();
+  return !(e.includes("agotado") || e.includes("sin stock") || e.includes("no disponible"));
+}
+
+/** Primer valor string no vacío (o null). */
+function firstNonEmpty(...vals: Array<string | null>): string | null {
+  for (const v of vals) if (v) return v;
+  return null;
+}
+
+/** String recortado o null (coacciona números/otros a string). */
+function str(v: unknown): string | null {
+  if (v == null) return null;
+  const t = (typeof v === "string" ? v : String(v)).trim();
+  return t.length > 0 ? t : null;
+}
+
+/** Quita claves con valor null/undefined/"" de un objeto de metadata. */
+function compactRecord(o: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (v !== null && v !== undefined && v !== "") out[k] = v;
+  }
+  return out;
+}
+
 /** Producto normalizado y validado, listo para el pipeline. */
 export interface NormalizedProduct {
   sku: string;
