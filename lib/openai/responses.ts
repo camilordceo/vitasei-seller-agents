@@ -47,6 +47,28 @@ export interface GeneratedReply {
   responseId: string;
   text: string;
   usage: TokenUsage | null;
+  /**
+   * `true` si el `previous_response_id` no se pudo usar (de otra cuenta/proyecto
+   * o expirado) y se regeneró SIN encadenar. Ocurre, sobre todo, al rotar la
+   * `OPENAI_API_KEY` a otra cuenta: los IDs viejos dejan de existir. Ver ADR-0025.
+   */
+  chainReset: boolean;
+}
+
+/**
+ * ¿El error de `responses.create` es un `previous_response_id` que OpenAI no
+ * encuentra? Pasa al migrar de cuenta/proyecto (los `resp_...` no son
+ * portables) o cuando el id expiró. No confundir con otros 404 (modelo, vector
+ * store): si el reintento SIN cadena vuelve a fallar, el error real se propaga.
+ */
+function isMissingPreviousResponse(e: unknown): boolean {
+  const err = e as { status?: number; message?: string } | undefined;
+  const msg = (err?.message ?? "").toLowerCase();
+  return (
+    err?.status === 404 ||
+    (msg.includes("previous response") && msg.includes("not found")) ||
+    (msg.includes("previous_response_id") && msg.includes("not found"))
+  );
 }
 
 export async function generateReply(
@@ -63,14 +85,33 @@ export async function generateReply(
       ]
     : undefined;
 
-  const response = await openai.responses.create({
-    model: params.model,
-    instructions: params.systemPrompt,
-    input: buildResponsesInput(params.input, params.imageDataUrls),
-    previous_response_id: params.previousResponseId ?? undefined,
-    tools,
-    temperature: params.temperature,
-  });
+  const createWith = (previousResponseId: string | undefined) =>
+    openai.responses.create({
+      model: params.model,
+      instructions: params.systemPrompt,
+      input: buildResponsesInput(params.input, params.imageDataUrls),
+      previous_response_id: previousResponseId,
+      tools,
+      temperature: params.temperature,
+    });
+
+  const prev = params.previousResponseId ?? undefined;
+  let response: Awaited<ReturnType<typeof createWith>>;
+  let chainReset = false;
+  try {
+    response = await createWith(prev);
+  } catch (e) {
+    // Cadena rota (p.ej. al migrar la API key a otra cuenta): el historial
+    // canónico está en Supabase — `previous_response_id` es solo conveniencia —,
+    // así que reintentamos SIN encadenar. El caller persiste el NUEVO id, con lo
+    // que la conversación se auto-recupera desde el siguiente turno. Ver ADR-0025.
+    if (prev && isMissingPreviousResponse(e)) {
+      response = await createWith(undefined);
+      chainReset = true;
+    } else {
+      throw e;
+    }
+  }
 
   const u = response.usage as
     | { input_tokens?: number; output_tokens?: number; total_tokens?: number }
@@ -83,5 +124,5 @@ export async function generateReply(
       }
     : null;
 
-  return { responseId: response.id, text: response.output_text ?? "", usage };
+  return { responseId: response.id, text: response.output_text ?? "", usage, chainReset };
 }

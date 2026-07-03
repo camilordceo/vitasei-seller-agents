@@ -584,6 +584,18 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     maxNumResults: env.FILE_SEARCH_MAX_RESULTS,
   });
 
+  // La cadena (`previous_response_id`) se rompió y se regeneró sin encadenar
+  // —típico al migrar la API key a otra cuenta—. Lo dejamos trazado; el
+  // `openai_previous_response_id` se sobrescribe abajo con el id nuevo (válido),
+  // así que la conversación se recupera sola desde el próximo turno. Ver ADR-0025.
+  if (gen.chainReset) {
+    await supabase.from("events_log").insert({
+      conversation_id: conversationId,
+      type: "chain_reset",
+      payload: { staleResponseId: previousResponseId } as unknown as Json,
+    });
+  }
+
   // Parsear tags + cleanText (puro) y guardar el outbound + encadenar.
   const parsed = parseReply(gen.text);
 

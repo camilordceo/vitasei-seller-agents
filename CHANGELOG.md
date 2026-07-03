@@ -13,6 +13,13 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Fixed
+- **El bot dejaba de responder en conversaciones abiertas al migrar de cuenta OpenAI**: el
+  encadenamiento por `previous_response_id` usaba IDs de la cuenta vieja (no portables), así que
+  con la `OPENAI_API_KEY` nueva `responses.create` daba 404 y la respuesta se caía en silencio.
+  Ahora `generateReply` **reintenta sin encadenar** cuando el id no existe (`chainReset`), el
+  caller persiste el id nuevo y la conversación se auto-recupera desde el siguiente turno —sin
+  perder clientes ni tocar la DB a mano—. Se traza con el evento `chain_reset`. (`lib/openai/
+  responses.ts`, `lib/agent/processMessage.ts`, tests en `lib/openai/responses.test.ts`, ADR-0025).
 - **file_search encontraba solo docs de producto (envíos quedaban fuera)**: la llamada fijaba
   `max_num_results: 5`, así que un archivo "aparte" en el vector store —p.ej. las **tarifas de
   envío**— podía no entrar al top-K frente a decenas de documentos de producto (en el playground,

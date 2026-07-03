@@ -10,6 +10,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./", import.meta.url)),
+      // `server-only` lanza fuera de un Server Component; en tests lo
+      // neutralizamos para poder unit-testear módulos server que lo importan
+      // como guard (p.ej. `lib/openai/responses.ts`).
+      "server-only": fileURLToPath(new URL("./test/server-only.stub.ts", import.meta.url)),
     },
   },
   test: {
