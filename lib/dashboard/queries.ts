@@ -87,15 +87,43 @@ export interface ConversationRow {
   aiPaused: boolean;
   lastActivity: string | null;
   lastMessage: string | null;
+  /** ¿La conversación tiene al menos un pedido (`orders`)? */
+  hasOrder: boolean;
+  /** Estado del pedido más reciente (para el badge de la lista). null si no tiene. */
+  orderStatus: OrderStatus | null;
 }
 
-export async function getRecentConversations(limit = 30): Promise<ConversationRow[]> {
+export interface ConversationFilters {
+  limit?: number;
+  /** Filtra por estado de la conversación. */
+  status?: ConversationStatus;
+  /** true = solo con pedido · false = solo sin pedido · undefined = todas. */
+  hasOrder?: boolean;
+  /** Ventana de actividad reciente en días (por `updated_at`). undefined = sin límite. */
+  sinceDays?: number;
+}
+
+export async function getRecentConversations(
+  opts: ConversationFilters = {},
+): Promise<ConversationRow[]> {
+  const limit = opts.limit ?? 30;
   const supabase = createServiceClient();
-  const { data: convos, error } = await supabase
+
+  let q = supabase
     .from("conversations")
     .select("id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(limit);
+    .order("updated_at", { ascending: false });
+  if (opts.status) q = q.eq("status", opts.status);
+  if (opts.sinceDays != null) {
+    const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
+    q = q.gte("updated_at", since);
+  }
+  // El filtro "con/sin pedido" se resuelve en JS (requiere cruzar con `orders`),
+  // así que traemos un margen mayor para no quedarnos cortos tras filtrar.
+  // Volumen v1 bajo → aceptable; si crece, mover a una vista/RPC en Postgres.
+  q = q.limit(opts.hasOrder == null ? limit : Math.max(limit * 5, 200));
+
+  const { data: convos, error } = await q;
   if (error) throw new Error(`getRecentConversations: ${error.message}`);
 
   const rows = convos ?? [];
@@ -104,16 +132,22 @@ export async function getRecentConversations(limit = 30): Promise<ConversationRo
   const contactIds = [...new Set(rows.map((r) => r.contact_id))];
   const convoIds = rows.map((r) => r.id);
 
-  const [contactsRes, msgsRes] = await Promise.all([
+  const [contactsRes, msgsRes, ordersRes] = await Promise.all([
     supabase.from("contacts").select("id, name, phone").in("id", contactIds),
     supabase
       .from("messages")
       .select("conversation_id, content, type, created_at")
       .in("conversation_id", convoIds)
       .order("created_at", { ascending: false }),
+    supabase
+      .from("orders")
+      .select("conversation_id, status, created_at")
+      .in("conversation_id", convoIds)
+      .order("created_at", { ascending: false }),
   ]);
   if (contactsRes.error) throw new Error(`getRecentConversations contacts: ${contactsRes.error.message}`);
   if (msgsRes.error) throw new Error(`getRecentConversations messages: ${msgsRes.error.message}`);
+  if (ordersRes.error) throw new Error(`getRecentConversations orders: ${ordersRes.error.message}`);
 
   const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
   const lastMsgByConvo = new Map<string, { content: string | null; type: MessageType }>();
@@ -122,10 +156,18 @@ export async function getRecentConversations(limit = 30): Promise<ConversationRo
       lastMsgByConvo.set(m.conversation_id, { content: m.content, type: m.type as MessageType });
     }
   }
+  // Estado del pedido más reciente por conversación (orders ya viene desc).
+  const orderByConvo = new Map<string, OrderStatus>();
+  for (const o of ordersRes.data ?? []) {
+    if (!orderByConvo.has(o.conversation_id)) {
+      orderByConvo.set(o.conversation_id, o.status as OrderStatus);
+    }
+  }
 
-  return rows.map((r) => {
+  let mapped: ConversationRow[] = rows.map((r) => {
     const c = contactById.get(r.contact_id);
     const lm = lastMsgByConvo.get(r.id);
+    const orderStatus = orderByConvo.get(r.id) ?? null;
     return {
       id: r.id,
       contactName: c?.name ?? null,
@@ -135,8 +177,15 @@ export async function getRecentConversations(limit = 30): Promise<ConversationRo
       aiPaused: r.ai_paused,
       lastActivity: r.last_inbound_at ?? r.updated_at,
       lastMessage: lm ? (lm.type === "text" ? lm.content : `[${lm.type}]`) : null,
+      hasOrder: orderStatus != null,
+      orderStatus,
     };
   });
+
+  if (opts.hasOrder === true) mapped = mapped.filter((r) => r.hasOrder);
+  else if (opts.hasOrder === false) mapped = mapped.filter((r) => !r.hasOrder);
+
+  return mapped.slice(0, limit);
 }
 
 // --- Retargets (seguimientos automáticos, ver docs/10) ---------------------

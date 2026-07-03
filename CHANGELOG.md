@@ -33,6 +33,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (v2). Tests reescritos en `lib/agent/tags.test.ts`. Docs 03/04 actualizadas.
 
 ### Added
+- **Filtros en la lista de Conversaciones**: la vista `/dashboard/conversations` ahora tiene
+  tres grupos de filtros combinables (vía query params, del lado del servidor, siguiendo el
+  patrón de Órdenes): **Fecha** por actividad reciente (Todo · 7 · 30 · 90 días, sobre
+  `updated_at`), **Pedido** (Todas · Con pedido · Sin pedido) y **Estado** (Activas · Con
+  logística · Cerradas), más un enlace "Limpiar filtros". Cada conversación con orden muestra
+  un badge **"Pedido"** (atenuado si el pedido está cancelado). `getRecentConversations` pasa a
+  recibir un objeto de opciones (`{ limit, status, hasOrder, sinceDays }`) y cruza con `orders`
+  para el badge y el filtro con/sin pedido. (`lib/dashboard/queries.ts`,
+  `app/dashboard/conversations/page.tsx`, `app/dashboard/ui.tsx`, `app/dashboard/page.tsx`).
 - **Multi-agente / multi-marca — enrutamiento dinámico por número (ver `docs/16`, ADR-0023)**:
   la plataforma pasa de "un agente" a "muchos agentes". Nueva tabla **`agents`** (migración
   **`0010_agents.sql`**): cada fila es una marca/número con su **enrutamiento** (`whatsapp_number`,

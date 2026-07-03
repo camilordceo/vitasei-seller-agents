@@ -26,7 +26,7 @@ const IconChip = (
 );
 
 export default async function DashboardPage() {
-  const [kpis, convos] = await Promise.all([getKpis(), getRecentConversations(8)]);
+  const [kpis, convos] = await Promise.all([getKpis(), getRecentConversations({ limit: 8 })]);
   const totalTokens = kpis.inputTokens + kpis.outputTokens;
 
   return (
