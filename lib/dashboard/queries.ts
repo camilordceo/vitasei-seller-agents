@@ -25,10 +25,10 @@ import type {
  * mover a vistas/RPC en Postgres.
  */
 
-// Placeholder de precios (USD por 1M tokens). Ajusta con el pricing real del
-// modelo cuando lo confirmes — hoy es solo para empezar a medir.
-const PRICE_INPUT_PER_1M = 2.5;
-const PRICE_OUTPUT_PER_1M = 10;
+// Precios de gpt-5-mini (USD por 1M tokens). Fuente: pricing OpenAI.
+// Si cambias de modelo, actualiza estos valores.
+const PRICE_INPUT_PER_1M = 0.25;
+const PRICE_OUTPUT_PER_1M = 2;
 
 export interface Kpis {
   totalSales: number;
@@ -52,11 +52,15 @@ function readUsage(payload: unknown): { inputTokens: number; outputTokens: numbe
   return { inputTokens: 0, outputTokens: 0 };
 }
 
+// Eventos que registran `usage` (tokens gpt-5-mini): respuesta normal, seguimiento
+// dinámico (retarget con IA) y extracción de la orden. TODOS suman al costo real.
+const TOKEN_EVENT_TYPES = ["reply_generated", "retarget_sent", "order_created"] as const;
+
 export async function getKpis(): Promise<Kpis> {
   const supabase = createServiceClient();
   const [ordersRes, eventsRes] = await Promise.all([
     supabase.from("orders").select("total, status"),
-    supabase.from("events_log").select("payload").eq("type", "reply_generated"),
+    supabase.from("events_log").select("payload").in("type", TOKEN_EVENT_TYPES as unknown as string[]),
   ]);
   if (ordersRes.error) throw new Error(`getKpis orders: ${ordersRes.error.message}`);
   if (eventsRes.error) throw new Error(`getKpis events: ${eventsRes.error.message}`);

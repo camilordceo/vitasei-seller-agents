@@ -1,5 +1,6 @@
 import "server-only";
 import type OpenAI from "openai";
+import type { TokenUsage } from "./responses";
 
 /**
  * Extracción estructurada de la orden al cerrar (`#orden-lista`) — Sprint 5.
@@ -77,11 +78,17 @@ A partir de la conversación, devuelve la orden en JSON según el schema:
 - notes: cualquier detalle relevante para logística.
 - NO inventes datos: lo que no esté en la conversación va como null.`;
 
+export interface ExtractOrderResult {
+  draft: OrderDraft;
+  /** Tokens consumidos por esta extracción (para el costo real del dashboard). */
+  usage: TokenUsage | null;
+}
+
 export async function extractOrder(
   openai: OpenAI,
   transcript: string,
   model: string,
-): Promise<OrderDraft> {
+): Promise<ExtractOrderResult> {
   const completion = await openai.chat.completions.create({
     model,
     messages: [
@@ -94,9 +101,20 @@ export async function extractOrder(
     },
   });
 
+  // chat.completions expone prompt/completion; lo mapeamos al mismo shape que
+  // Responses (input/output) para que el costo se sume igual en el dashboard.
+  const u = completion.usage;
+  const usage: TokenUsage | null = u
+    ? {
+        inputTokens: u.prompt_tokens ?? 0,
+        outputTokens: u.completion_tokens ?? 0,
+        totalTokens: u.total_tokens ?? 0,
+      }
+    : null;
+
   const content = completion.choices[0]?.message?.content ?? "{}";
   try {
-    return JSON.parse(content) as OrderDraft;
+    return { draft: JSON.parse(content) as OrderDraft, usage };
   } catch (e) {
     throw new Error(`extractOrder: JSON inválido (${(e as Error).message})`);
   }

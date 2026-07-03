@@ -666,7 +666,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     if (msgsErr) throw new Error(`create-order load messages: ${msgsErr.message}`);
 
     const transcript = buildTranscript((msgs ?? []) as TranscriptMessage[]);
-    const draft = await extractOrder(openai, transcript, agent.model);
+    const { draft, usage: extractUsage } = await extractOrder(openai, transcript, agent.model);
 
     const { data: convRow } = await supabase
       .from("conversations")
@@ -716,7 +716,13 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     await supabase.from("events_log").insert({
       conversation_id: conversationId,
       type: "order_created",
-      payload: { orderId: order.id, method, items: draft.items.length, total } as unknown as Json,
+      payload: {
+        orderId: order.id,
+        method,
+        items: draft.items.length,
+        total,
+        usage: extractUsage, // tokens de la extracción → costo real del dashboard
+      } as unknown as Json,
     });
 
     // Compró → cancela las reactivaciones pendientes (7d/15d). Best-effort.

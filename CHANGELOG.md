@@ -13,6 +13,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Changed
+- **Costo de tokens real y completo**: el KPI "Costo de tokens" del dashboard usa el pricing real
+  de gpt-5-mini ($0.25/1M input, $2/1M output) en vez del placeholder anterior (2.5/10), y ahora
+  suma **todas** las llamadas al modelo, no solo la respuesta normal: los seguimientos dinámicos
+  con IA (`retarget_sent`, que ya guardaban `usage`) y la extracción de la orden al cerrar
+  (`extractOrder` → `order_created.payload.usage`, antes no se contabilizaba). `getKpis` agrega el
+  `usage` de los tres tipos de evento. Las reactivaciones no consumen tokens (plantilla de WhatsApp,
+  costo fijo aparte). (`lib/dashboard/queries.ts`, `lib/openai/extractOrder.ts`,
+  `lib/agent/processMessage.ts`, `app/dashboard/page.tsx`).
 - **Dashboard más robusto**: el detalle de conversación muestra los **tags** que emitió la IA
   (`#ID...`, `#compra-contra-entrega`, etc.) como chips bajo cada mensaje; conversaciones
   borradas muestran una página amigable "ya no existe" (`not-found`) en vez de error; las
