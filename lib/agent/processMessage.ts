@@ -580,7 +580,6 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     imageDataUrls,
     vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
-    temperature: agent.temperature,
     maxNumResults: env.FILE_SEARCH_MAX_RESULTS,
   });
 

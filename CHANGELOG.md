@@ -13,6 +13,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Fixed
+- **El bot no respondía a NINGUNA conversación con gpt-5-mini (`temperature` no soportado)**: los
+  modelos GPT-5/o-series rechazan el parámetro `temperature` con un 400, así que cada respuesta se
+  caía. Se deja de enviar `temperature` a OpenAI (`responses.create` y su plumbing); `extractOrder`
+  nunca lo mandó. La columna/campo `temperature` del agente se conservan pero quedan sin uso.
+  (`lib/openai/responses.ts`, `lib/agent/processMessage.ts`, `lib/agent/retarget.ts`, ADR-0026).
 - **El bot dejaba de responder en conversaciones abiertas al migrar de cuenta OpenAI**: el
   encadenamiento por `previous_response_id` usaba IDs de la cuenta vieja (no portables), así que
   con la `OPENAI_API_KEY` nueva `responses.create` daba 404 y la respuesta se caía en silencio.

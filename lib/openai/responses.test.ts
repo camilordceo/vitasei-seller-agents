@@ -24,7 +24,6 @@ const baseParams = {
   systemPrompt: "eres un asesor",
   input: "¿cuánto vale el envío?",
   vectorStoreId: "vs_new",
-  temperature: 0.3,
 };
 
 describe("generateReply — encadenado normal", () => {
@@ -39,6 +38,13 @@ describe("generateReply — encadenado normal", () => {
     expect(gen.chainReset).toBe(false);
     expect(create).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0][0].previous_response_id).toBe("resp_prev");
+  });
+
+  it("NO manda temperature (gpt-5-mini/o-series la rechazan con 400)", async () => {
+    const create = vi.fn().mockResolvedValue(okResponse("resp_new"));
+    await generateReply(fakeOpenAI(create), baseParams);
+
+    expect(create.mock.calls[0][0]).not.toHaveProperty("temperature");
   });
 });
 

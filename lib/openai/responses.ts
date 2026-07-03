@@ -27,7 +27,8 @@ export interface GenerateReplyParams {
   vectorStoreId?: string | null;
   /** Para encadenar la conversación (si no hay, arranca limpio). */
   previousResponseId?: string | null;
-  temperature?: number;
+  // NOTA: no se manda `temperature`. Los modelos GPT-5/o-series solo aceptan la
+  // temperatura por defecto y devuelven 400 si se pasa una explícita. Ver ADR-0026.
   /**
    * Resultados de `file_search` (menos = menos tokens/latencia; más = más
    * recall). Default 20 (paridad con el playground de OpenAI): con 5, un archivo
@@ -92,7 +93,8 @@ export async function generateReply(
       input: buildResponsesInput(params.input, params.imageDataUrls),
       previous_response_id: previousResponseId,
       tools,
-      temperature: params.temperature,
+      // Sin `temperature`: gpt-5-mini y demás modelos GPT-5/o-series la rechazan
+      // (400 "Unsupported parameter"). Ver ADR-0026.
     });
 
   const prev = params.previousResponseId ?? undefined;

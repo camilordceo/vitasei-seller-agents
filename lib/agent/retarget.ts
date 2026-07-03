@@ -279,7 +279,6 @@ async function sendRetargetMessage(
     input: buildRetargetInstruction(row.stage as RetargetStage),
     vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
-    temperature: agent.temperature,
     maxNumResults: env.FILE_SEARCH_MAX_RESULTS,
   });
 
