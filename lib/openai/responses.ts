@@ -28,7 +28,12 @@ export interface GenerateReplyParams {
   /** Para encadenar la conversación (si no hay, arranca limpio). */
   previousResponseId?: string | null;
   temperature?: number;
-  /** Resultados de `file_search` (menos = menos tokens/latencia). */
+  /**
+   * Resultados de `file_search` (menos = menos tokens/latencia; más = más
+   * recall). Default 20 (paridad con el playground de OpenAI): con 5, un archivo
+   * "aparte" —p.ej. tarifas de envío— puede no entrar al top-K frente a decenas
+   * de docs de producto. Ver ADR-0024.
+   */
   maxNumResults?: number;
 }
 
@@ -53,7 +58,7 @@ export async function generateReply(
         {
           type: "file_search" as const,
           vector_store_ids: [params.vectorStoreId],
-          max_num_results: params.maxNumResults ?? 5,
+          max_num_results: params.maxNumResults ?? 20,
         },
       ]
     : undefined;

@@ -12,6 +12,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Fixed
+- **file_search encontraba solo docs de producto (envíos quedaban fuera)**: la llamada fijaba
+  `max_num_results: 5`, así que un archivo "aparte" en el vector store —p.ej. las **tarifas de
+  envío**— podía no entrar al top-K frente a decenas de documentos de producto (en el playground,
+  que usa 20, sí aparecía). Se sube el default a **20** (paridad con el playground) y se hace
+  configurable con `FILE_SEARCH_MAX_RESULTS`. Aplica a la respuesta normal y a los seguimientos.
+  (`lib/env.ts`, `lib/openai/responses.ts`, `lib/agent/processMessage.ts`, `lib/agent/retarget.ts`,
+  ADR-0024).
+
 ### Added
 - **Aviso de venta al dueño por WhatsApp**: cuando el agente cierra una orden (`#orden-lista`),
   envía un WhatsApp a `SALES_NOTIFY_PHONE` (default `573103565492`) con el número del cliente y el

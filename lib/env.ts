@@ -32,6 +32,16 @@ export const env = {
   get OPENAI_VECTOR_STORE_ID() {
     return optional("OPENAI_VECTOR_STORE_ID");
   },
+  // file_search: nº de fragmentos que OpenAI recupera del vector store por
+  // llamada. Con pocos resultados (5) un archivo "aparte" (p.ej. tarifas de
+  // envío) puede quedar fuera del top-K frente a decenas de docs de producto;
+  // el playground usa 20 por defecto (por eso ahí sí aparece). Default 20;
+  // subir da más recall a costa de tokens/latencia. Ver ADR-0024.
+  get FILE_SEARCH_MAX_RESULTS() {
+    const raw = optional("FILE_SEARCH_MAX_RESULTS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+  },
   // Transcripción de notas de voz (ver docs/15, ADR-0022). Whisper por defecto.
   get OPENAI_TRANSCRIBE_MODEL() {
     return optional("OPENAI_TRANSCRIBE_MODEL") ?? "whisper-1";

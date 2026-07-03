@@ -280,6 +280,7 @@ async function sendRetargetMessage(
     vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
     temperature: agent.temperature,
+    maxNumResults: env.FILE_SEARCH_MAX_RESULTS,
   });
 
   const parsed = parseReply(gen.text);

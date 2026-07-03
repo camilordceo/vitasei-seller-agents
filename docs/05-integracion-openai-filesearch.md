@@ -25,7 +25,7 @@ const response = await openai.responses.create({
   tools: [{
     type: "file_search",
     vector_store_ids: [process.env.OPENAI_VECTOR_STORE_ID],
-    max_num_results: 5                         // baja tokens/latencia
+    max_num_results: 20                        // recall vs tokens (env FILE_SEARCH_MAX_RESULTS, ADR-0024)
   }],
   temperature: agentConfig.temperature
 });
