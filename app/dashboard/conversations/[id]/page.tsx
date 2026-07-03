@@ -4,6 +4,7 @@ import { getConversation } from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
 import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
 import { ChatPanel } from "./ChatPanel";
+import { RetryButton } from "./RetryButton";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,16 @@ export default async function ConversationDetailPage({ params }: { params: { id:
         <StatusPill status={convo.status} />
         <MethodPill method={convo.method} />
         {convo.aiPaused ? <ManualPill /> : null}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-start gap-2">
+          <RetryButton
+            conversationId={convo.id}
+            disabled={convo.status !== "active" || convo.aiPaused}
+            disabledReason={
+              convo.status !== "active"
+                ? "La conversación no está activa (handoff o cerrada)."
+                : "La IA está en pausa (modo manual). Reactívala para reintentar."
+            }
+          />
           <ManualToggle conversationId={convo.id} paused={convo.aiPaused} />
         </div>
       </div>

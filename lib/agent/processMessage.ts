@@ -353,6 +353,75 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
   }
 }
 
+/**
+ * REINTENTO MANUAL (desde el dashboard) — recupera una conversación donde el bot
+ * NO alcanzó a responder (p. ej. un error transitorio de OpenAI/Callbell dejó el
+ * primer mensaje del cliente sin contestar). Re-corre el MISMO camino que la
+ * respuesta automática (`gatherPendingContent` + `generateAndSend`) sobre los
+ * inbound pendientes, pero SIN el `sleep` del debounce ni la guarda de "quién
+ * gana": es una acción explícita del operador, se ejecuta ya.
+ *
+ * A diferencia de `runDebouncedReply` (best-effort, silencioso), **lanza** en cada
+ * caso en que no se puede reintentar para que el server action lo propague y el
+ * dashboard le muestre el motivo al operador. Ver docs/13, ADR-0027.
+ */
+export async function regenerateReply(conversationId: string): Promise<void> {
+  const supabase = createServiceClient();
+
+  const { data: convo, error: convoErr } = await supabase
+    .from("conversations")
+    .select("status, ai_paused, agent_id, contact_id, openai_previous_response_id, last_inbound_at")
+    .eq("id", conversationId)
+    .single();
+  if (convoErr) throw new Error(`regenerateReply load: ${convoErr.message}`);
+
+  if (convo.status !== "active")
+    throw new Error("La conversación no está activa (handoff o cerrada); no se puede reintentar.");
+  if (convo.ai_paused)
+    throw new Error("La IA está en pausa (modo manual). Reactívala para reintentar.");
+
+  // Teléfono del contacto para el envío por Callbell.
+  const { data: contact, error: contactErr } = await supabase
+    .from("contacts")
+    .select("phone")
+    .eq("id", convo.contact_id)
+    .maybeSingle();
+  if (contactErr) throw new Error(`regenerateReply contact: ${contactErr.message}`);
+  if (!contact?.phone) throw new Error("El contacto no tiene teléfono.");
+
+  // Config + credenciales del agente de la conversación (fallback al seed).
+  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+  if (!agent) throw new Error("No hay un agente configurado para esta conversación.");
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "retry_requested",
+    payload: { source: "dashboard" } as unknown as Json,
+  });
+
+  // Juntar los inbound sin responder (posteriores al último outbound). En el caso
+  // típico —el bot nunca respondió— no hay outbound, así que entra todo el hilo.
+  const openai = createOpenAIClient();
+  const content = await gatherPendingContent(supabase, openai, conversationId);
+  if (!content.hasContent)
+    throw new Error("No hay mensajes del cliente pendientes por responder.");
+
+  // Reintento = ahora: la ventana de 24h se evalúa contra el momento actual.
+  await generateAndSend({
+    supabase,
+    openai,
+    conversationId,
+    contactId: convo.contact_id,
+    phone: contact.phone,
+    receivedAt: Date.now(),
+    previousResponseId: convo.openai_previous_response_id,
+    lastInboundAt: convo.last_inbound_at,
+    agent,
+    input: content.text,
+    imageDataUrls: content.imageDataUrls,
+  });
+}
+
 interface PendingContent {
   /** Texto del turno: texto/captions + transcripciones de audio + notas de media. */
   text: string;

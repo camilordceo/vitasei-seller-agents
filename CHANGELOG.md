@@ -34,6 +34,17 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   ADR-0024).
 
 ### Added
+- **Botón "Reintentar IA" en el detalle de conversación**: si un error transitorio (OpenAI/Callbell)
+  dejó el mensaje del cliente sin contestar, el operador re-corre el **mismo** flujo automático con
+  un clic. Nueva función `regenerateReply` (`lib/agent/processMessage.ts`) que reutiliza
+  `gatherPendingContent` + `generateAndSend` sobre los inbound pendientes, **sin** el debounce ni la
+  guarda de "quién gana", y **lanza** un motivo legible si no se puede (conversación inactiva, IA en
+  pausa, sin nada pendiente). Server Action `retryReply` + client component `RetryButton`
+  (estado "Reintentando…"/error inline), en el header junto a "Pasar a manual"; deshabilitado en
+  pausa/handoff. Auditoría con el evento `retry_requested`. Sin migraciones ni envs nuevas.
+  (`lib/agent/processMessage.ts`, `app/dashboard/actions.ts`,
+  `app/dashboard/conversations/[id]/RetryButton.tsx`, `app/dashboard/conversations/[id]/page.tsx`,
+  ADR-0027).
 - **Aviso de venta al dueño por WhatsApp**: cuando el agente cierra una orden (`#orden-lista`),
   envía un WhatsApp a `SALES_NOTIFY_PHONE` (default `573103565492`) con el número del cliente y el
   resumen del pedido (método, total, productos con precio y datos de envío). Se envía por el mismo

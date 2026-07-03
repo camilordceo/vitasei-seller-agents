@@ -6,6 +6,7 @@ import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { sendText, credsFromEnv } from "@/lib/callbell/sender";
 import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
+import { regenerateReply } from "@/lib/agent/processMessage";
 import type { Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
 import type { AgentEditInput } from "./agents/types";
@@ -48,6 +49,22 @@ export async function setConversationManual(
     type: paused ? "manual_on" : "manual_off",
     payload: {} as unknown as Json,
   });
+
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Reintenta la respuesta de la IA para una conversación donde el bot no alcanzó a
+ * responder (p. ej. un error transitorio de OpenAI/Callbell). Re-corre el MISMO
+ * flujo automático sobre los mensajes pendientes del cliente (`regenerateReply`).
+ * Propaga el error a la UI si no se puede (conversación inactiva, en pausa o sin
+ * nada pendiente) para que el operador vea el motivo. Corre server-side con
+ * service-role, protegida por el Basic Auth del dashboard. Ver docs/13, ADR-0027.
+ */
+export async function retryReply(conversationId: string): Promise<void> {
+  await regenerateReply(conversationId);
 
   revalidatePath(`/dashboard/conversations/${conversationId}`);
   revalidatePath("/dashboard/conversations");
