@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getOrders } from "@/lib/dashboard/queries";
 import { OrderList } from "../ui";
+import { NewOrderButton } from "./NewOrderButton";
 import type { OrderStatus } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
@@ -31,15 +32,18 @@ export default async function OrdersPage({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between gap-2">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Órdenes</h1>
           <p className="text-sm text-slate-500">
-            Transacciones creadas por el agente. Ábrelas para ver o corregir los datos.
+            Transacciones creadas por el agente. Ábrelas para ver o corregir los datos, o crea una
+            orden manual.
           </p>
         </div>
-        <span className="text-sm text-slate-400">{orders.length}</span>
+        <span className="shrink-0 text-sm text-slate-400">{orders.length}</span>
       </div>
+
+      <NewOrderButton />
 
       <nav className="flex flex-wrap gap-2">
         {FILTERS.map((f) => {

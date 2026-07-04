@@ -161,6 +161,145 @@ export async function saveOrder(orderId: string, input: OrderEditInput): Promise
 }
 
 /**
+ * Crea una orden EN BLANCO para una conversación existente y devuelve su id para
+ * que el dashboard abra el editor. Sirve para registrar a mano una venta que el
+ * agente no cerró (p. ej. cerró sin `#orden-lista`). **Idempotente**: si la
+ * conversación ya tiene orden, devuelve esa (no duplica). Nace en `pending_handoff`
+ * con el método de la conversación; ítems/envío/total se completan en el editor.
+ * Cuenta en métricas apenas exista (salvo que se marque Cancelada). Ver docs/12, ADR-0032.
+ */
+export async function createOrderForConversation(conversationId: string): Promise<string> {
+  const supabase = createServiceClient();
+
+  const { data: convo, error: convoErr } = await supabase
+    .from("conversations")
+    .select("contact_id, fulfillment_method")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (convoErr) throw new Error(`createOrderForConversation convo: ${convoErr.message}`);
+  if (!convo) throw new Error("La conversación no existe.");
+
+  // Idempotencia: si ya hay orden en esta conversación, abre esa (no se duplica).
+  const { data: existing, error: existErr } = await supabase
+    .from("orders")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existErr) throw new Error(`createOrderForConversation existing: ${existErr.message}`);
+  if (existing) return existing.id;
+
+  const { data: order, error: ordErr } = await supabase
+    .from("orders")
+    .insert({
+      conversation_id: conversationId,
+      contact_id: convo.contact_id,
+      status: "pending_handoff",
+      fulfillment_method: convo.fulfillment_method ?? "undecided",
+    })
+    .select("id")
+    .single();
+  if (ordErr) throw new Error(`createOrderForConversation insert: ${ordErr.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "order_manual_created",
+    payload: {
+      orderId: order.id,
+      source: "dashboard-conversation",
+      method: convo.fulfillment_method ?? "undecided",
+    } as unknown as Json,
+  });
+
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+  revalidatePath("/dashboard/orders");
+  revalidatePath("/dashboard/reports");
+  revalidatePath("/dashboard");
+  return order.id;
+}
+
+/**
+ * Crea una orden manual "de cero" (sección Órdenes) para registrar ventas que no
+ * pasaron por el bot (históricas, por teléfono, etc.) y verlas en métricas. Como
+ * toda orden necesita conversación + contacto (FKs NOT NULL), crea un contacto
+ * (reutilizado por teléfono si ya existe) y una conversación "manual"
+ * (`handed_off`) que la anclan. Devuelve el id de la orden para abrir el editor y
+ * completar ítems/envío/total. Ver docs/12, ADR-0032.
+ */
+export async function createManualOrder(input: { name: string; phone: string }): Promise<string> {
+  const supabase = createServiceClient();
+  const name = textOrNull(input.name);
+  const phone = input.phone.replace(/\D/g, ""); // E.164 sin '+': solo dígitos
+
+  // Contacto: reutiliza por teléfono si viene y ya existe; si no, crea uno.
+  let contactId: string;
+  if (phone) {
+    const { data: existing, error: selErr } = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("phone", phone)
+      .maybeSingle();
+    if (selErr) throw new Error(`createManualOrder contact select: ${selErr.message}`);
+    if (existing) {
+      contactId = existing.id;
+      if (name) await supabase.from("contacts").update({ name }).eq("id", contactId);
+    } else {
+      const { data, error } = await supabase
+        .from("contacts")
+        .insert({ phone, name })
+        .select("id")
+        .single();
+      if (error) throw new Error(`createManualOrder contact insert: ${error.message}`);
+      contactId = data.id;
+    }
+  } else {
+    const { data, error } = await supabase
+      .from("contacts")
+      .insert({ phone: "", name })
+      .select("id")
+      .single();
+    if (error) throw new Error(`createManualOrder contact insert: ${error.message}`);
+    contactId = data.id;
+  }
+
+  // Conversación "manual" que ancla la orden (no pasa por el bot).
+  const { data: convo, error: convoErr } = await supabase
+    .from("conversations")
+    .insert({ contact_id: contactId, status: "handed_off", fulfillment_method: "undecided" })
+    .select("id")
+    .single();
+  if (convoErr) throw new Error(`createManualOrder conversation: ${convoErr.message}`);
+
+  const { data: order, error: ordErr } = await supabase
+    .from("orders")
+    .insert({
+      conversation_id: convo.id,
+      contact_id: contactId,
+      status: "pending_handoff",
+      fulfillment_method: "undecided",
+      shipping_name: name,
+      shipping_phone: phone || null,
+    })
+    .select("id")
+    .single();
+  if (ordErr) throw new Error(`createManualOrder order: ${ordErr.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: convo.id,
+    type: "order_manual_created",
+    payload: { orderId: order.id, source: "dashboard-standalone" } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/orders");
+  revalidatePath("/dashboard/conversations");
+  revalidatePath("/dashboard/reports");
+  revalidatePath("/dashboard");
+  return order.id;
+}
+
+/**
  * Actualiza la config de reactivaciones de UN AGENTE (ON/OFF + UUID de plantilla
  * día 7 y día 15). Las plantillas son por agente porque viven en su cuenta de
  * Callbell. Service-role, protegida por el Basic Auth. Ver docs/14, ADR-0030.

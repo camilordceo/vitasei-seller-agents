@@ -5,6 +5,7 @@ import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
 import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
 import { ChatPanel } from "./ChatPanel";
 import { RetryButton } from "./RetryButton";
+import { CreateOrderButton } from "./CreateOrderButton";
 
 export const dynamic = "force-dynamic";
 
@@ -126,7 +127,10 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                 </Link>
               </>
             ) : (
-              <p className="mt-2 text-sm text-slate-400">Sin orden todavía.</p>
+              <>
+                <p className="mt-2 text-sm text-slate-400">Sin orden todavía.</p>
+                <CreateOrderButton conversationId={convo.id} />
+              </>
             )}
           </div>
         </aside>

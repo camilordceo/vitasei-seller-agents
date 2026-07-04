@@ -12,6 +12,17 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Added
+- **Crear órdenes manualmente desde el dashboard** (`docs/12`, ADR-0032): botón **"Crear orden"**
+  en el panel de una conversación (cuando no tiene orden — p. ej. el bot cerró sin `#orden-lista`)
+  y botón **"Nueva orden"** en la sección Órdenes (para ventas que no pasaron por el bot o cargas
+  históricas). Crean una orden en blanco y abren el editor existente para completar ítems/envío/
+  total; quedan guardadas en Supabase y **cuentan en métricas** (KPIs y Reportes). `createOrderForConversation`
+  es idempotente (no duplica); `createManualOrder` crea/reutiliza contacto + conversación manual que
+  anclan la orden. Se registran con el evento `order_manual_created` (no altera el costo de IA).
+  (`app/dashboard/actions.ts`, `app/dashboard/conversations/[id]/CreateOrderButton.tsx`,
+  `app/dashboard/orders/NewOrderButton.tsx`).
+
 ### Fixed
 - **Ventas que se cerraban sin crear orden ni avisar al dueño (el modelo olvidaba `#orden-lista`)**:
   la orden solo se creaba con el tag `#orden-lista`. En un caso real el bot cerró la venta (confirmó
