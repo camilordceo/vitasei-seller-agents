@@ -27,6 +27,7 @@ import {
   buildSaleNotification,
   buildTranscript,
   computeOrderTotal,
+  isPurchaseConfirmation,
   normalizeOrderItem,
   resolveFulfillmentMethod,
   type TranscriptMessage,
@@ -760,9 +761,48 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       .eq("id", conversationId);
   }
 
-  // #orden-lista → extraer la orden (completion aparte) y crearla antes del handoff.
+  // RED DE SEGURIDAD (ADR-0031): a veces el modelo CIERRA la venta (confirma el
+  // pedido, agradece la compra) pero olvida `#orden-lista` y solo emite
+  // `#compra-contra-entrega`/`#addi` → la orden nunca se creaba ni se avisaba.
+  // Si el texto que ve el cliente es un cierre confirmado Y el método ya está
+  // decidido en la conversación, inferimos la orden. Estricto a propósito para
+  // no disparar al arrancar la recolección de datos. NO fuerza handoff (menor
+  // radio de impacto si el heurístico se equivoca): solo crea la orden + avisa.
+  let inferredClose = false;
+  if (!parsed.tags.ordenLista && !parsed.tags.humano && isPurchaseConfirmation(parsed.cleanText)) {
+    const { data: convMethodRow } = await supabase
+      .from("conversations")
+      .select("fulfillment_method")
+      .eq("id", conversationId)
+      .single();
+    const m = convMethodRow?.fulfillment_method ?? "undecided";
+    inferredClose = m === "cod" || m === "addi";
+    if (inferredClose) {
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "order_inferred",
+        payload: { method: m, reason: "confirmation-without-orden-lista" } as unknown as Json,
+      });
+    }
+  }
+
+  // Cerrar orden: explícito (`#orden-lista`) o inferido (cierre sin el tag).
+  const shouldCreateOrder = parsed.tags.ordenLista || inferredClose;
+
+  // Extraer la orden (completion aparte) y crearla. Idempotente: si la
+  // conversación ya tiene orden, la reutilizamos (no duplicamos ni re-avisamos).
   let orderId: string | null = null;
-  if (parsed.tags.ordenLista) {
+  if (shouldCreateOrder) {
+    const { data: existingOrder, error: existErr } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("conversation_id", conversationId)
+      .limit(1)
+      .maybeSingle();
+    if (existErr) throw new Error(`create-order existing check: ${existErr.message}`);
+    if (existingOrder) orderId = existingOrder.id;
+  }
+  if (shouldCreateOrder && !orderId) {
     const { data: msgs, error: msgsErr } = await supabase
       .from("messages")
       .select("direction, content")
@@ -827,6 +867,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         method,
         items: draft.items.length,
         total,
+        inferred: inferredClose && !parsed.tags.ordenLista, // creada por la red de seguridad
         usage: extractUsage, // tokens de la extracción → costo real del dashboard
       } as unknown as Json,
     });
@@ -983,9 +1024,10 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         orderId,
       } as unknown as Json,
     });
-  } else {
-    // Sin handoff y dentro de ventana (si no, ya habríamos vuelto arriba):
-    // agenda los seguimientos 1h/8h anclados al último inbound del cliente.
+  } else if (!orderId) {
+    // Sin handoff, sin orden capturada y dentro de ventana (si no, ya habríamos
+    // vuelto arriba): agenda los seguimientos 1h/8h anclados al último inbound.
+    // Si ya hay orden (cierre inferido), NO se agenda: la venta está cerrada.
     // Best-effort: un fallo aquí NO debe afectar la respuesta ya enviada.
     try {
       await scheduleRetargets(supabase, {

@@ -103,6 +103,31 @@ export function buildSaleNotification(info: {
   return lines.join("\n");
 }
 
+/** Quita acentos y baja a minúsculas para comparar frases sin depender de tildes. */
+function normalizeForMatch(text: string): string {
+  return (text ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+/**
+ * ¿El texto que ve el cliente es un CIERRE de compra confirmado? Red de seguridad
+ * para cuando el modelo cierra la venta pero olvida emitir `#orden-lista` (emite
+ * solo `#compra-contra-entrega`/`#addi`). Se usa junto con "método ya decidido"
+ * para inferir la orden. Frases DELIBERADAMENTE estrictas (solo aparecen en el
+ * cierre real, no al arrancar la recolección de datos). Ver ADR-0031.
+ */
+export function isPurchaseConfirmation(cleanText: string): boolean {
+  const t = normalizeForMatch(cleanText);
+  return (
+    /\bqued[oa]\s+confirmad[oa]\b/.test(t) || // "queda/quedó confirmado/a"
+    /\b(pedido|orden|compra)\s+(esta\s+)?confirmad[oa]\b/.test(t) || // "pedido (está) confirmado"
+    /\bconfirmad[oa]\s+(tu|el|la)\s+(pedido|orden|compra)\b/.test(t) || // "confirmada tu compra"
+    /\bgracias\s+por\s+tu\s+(compra|pedido)\b/.test(t) // "gracias por tu compra/pedido"
+  );
+}
+
 /** Normaliza un ítem del draft a los campos de `order_items` (sku no nulo). */
 export function normalizeOrderItem(it: OrderItemDraft): {
   sku: string;

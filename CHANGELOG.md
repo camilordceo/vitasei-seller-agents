@@ -13,6 +13,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Fixed
+- **Ventas que se cerraban sin crear orden ni avisar al dueño (el modelo olvidaba `#orden-lista`)**:
+  la orden solo se creaba con el tag `#orden-lista`. En un caso real el bot cerró la venta (confirmó
+  el pedido, agradeció la compra, tenía método + ítems + datos de envío) pero emitió
+  `#compra-contra-entrega` en vez de `#orden-lista`, que solo fija el método → "Sin orden todavía" y
+  sin aviso. Se agrega una **red de seguridad** en el backend: si el texto es un cierre confirmado
+  (`isPurchaseConfirmation`) y el método ya está decidido, se **infiere** la orden y se avisa al dueño
+  por el mismo camino, sin forzar handoff. La creación es **idempotente** (nunca duplica) y no agenda
+  retargets si ya hay orden. Se traza con `order_inferred` y `order_created.inferred`. Requiere además
+  endurecer el `system_prompt` en el dashboard. (`lib/agent/order.ts`, `lib/agent/processMessage.ts`,
+  tests en `lib/agent/order.test.ts`, ADR-0031).
 - **El bot no respondía a NINGUNA conversación con gpt-5-mini (`temperature` no soportado)**: los
   modelos GPT-5/o-series rechazan el parámetro `temperature` con un 400, así que cada respuesta se
   caía. Se deja de enviar `temperature` a OpenAI (`responses.create` y su plumbing); `extractOrder`

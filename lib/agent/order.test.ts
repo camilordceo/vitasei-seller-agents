@@ -3,6 +3,7 @@ import {
   buildSaleNotification,
   buildTranscript,
   computeOrderTotal,
+  isPurchaseConfirmation,
   normalizeOrderItem,
   normalizeQty,
   resolveFulfillmentMethod,
@@ -55,6 +56,40 @@ describe("resolveFulfillmentMethod", () => {
     expect(resolveFulfillmentMethod("undecided", "cod")).toBe("cod");
     expect(resolveFulfillmentMethod("undecided", "loquesea")).toBe("undecided");
     expect(resolveFulfillmentMethod("undecided", null)).toBe("undecided");
+  });
+});
+
+describe("isPurchaseConfirmation", () => {
+  it("detecta el cierre real (caso Maria Elena: cerró con #compra-contra-entrega, sin #orden-lista)", () => {
+    const cierre = [
+      "TOTAL: $139.800 COP",
+      "",
+      "Dirección de envío registrada: San Andresito, parqueadero local 35 — Manizales",
+      "Datos del destinatario: María Elena Cardona · C.C. 24.343.673 · 302 389 6495",
+      "",
+      "Procedo con el pago contra entrega y tu pedido queda confirmado.",
+      "",
+      "¡Listo! Desde ya cuentas conmigo como tu coach. ¡Gracias por tu compra, María Elena!",
+    ].join("\n");
+    expect(isPurchaseConfirmation(cierre)).toBe(true);
+  });
+
+  it("acepta variantes de confirmación (con y sin tildes)", () => {
+    expect(isPurchaseConfirmation("Tu pedido quedó confirmado")).toBe(true);
+    expect(isPurchaseConfirmation("Tu pedido esta confirmado")).toBe(true);
+    expect(isPurchaseConfirmation("Compra confirmada, ya la gestiono")).toBe(true);
+    expect(isPurchaseConfirmation("Gracias por tu pedido")).toBe(true);
+  });
+
+  it("NO dispara al arrancar la recolección de datos (falso positivo evitado)", () => {
+    expect(
+      isPurchaseConfirmation(
+        "¡Perfecto! Para tu compra contra entrega necesito tu nombre, dirección y ciudad.",
+      ),
+    ).toBe(false);
+    expect(isPurchaseConfirmation("¿Confirmas que quieres 2 unidades?")).toBe(false);
+    expect(isPurchaseConfirmation("Claro, con gusto te ayudo. ¿Algo más?")).toBe(false);
+    expect(isPurchaseConfirmation("")).toBe(false);
   });
 });
 
