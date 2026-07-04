@@ -33,6 +33,9 @@ export type RetargetDecision =
 
 /**
  * Decide qué hacer con un seguimiento vencido, sin I/O:
+ *  - la conversación ya tiene compra (orden no cancelada) → cancel. NUNCA le
+ *    escribimos "¿sigues ahí?" a alguien que ya compró. Guarda a prueba de fallos
+ *    aunque un camino de creación de orden olvide cancelar sus retargets.
  *  - conversación no activa (handoff/cerrada) → cancel.
  *  - en modo manual (un humano la tomó) → cancel.
  *  - el cliente respondió después de agendar (`last_inbound_at` cambió) → cancel.
@@ -47,7 +50,11 @@ export function evaluateRetarget(p: {
   anchorInboundAt: string | null;
   previousResponseId: string | null;
   now: number;
+  /** ¿La conversación ya tiene una orden no cancelada? (compra). */
+  hasOrder?: boolean;
 }): RetargetDecision {
+  if (p.hasOrder) return { action: "cancel", reason: "purchased" };
+
   if (p.status !== "active") return { action: "cancel", reason: `conversation-${p.status}` };
 
   if (p.aiPaused) return { action: "cancel", reason: "manual-mode" };

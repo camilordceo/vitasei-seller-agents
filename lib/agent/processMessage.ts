@@ -872,7 +872,17 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       } as unknown as Json,
     });
 
-    // Compró → cancela las reactivaciones pendientes (7d/15d). Best-effort.
+    // Compró → cancela seguimientos (1h/8h) y reactivaciones (7/15d) pendientes.
+    // No queremos "¿sigues ahí?" tras una venta. Best-effort: un fallo aquí NUNCA
+    // rompe el flujo del pedido (y el worker igual cancela por la guarda de compra).
+    try {
+      await cancelScheduledRetargets(supabase, conversationId, "converted");
+    } catch (e) {
+      console.error(
+        "[generateAndSend] cancel retargets failed:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
     try {
       await cancelScheduledReactivations(supabase, conversationId, "converted");
     } catch (e) {

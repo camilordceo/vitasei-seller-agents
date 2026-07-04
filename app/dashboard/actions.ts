@@ -202,6 +202,14 @@ export async function createOrderForConversation(conversationId: string): Promis
     .single();
   if (ordErr) throw new Error(`createOrderForConversation insert: ${ordErr.message}`);
 
+  // Compró → cancela seguimientos pendientes (no "¿sigues ahí?" tras una venta).
+  // Best-effort: el worker igual cancela por la guarda de compra si esto falla.
+  try {
+    await cancelScheduledRetargets(supabase, conversationId, "converted");
+  } catch {
+    // no-op
+  }
+
   await supabase.from("events_log").insert({
     conversation_id: conversationId,
     type: "order_manual_created",

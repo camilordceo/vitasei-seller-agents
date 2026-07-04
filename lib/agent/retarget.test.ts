@@ -33,6 +33,19 @@ describe("evaluateRetarget", () => {
     expect(evaluateRetarget(base)).toEqual({ action: "send" });
   });
 
+  it("cancela si la conversación ya tiene compra (orden no cancelada)", () => {
+    expect(evaluateRetarget({ ...base, hasOrder: true })).toEqual({
+      action: "cancel",
+      reason: "purchased",
+    });
+  });
+
+  it("la guarda de compra manda: cancela aunque todo lo demás diga 'send'", () => {
+    // `base` es un caso de "send"; con compra debe cancelar igual.
+    expect(evaluateRetarget(base)).toEqual({ action: "send" });
+    expect(evaluateRetarget({ ...base, hasOrder: true }).action).toBe("cancel");
+  });
+
   it("cancela si la conversación ya no está activa (handoff/cerrada)", () => {
     expect(evaluateRetarget({ ...base, status: "handed_off" })).toEqual({
       action: "cancel",

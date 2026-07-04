@@ -24,6 +24,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `app/dashboard/orders/NewOrderButton.tsx`).
 
 ### Fixed
+- **Retargets ("¿sigues ahí?") que podían dispararse tras una compra**: al crear la orden se
+  cancelaban las reactivaciones (7/15d) pero **no** los seguimientos (1h/8h), y la creación
+  **manual** de orden desde el dashboard tampoco los cancelaba. Ahora, defensa en dos capas
+  (`ADR-0017`): (A) se cancelan los retargets al crear la orden — bot (`#orden-lista`/cierre
+  inferido) y `createOrderForConversation` del dashboard; (B) **guarda de compra** en el worker
+  del cron: antes de enviar, si la conversación tiene una orden **no cancelada**, el seguimiento
+  se cancela (`reason: "purchased"`) — a prueba de fallos aunque algún camino olvide cancelar.
+  (`lib/agent/processMessage.ts`, `lib/agent/retarget.ts`, `lib/agent/retargetPlan.ts`,
+  `app/dashboard/actions.ts`, tests en `lib/agent/retarget.test.ts`).
 - **Ventas que se cerraban sin crear orden ni avisar al dueño (el modelo olvidaba `#orden-lista`)**:
   la orden solo se creaba con el tag `#orden-lista`. En un caso real el bot cerró la venta (confirmó
   el pedido, agradeció la compra, tenía método + ítems + datos de envío) pero emitió

@@ -209,6 +209,15 @@ async function processRetargetRow(
     .single();
   if (error) throw new Error(`load-conversation: ${error.message}`);
 
+  // Guarda de compra: si la conversación ya tiene una orden NO cancelada, nunca
+  // enviamos el seguimiento (aunque algún camino olvidara cancelarlo al vender).
+  const { count: orderCount, error: orderErr } = await supabase
+    .from("orders")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", row.conversation_id)
+    .neq("status", "cancelled");
+  if (orderErr) throw new Error(`load-conversation-order: ${orderErr.message}`);
+
   const decision = evaluateRetarget({
     status: convo.status,
     aiPaused: convo.ai_paused,
@@ -216,6 +225,7 @@ async function processRetargetRow(
     anchorInboundAt: row.anchor_inbound_at,
     previousResponseId: convo.openai_previous_response_id,
     now,
+    hasOrder: (orderCount ?? 0) > 0,
   });
 
   if (decision.action !== "send") {
