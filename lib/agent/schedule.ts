@@ -2,26 +2,29 @@
  * Horario de encendido/apagado por agente — lógica PURA (sin I/O, sin `server-only`).
  *
  * Un agente puede programar cuándo está "activo" (respondiendo). El horario se
- * evalúa inline en el flujo (no hay cron que prenda/apague). Modelo UNIÓN: el
- * agente está activo si el momento cae en la ventana diaria O es un día completo
- * activo O es un festivo. `enabled` (columna aparte) sigue siendo el master manual;
- * esto solo gatea DENTRO de `enabled`. Ver ADR-0029.
+ * evalúa inline en el flujo (no hay cron que prenda/apague). Modelo POR DÍA: cada
+ * día de semana tiene su propia lista de franjas horarias (ej. lunes 20:00–23:00).
+ * El agente está activo si el momento cae en alguna franja del día O es un festivo.
+ * `enabled` (columna aparte) sigue siendo el master manual; esto solo gatea DENTRO
+ * de `enabled`. Ver ADR-0029 y ADR-0033.
  *
  * Al ser puro y client-safe, la misma función alimenta el preview "activo ahora"
  * en el editor del dashboard y el gate del backend.
  */
 
-/** Ventana diaria activa. Si `end` < `start`, cruza medianoche (ej. 20:00–08:00 = noche). */
+/** Franja horaria "HH:MM"–"HH:MM". Si `end` < `start`, cruza medianoche (ej. 20:00–08:00). */
 export interface ScheduleWindow {
   start: string; // "HH:MM"
   end: string; // "HH:MM"
 }
 
 export interface AgentSchedule {
-  /** Ventana diaria (misma hora todos los días). null = sin ventana. */
-  window: ScheduleWindow | null;
-  /** Días de semana activos TODO el día (0=Dom … 6=Sáb). Ej. [0] = domingos. */
-  fullWeekdays: number[];
+  /**
+   * Franjas activas POR día de semana. Índice 0=Dom … 6=Sáb (como `Date.getDay()`).
+   * Cada día es una lista de rangos "HH:MM". Lista vacía = ese día apagado.
+   * Siempre tiene longitud 7 (lo garantiza `parseAgentSchedule`).
+   */
+  days: ScheduleWindow[][];
   /** Fechas activas TODO el día, "YYYY-MM-DD" (festivos). */
   holidays: string[];
 }
@@ -35,37 +38,82 @@ export interface ScheduledAgent {
 
 export const DEFAULT_TIMEZONE = "America/Bogota";
 
-const EMPTY_SCHEDULE: AgentSchedule = { window: null, fullWeekdays: [], holidays: [] };
+/** Franja de día completo (medianoche a medianoche). `24:00` = fin del día. */
+export const FULL_DAY: ScheduleWindow = { start: "00:00", end: "24:00" };
+
+/** Semana vacía (7 días sin franjas) — punto de partida para el editor. */
+export function emptyWeek(): ScheduleWindow[][] {
+  return [[], [], [], [], [], [], []];
+}
+
+/** ¿La franja es un día completo (00:00–24:00)? Útil para el editor. */
+export function isFullDayWindow(w: ScheduleWindow): boolean {
+  return parseTimeToMinutes(w.start) === 0 && parseTimeToMinutes(w.end) === 1440;
+}
+
+/** Valida y normaliza un objeto suelto a `ScheduleWindow`, o null si es inválido. */
+function parseWindow(raw: unknown): ScheduleWindow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const start = (raw as Record<string, unknown>).start;
+  const end = (raw as Record<string, unknown>).end;
+  if (typeof start !== "string" || typeof end !== "string") return null;
+  const s = start.trim();
+  const e = end.trim();
+  if (!s || !e || parseTimeToMinutes(s) == null || parseTimeToMinutes(e) == null) return null;
+  return { start: s, end: e };
+}
+
+/** Normaliza las fechas de festivos ("YYYY-MM-DD"). */
+function parseHolidays(raw: unknown): string[] {
+  return Array.isArray(raw)
+    ? raw
+        .filter((d): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim()))
+        .map((d) => d.trim())
+    : [];
+}
 
 /**
  * Normaliza el jsonb `schedule` a `AgentSchedule` con defaults seguros. Nunca lanza:
  * cualquier cosa rara colapsa a campos vacíos (y un schedule vacío ⇒ siempre activo).
+ *
+ * Compatible hacia atrás: si el jsonb trae el formato LEGACY (`window` global +
+ * `fullWeekdays`), lo MIGRA al modelo por día — la ventana global se aplica a todos
+ * los días y los `fullWeekdays` quedan como día completo. Ver ADR-0033.
  */
 export function parseAgentSchedule(raw: unknown): AgentSchedule {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...EMPTY_SCHEDULE };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { days: emptyWeek(), holidays: [] };
+  }
   const o = raw as Record<string, unknown>;
+  const holidays = parseHolidays(o.holidays);
 
-  let window: ScheduleWindow | null = null;
-  const w = o.window;
-  if (w && typeof w === "object") {
-    const start = (w as Record<string, unknown>).start;
-    const end = (w as Record<string, unknown>).end;
-    if (typeof start === "string" && typeof end === "string" && start.trim() && end.trim()) {
-      window = { start: start.trim(), end: end.trim() };
+  // Formato NUEVO: `days` = array de 7 listas de franjas.
+  if (Array.isArray(o.days)) {
+    const days = emptyWeek();
+    for (let d = 0; d < 7; d++) {
+      const list = o.days[d];
+      if (Array.isArray(list)) {
+        for (const w of list) {
+          const win = parseWindow(w);
+          if (win) days[d].push(win);
+        }
+      }
     }
+    return { days, holidays };
   }
 
+  // Formato LEGACY: ventana global + fullWeekdays → migrar a `days`.
+  const window = parseWindow(o.window);
   const fullWeekdays = Array.isArray(o.fullWeekdays)
-    ? [...new Set(o.fullWeekdays.filter((n): n is number => typeof n === "number" && n >= 0 && n <= 6))]
-    : [];
+    ? new Set(o.fullWeekdays.filter((n): n is number => typeof n === "number" && n >= 0 && n <= 6))
+    : new Set<number>();
 
-  const holidays = Array.isArray(o.holidays)
-    ? o.holidays
-        .filter((d): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim()))
-        .map((d) => d.trim())
-    : [];
-
-  return { window, fullWeekdays, holidays };
+  const days = emptyWeek();
+  for (let d = 0; d < 7; d++) {
+    if (fullWeekdays.has(d)) days[d].push({ ...FULL_DAY });
+    else if (window) days[d].push(window);
+  }
+  return { days, holidays };
 }
 
 const WEEKDAY_INDEX: Record<string, number> = {
@@ -108,17 +156,18 @@ function localParts(now: Date, tz: string): LocalParts {
   };
 }
 
-/** "HH:MM" → minutos desde medianoche, o null si es inválido. */
+/** "HH:MM" → minutos desde medianoche. Acepta "24:00" (1440 = fin del día). null si es inválido. */
 export function parseTimeToMinutes(s: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
   if (!m) return null;
   const h = Number(m[1]);
   const min = Number(m[2]);
+  if (h === 24 && min === 0) return 1440; // fin del día (límite superior de una franja)
   if (h > 23 || min > 59) return null;
   return h * 60 + min;
 }
 
-/** ¿`minutes` cae dentro de la ventana? Soporta cruce de medianoche (end < start). */
+/** ¿`minutes` cae dentro de la franja? Soporta cruce de medianoche (end < start). */
 function inWindow(window: ScheduleWindow, minutes: number): boolean {
   const start = parseTimeToMinutes(window.start);
   const end = parseTimeToMinutes(window.end);
@@ -127,13 +176,13 @@ function inWindow(window: ScheduleWindow, minutes: number): boolean {
 }
 
 /**
- * ¿El schedule está activo en `now` (zona `tz`)? Unión: ventana O día completo O
- * festivo. Fail-safe: un schedule vacío (sin nada configurado) ⇒ activo, para
- * nunca silenciar al bot por una configuración incompleta.
+ * ¿El schedule está activo en `now` (zona `tz`)? Activo si el momento cae en alguna
+ * franja del día correspondiente O es un festivo. Fail-safe: un schedule vacío (sin
+ * ninguna franja ni festivo) ⇒ activo, para nunca silenciar al bot por config incompleta.
  */
 export function isScheduleActiveAt(schedule: AgentSchedule, tz: string, now: Date): boolean {
-  const configured =
-    schedule.window != null || schedule.fullWeekdays.length > 0 || schedule.holidays.length > 0;
+  const hasDays = schedule.days.some((d) => d.length > 0);
+  const configured = hasDays || schedule.holidays.length > 0;
   if (!configured) return true;
 
   let parts: LocalParts;
@@ -144,8 +193,11 @@ export function isScheduleActiveAt(schedule: AgentSchedule, tz: string, now: Dat
   }
 
   if (schedule.holidays.includes(parts.dateKey)) return true;
-  if (schedule.fullWeekdays.includes(parts.weekday)) return true;
-  if (schedule.window && inWindow(schedule.window, parts.minutes)) return true;
+
+  const windows = schedule.days[parts.weekday] ?? [];
+  for (const w of windows) {
+    if (inWindow(w, parts.minutes)) return true;
+  }
   return false;
 }
 

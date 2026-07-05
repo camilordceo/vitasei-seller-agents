@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { emptyWeek } from "@/lib/agent/schedule";
 import { AgentEditor, type AgentEditorInitial } from "../AgentEditor";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ const BLANK: AgentEditorInitial = {
   enabled: true,
   scheduleEnabled: false,
   scheduleTimezone: "America/Bogota",
-  schedule: { window: null, fullWeekdays: [], holidays: [] },
+  schedule: { days: emptyWeek(), holidays: [] },
 };
 
 export default function NewAgentPage() {

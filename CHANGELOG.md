@@ -13,6 +13,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Horario por agente con franjas horarias por día** (ADR-0033): el horario pasa de una ventana
+  diaria única + días completos a **rangos de horas por día de semana** (ej. lunes 20:00–23:00, o
+  &ldquo;Todo el día&rdquo; los fines de semana) — para no perder ventas en noches y fines de
+  semana. `AgentSchedule` es ahora `{ days, holidays }` (7 listas de franjas). Editor por día en el
+  agente (`WeekScheduleEditor`) con &ldquo;+ Franja / Todo el día / Copiar a todos / Apagar&rdquo;.
+  **Compatible hacia atrás**: `parseAgentSchedule` migra al vuelo los horarios legacy
+  (`window` + `fullWeekdays`) sin tocar la base de datos. (`lib/agent/schedule.ts`,
+  `app/dashboard/agents/WeekScheduleEditor.tsx`, `app/dashboard/agents/AgentEditor.tsx`,
+  tests en `lib/agent/schedule.test.ts`).
 - **Crear órdenes manualmente desde el dashboard** (`docs/12`, ADR-0032): botón **"Crear orden"**
   en el panel de una conversación (cuando no tiene orden — p. ej. el bot cerró sin `#orden-lista`)
   y botón **"Nueva orden"** en la sección Órdenes (para ventas que no pasaron por el bot o cargas

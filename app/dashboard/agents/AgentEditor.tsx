@@ -15,7 +15,9 @@ import {
   COLOMBIA_HOLIDAYS_2026,
   DEFAULT_TIMEZONE,
   type AgentSchedule,
+  type ScheduleWindow,
 } from "@/lib/agent/schedule";
+import { WeekScheduleEditor } from "./WeekScheduleEditor";
 import type { AgentEditInput } from "./types";
 
 const inputCls =
@@ -24,9 +26,6 @@ const monoCls = `${inputCls} font-mono`;
 const labelCls = "mb-1 block text-xs font-medium text-slate-600";
 
 type CatalogMode = "create" | "existing";
-
-/** Etiquetas de días de semana (0=Dom … 6=Sáb), como los devuelve `Date.getDay()`. */
-const WEEKDAY_LABELS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
 export interface AgentEditorInitial {
   name: string;
@@ -81,33 +80,21 @@ export function AgentEditor({
   const [systemPrompt, setSystemPrompt] = useState(initial.systemPrompt);
   const [enabled, setEnabled] = useState(initial.enabled);
 
-  // Horario (encendido/apagado)
+  // Horario (encendido/apagado) — franjas por día. Ver ADR-0033.
   const [scheduleEnabled, setScheduleEnabled] = useState(initial.scheduleEnabled);
   const [scheduleTimezone, setScheduleTimezone] = useState(
     initial.scheduleTimezone || DEFAULT_TIMEZONE,
   );
-  const [useWindow, setUseWindow] = useState(initial.schedule.window != null);
-  const [windowStart, setWindowStart] = useState(initial.schedule.window?.start ?? "20:00");
-  const [windowEnd, setWindowEnd] = useState(initial.schedule.window?.end ?? "08:00");
-  const [fullWeekdays, setFullWeekdays] = useState<number[]>(initial.schedule.fullWeekdays);
+  const [days, setDays] = useState<ScheduleWindow[][]>(initial.schedule.days);
   const [holidaysText, setHolidaysText] = useState(initial.schedule.holidays.join("\n"));
 
   const buildSchedule = (): AgentSchedule => ({
-    window:
-      useWindow && windowStart.trim() && windowEnd.trim()
-        ? { start: windowStart.trim(), end: windowEnd.trim() }
-        : null,
-    fullWeekdays: [...fullWeekdays].sort((a, b) => a - b),
+    days,
     holidays: holidaysText
       .split(/[\n,]+/)
       .map((s) => s.trim())
       .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s)),
   });
-
-  const toggleWeekday = (d: number) => {
-    dirty();
-    setFullWeekdays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]));
-  };
 
   // Preview "activo ahora" (misma función pura que usa el backend).
   const activeNow = isAgentActiveNow({
@@ -561,83 +548,23 @@ export function AgentEditor({
             </div>
 
             <div>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={useWindow}
-                  onChange={(e) => {
-                    dirty();
-                    setUseWindow(e.target.checked);
-                  }}
-                  className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-                />
-                Ventana diaria activa
-              </label>
-              {useWindow ? (
-                <div className="mt-2 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="wstart" className={labelCls}>
-                      Enciende a las
-                    </label>
-                    <input
-                      id="wstart"
-                      type="time"
-                      value={windowStart}
-                      onChange={(e) => {
-                        dirty();
-                        setWindowStart(e.target.value);
-                      }}
-                      className={inputCls}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="wend" className={labelCls}>
-                      Apaga a las
-                    </label>
-                    <input
-                      id="wend"
-                      type="time"
-                      value={windowEnd}
-                      onChange={(e) => {
-                        dirty();
-                        setWindowEnd(e.target.value);
-                      }}
-                      className={inputCls}
-                    />
-                  </div>
-                </div>
-              ) : null}
-              <p className="mt-1 text-xs text-slate-400">
-                Si la hora de apagado es menor que la de encendido, la ventana cruza la medianoche
-                (ej. 20:00–08:00 = toda la noche).
-              </p>
-            </div>
-
-            <div>
-              <span className={labelCls}>Días completos activos</span>
-              <div className="flex flex-wrap gap-1.5">
-                {WEEKDAY_LABELS.map((label, d) => {
-                  const on = fullWeekdays.includes(d);
-                  return (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => toggleWeekday(d)}
-                      aria-pressed={on}
-                      className={`rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
-                        on
-                          ? "border-slate-900 bg-slate-900 text-white"
-                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
+              <div className="mb-2">
+                <span className={labelCls}>Franjas horarias por día</span>
+                <p className="text-xs text-slate-400">
+                  Agrega las horas en que la IA responde cada día (ej. lunes 20:00–23:00, o
+                  &ldquo;Todo el día&rdquo; los fines de semana). Un día sin franjas queda apagado.
+                  Si <strong>no</strong> configuras ningún día ni festivo, el agente responde
+                  siempre. Para una franja que cruce la medianoche, pon la hora de apagado menor que
+                  la de encendido (ej. 20:00–08:00).
+                </p>
               </div>
-              <p className="mt-1 text-xs text-slate-400">
-                Estos días el agente está activo las 24 horas (ej. domingos).
-              </p>
+              <WeekScheduleEditor
+                days={days}
+                onChange={(d) => {
+                  dirty();
+                  setDays(d);
+                }}
+              />
             </div>
 
             <div>
