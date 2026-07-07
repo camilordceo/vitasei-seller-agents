@@ -13,6 +13,20 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Carritos abandonados de Hotmart** (ADR-0035): nuevo webhook `POST /api/webhooks/hotmart` que
+  recibe eventos de carrito abandonado (`PURCHASE_OUT_OF_SHOPPING_CART`) y **envía automáticamente
+  una plantilla de WhatsApp** vía Callbell para recuperar la venta. El flujo: Hotmart detecta
+  abandono → webhook extrae el teléfono del comprador (E.164 sin '+') → get-or-create de contacto
+  y conversación (con `source: "hotmart"`) → envía la plantilla configurada → guarda el mensaje
+  y abre la conversación para que el agente de IA continúe si el cliente responde. **Idempotente**
+  por `hotmart_event_id` (no reprocesa ni reenvía). Nueva tabla `hotmart_events` (trazabilidad +
+  dedup), nueva columna `conversations.source` (`whatsapp`/`hotmart`/`manual`/`other`). Envs:
+  `HOTMART_WEBHOOK_SECRET` (validación), `HOTMART_ABANDONED_CART_TEMPLATE_UUID` (plantilla
+  obligatoria), `HOTMART_AGENT_ID` (opcional, fallback al primer agente activo). Requiere aplicar
+  la migración `0013_hotmart_events.sql` y **crear/aprobar la plantilla en Callbell/WhatsApp**.
+  Eventos: `hotmart_webhook_received`, `hotmart_cart_abandoned`, `hotmart_template_sent`/`_failed`.
+  (`app/api/webhooks/hotmart/route.ts`, `lib/hotmart/types.ts`, `lib/hotmart/processEvent.ts`,
+  `lib/env.ts`, `lib/supabase/types.ts`, `docs/17-hotmart-carritos.md`).
 - **Solicitudes de llamada por `#llamada`** (ADR-0034): nuevo tag de flujo. Cuando el agente lo
   emite, el backend crea una **solicitud de llamada** (`call_requests`, estados pendiente/llamada/
   descartada) y **avisa al dueño** por WhatsApp (`CALLS_NOTIFY_PHONE`, default `573103565492`, por el

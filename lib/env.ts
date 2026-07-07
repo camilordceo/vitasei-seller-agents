@@ -154,6 +154,20 @@ export const env = {
     return optional("CATALOG_ADMIN_SECRET");
   },
 
+  // Hotmart — Carritos abandonados (ver docs/17-hotmart-carritos.md, ADR-0035)
+  // Secret para validar el webhook de Hotmart.
+  get HOTMART_WEBHOOK_SECRET() {
+    return optional("HOTMART_WEBHOOK_SECRET");
+  },
+  // UUID de la plantilla de WhatsApp para carrito abandonado (Callbell).
+  get HOTMART_ABANDONED_CART_TEMPLATE_UUID() {
+    return optional("HOTMART_ABANDONED_CART_TEMPLATE_UUID");
+  },
+  // ID del agente que maneja los eventos de Hotmart (opcional; fallback al primer agente activo).
+  get HOTMART_AGENT_ID() {
+    return optional("HOTMART_AGENT_ID");
+  },
+
   // Supabase
   get SUPABASE_URL() {
     return required("NEXT_PUBLIC_SUPABASE_URL");

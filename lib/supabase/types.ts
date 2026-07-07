@@ -33,6 +33,7 @@ export type RetargetStatus =
   | "cancelled"
   | "failed";
 export type CallRequestStatus = "pending" | "done" | "cancelled";
+export type ConversationSource = "whatsapp" | "hotmart" | "manual" | "other";
 
 export type Json =
   | string
@@ -81,6 +82,7 @@ export interface Database {
           status: ConversationStatus;
           fulfillment_method: FulfillmentMethod;
           ai_paused: boolean;
+          source: ConversationSource;
           openai_previous_response_id: string | null;
           assigned_team_uuid: string | null;
           last_inbound_at: string | null;
@@ -96,6 +98,7 @@ export interface Database {
           status?: ConversationStatus;
           fulfillment_method?: FulfillmentMethod;
           ai_paused?: boolean;
+          source?: ConversationSource;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
@@ -111,6 +114,7 @@ export interface Database {
           status?: ConversationStatus;
           fulfillment_method?: FulfillmentMethod;
           ai_paused?: boolean;
+          source?: ConversationSource;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
@@ -612,11 +616,72 @@ export interface Database {
         };
         Relationships: [];
       };
+      hotmart_events: {
+        Row: {
+          id: string;
+          hotmart_event_id: string;
+          event_type: string;
+          phone: string;
+          email: string | null;
+          buyer_name: string | null;
+          product_id: string | null;
+          product_name: string | null;
+          offer_code: string | null;
+          contact_id: string | null;
+          conversation_id: string | null;
+          agent_id: string | null;
+          message_sent: boolean;
+          message_uuid: string | null;
+          send_error: string | null;
+          raw_payload: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          hotmart_event_id: string;
+          event_type: string;
+          phone: string;
+          email?: string | null;
+          buyer_name?: string | null;
+          product_id?: string | null;
+          product_name?: string | null;
+          offer_code?: string | null;
+          contact_id?: string | null;
+          conversation_id?: string | null;
+          agent_id?: string | null;
+          message_sent?: boolean;
+          message_uuid?: string | null;
+          send_error?: string | null;
+          raw_payload: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          hotmart_event_id?: string;
+          event_type?: string;
+          phone?: string;
+          email?: string | null;
+          buyer_name?: string | null;
+          product_id?: string | null;
+          product_name?: string | null;
+          offer_code?: string | null;
+          contact_id?: string | null;
+          conversation_id?: string | null;
+          agent_id?: string | null;
+          message_sent?: boolean;
+          message_uuid?: string | null;
+          send_error?: string | null;
+          raw_payload?: Json;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
     Enums: {
       conversation_status: ConversationStatus;
+      conversation_source: ConversationSource;
       message_direction: MessageDirection;
       message_role: MessageRole;
       message_type: MessageType;
