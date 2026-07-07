@@ -32,6 +32,7 @@ import {
   resolveFulfillmentMethod,
   type TranscriptMessage,
 } from "@/lib/agent/order";
+import { buildCallRequestNotification } from "@/lib/agent/callRequest";
 import { env } from "@/lib/env";
 import type { Database, Json, MessageType } from "@/lib/supabase/types";
 
@@ -761,6 +762,26 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       .eq("id", conversationId);
   }
 
+  // #llamada → el cliente pidió que lo llamen. Crea la solicitud + avisa al dueño.
+  // Best-effort e INDEPENDIENTE del resto del flujo: no fuerza handoff ni apaga el
+  // bot (solo es una solicitud); un fallo aquí NUNCA rompe la respuesta. Ver ADR-0034.
+  if (parsed.tags.llamada) {
+    try {
+      await createCallRequestAndNotify(supabase, creds, {
+        conversationId,
+        contactId,
+        phone,
+        agentId: agent.id,
+        brand: agent.brand ?? agent.name,
+      });
+    } catch (e) {
+      console.error(
+        "[generateAndSend] call request failed:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
   // RED DE SEGURIDAD (ADR-0031): a veces el modelo CIERRA la venta (confirma el
   // pedido, agradece la compra) pero olvida `#orden-lista` y solo emite
   // `#compra-contra-entrega`/`#addi` → la orden nunca se creaba ni se avisaba.
@@ -1089,6 +1110,78 @@ async function sendProductImage(
     conversation_id: conversationId,
     type: "image_sent",
     payload: { sku: img.sku, uuid: sent.uuid, status: sent.status } as unknown as Json,
+  });
+}
+
+/**
+ * Crea una `call_requests` (cola de trabajo del equipo) y avisa al dueño por
+ * WhatsApp (`CALLS_NOTIFY_PHONE`) por el MISMO Callbell del agente. Idempotente:
+ * si la conversación ya tiene una solicitud PENDING, no crea otra ni re-avisa
+ * (respalda el índice parcial único de la migración 0012). Best-effort: loguea el
+ * desenlace y JAMÁS lanza (el llamador ya lo envuelve en try/catch). Ver ADR-0034.
+ */
+async function createCallRequestAndNotify(
+  supabase: DB,
+  creds: CallbellCreds,
+  info: {
+    conversationId: string;
+    contactId: string;
+    phone: string;
+    agentId: string;
+    brand: string | null;
+  },
+): Promise<void> {
+  const { conversationId, contactId, phone, agentId, brand } = info;
+
+  // Idempotencia: a lo sumo una solicitud viva (pending) por conversación.
+  const { data: existing } = await supabase
+    .from("call_requests")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .eq("status", "pending")
+    .limit(1)
+    .maybeSingle();
+  if (existing) return; // ya hay una pendiente → no duplicar ni re-avisar
+
+  const { data: created, error: insErr } = await supabase
+    .from("call_requests")
+    .insert({ conversation_id: conversationId, contact_id: contactId, agent_id: agentId, phone })
+    .select("id")
+    .single();
+  if (insErr) {
+    // Carrera con el índice único (dos ráfagas casi simultáneas): otra ya la creó.
+    console.error("[createCallRequestAndNotify] insert failed:", insErr.message);
+    return;
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "call_requested",
+    payload: { callRequestId: created.id, phone } as unknown as Json,
+  });
+
+  // Aviso al dueño (mismo caveat de ventana 24h que el aviso de venta).
+  const ownerPhone = env.CALLS_NOTIFY_PHONE;
+  if (!ownerPhone) return; // feature de aviso apagado (la solicitud igual quedó registrada)
+
+  const { data: contact } = await supabase
+    .from("contacts")
+    .select("name")
+    .eq("id", contactId)
+    .maybeSingle();
+
+  const text = buildCallRequestNotification({
+    clientPhone: phone,
+    contactName: contact?.name ?? null,
+    brand,
+  });
+  const sent = await sendText(creds, ownerPhone, text, {
+    metadata: { conversation_id: conversationId, call_request_notification: true },
+  });
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "call_request_notification_sent",
+    payload: { ownerPhone, callRequestId: created.id, uuid: sent.uuid } as unknown as Json,
   });
 }
 

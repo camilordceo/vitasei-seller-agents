@@ -27,6 +27,8 @@ export interface ParsedTags {
   ordenLista: boolean;
   /** `#humano` */
   humano: boolean;
+  /** `#llamada` — el cliente pidió que lo llamen. */
+  llamada: boolean;
   /** Tags crudos tal como se emitieron (para `messages.tags`). */
   raw: string[];
 }
@@ -45,6 +47,7 @@ const RE_ADDI = /^#addi$/;
 const RE_COD = /^#compra-contra-entrega$/;
 const RE_ORDEN = /^#orden-lista$/;
 const RE_HUMANO = /^#humano$/;
+const RE_LLAMADA = /^#llamada$/;
 
 /**
  * Extrae los `#ID` inline y los tags de flujo, y devuelve el texto limpio que
@@ -72,6 +75,7 @@ export function parseReply(output: string): ParsedReply {
   let cod = false;
   let ordenLista = false;
   let humano = false;
+  let llamada = false;
 
   for (const line of withoutIds.split(/\r?\n/)) {
     // Normaliza la línea para tolerar markdown: viñetas (-, *, •) y énfasis
@@ -93,6 +97,9 @@ export function parseReply(output: string): ParsedReply {
     } else if (RE_HUMANO.test(norm)) {
       humano = true;
       raw.push(norm);
+    } else if (RE_LLAMADA.test(norm)) {
+      llamada = true;
+      raw.push(norm);
     } else {
       kept.push(line);
     }
@@ -106,5 +113,5 @@ export function parseReply(output: string): ParsedReply {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return { cleanText, tags: { skus, addi, cod, ordenLista, humano, raw } };
+  return { cleanText, tags: { skus, addi, cod, ordenLista, humano, llamada, raw } };
 }

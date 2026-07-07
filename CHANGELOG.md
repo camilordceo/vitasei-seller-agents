@@ -13,6 +13,21 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Solicitudes de llamada por `#llamada`** (ADR-0034): nuevo tag de flujo. Cuando el agente lo
+  emite, el backend crea una **solicitud de llamada** (`call_requests`, estados pendiente/llamada/
+  descartada) y **avisa al dueño** por WhatsApp (`CALLS_NOTIFY_PHONE`, default `573103565492`, por el
+  mismo Callbell del agente). Es **independiente**: no fuerza handoff ni apaga el bot; idempotente
+  (una sola solicitud viva por conversación) y best-effort (nunca rompe la respuesta). Se registra con
+  `call_requested` / `call_request_notification_sent` (no altera el costo de IA). Sección nueva
+  **Llamadas** en el dashboard (`/dashboard/calls`) con filtros y acciones "Marcar llamado / Descartar
+  / Reabrir". Requiere aplicar la migración `0012_call_requests.sql` y **añadir la instrucción del tag
+  al prompt del agente** en el dashboard. (`supabase/migrations/0012_call_requests.sql`,
+  `lib/agent/tags.ts`, `lib/agent/callRequest.ts`, `lib/agent/processMessage.ts`,
+  `app/dashboard/calls/page.tsx`, `app/dashboard/ui.tsx`, `app/dashboard/actions.ts`,
+  `lib/dashboard/queries.ts`).
+- **Reorden de la página Retargets**: **Reactivaciones** (plantillas 7/15 días) pasa arriba y
+  **Retargets** (seguimientos 1h/8h) abajo, con la lista de números contactados primero.
+  (`app/dashboard/retargets/page.tsx`).
 - **Horario por agente con franjas horarias por día** (ADR-0033): el horario pasa de una ventana
   diaria única + días completos a **rangos de horas por día de semana** (ej. lunes 20:00–23:00, o
   &ldquo;Todo el día&rdquo; los fines de semana) — para no perder ventas en noches y fines de

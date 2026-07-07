@@ -30,11 +30,20 @@ describe("parseReply", () => {
     expect(tags.skus[0].startsWith("#ID")).toBe(true);
   });
 
-  it("detecta los tags de flujo (addi, cod, orden-lista, humano) en su línea", () => {
+  it("detecta los tags de flujo (addi, cod, orden-lista, humano, llamada) en su línea", () => {
     expect(parseReply("ok\n#addi").tags.addi).toBe(true);
     expect(parseReply("ok\n#compra-contra-entrega").tags.cod).toBe(true);
     expect(parseReply("listo\n#orden-lista").tags.ordenLista).toBe(true);
     expect(parseReply("te paso un asesor\n#humano").tags.humano).toBe(true);
+    expect(parseReply("con gusto te llamo\n#llamada").tags.llamada).toBe(true);
+  });
+
+  it("saca el #llamada del texto que ve el cliente (queda solo el mensaje)", () => {
+    const out = "¡Claro! Te llamo en un momento para ayudarte mejor.\n#llamada";
+    const { cleanText, tags } = parseReply(out);
+    expect(cleanText).toBe("¡Claro! Te llamo en un momento para ayudarte mejor.");
+    expect(tags.llamada).toBe(true);
+    expect(cleanText).not.toContain("#llamada");
   });
 
   it("extrae varios #ID de un mensaje real con listas y emojis, y deja el texto limpio", () => {
@@ -94,6 +103,7 @@ describe("parseReply", () => {
       cod: false,
       ordenLista: false,
       humano: false,
+      llamada: false,
       raw: [],
     });
   });

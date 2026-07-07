@@ -14,6 +14,7 @@ import {
   type SalesReport,
 } from "@/lib/dashboard/report";
 import type {
+  CallRequestStatus,
   ConversationStatus,
   FulfillmentMethod,
   MessageDirection,
@@ -615,6 +616,56 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
       unitPrice: it.unit_price,
     })),
   };
+}
+
+// --- Solicitudes de llamada (#llamada, ver ADR-0034) ------------------------
+
+export interface CallRequestRow {
+  id: string;
+  conversationId: string;
+  contactName: string | null;
+  phone: string;
+  note: string | null;
+  status: CallRequestStatus;
+  createdAt: string;
+}
+
+/** Solicitudes de llamada (opcionalmente filtradas por estado), recientes primero. */
+export async function getCallRequests(opts?: {
+  status?: CallRequestStatus;
+  limit?: number;
+}): Promise<CallRequestRow[]> {
+  const supabase = createServiceClient();
+  let q = supabase
+    .from("call_requests")
+    .select("id, conversation_id, contact_id, phone, note, status, created_at")
+    .order("created_at", { ascending: false })
+    .limit(opts?.limit ?? 200);
+  if (opts?.status) q = q.eq("status", opts.status);
+
+  const { data, error } = await q;
+  if (error) throw new Error(`getCallRequests: ${error.message}`);
+
+  const rows = data ?? [];
+  if (rows.length === 0) return [];
+
+  const contactIds = [...new Set(rows.map((r) => r.contact_id))];
+  const contactsRes = await supabase.from("contacts").select("id, name, phone").in("id", contactIds);
+  if (contactsRes.error) throw new Error(`getCallRequests contacts: ${contactsRes.error.message}`);
+  const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
+
+  return rows.map((r) => {
+    const c = contactById.get(r.contact_id);
+    return {
+      id: r.id,
+      conversationId: r.conversation_id,
+      contactName: c?.name ?? null,
+      phone: c?.phone ?? r.phone ?? "",
+      note: r.note,
+      status: r.status as CallRequestStatus,
+      createdAt: r.created_at,
+    };
+  });
 }
 
 // --- Reportes de ventas -----------------------------------------------------

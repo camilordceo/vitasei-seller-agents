@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type {
+  CallRequestRow,
   ConversationRow,
   OrderRow,
   ReactivationRow,
@@ -16,8 +17,9 @@ import {
   formatUsd,
   relativeTime,
 } from "@/lib/dashboard/format";
-import { setConversationManual } from "./actions";
+import { setCallRequestStatus, setConversationManual } from "./actions";
 import type {
+  CallRequestStatus,
   ConversationStatus,
   FulfillmentMethod,
   OrderStatus,
@@ -226,6 +228,110 @@ export function KpiCard({
       <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
       {sub ? <p className="mt-1 text-xs text-slate-500">{sub}</p> : null}
     </div>
+  );
+}
+
+// --- Solicitudes de llamada (#llamada) -------------------------------------
+
+const CALL_REQUEST_STATUS: Record<CallRequestStatus, { label: string; cls: string }> = {
+  pending: { label: "Pendiente", cls: "bg-amber-50 text-amber-700 ring-amber-600/20" },
+  done: { label: "Llamado", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  cancelled: { label: "Descartada", cls: "bg-slate-100 text-slate-500 ring-slate-400/20" },
+};
+
+export function CallRequestStatusPill({ status }: { status: CallRequestStatus }) {
+  const s = CALL_REQUEST_STATUS[status] ?? CALL_REQUEST_STATUS.cancelled;
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+/** Botones para cambiar el estado de una solicitud (Server Action vía <form action>). */
+function CallRequestActions({ id, status }: { id: string; status: CallRequestStatus }) {
+  const markDone = setCallRequestStatus.bind(null, id, "done");
+  const discard = setCallRequestStatus.bind(null, id, "cancelled");
+  const reopen = setCallRequestStatus.bind(null, id, "pending");
+
+  if (status === "pending") {
+    return (
+      <div className="flex items-center gap-2">
+        <form action={markDone}>
+          <button
+            type="submit"
+            className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Marcar llamado
+          </button>
+        </form>
+        <form action={discard}>
+          <button
+            type="submit"
+            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          >
+            Descartar
+          </button>
+        </form>
+      </div>
+    );
+  }
+  return (
+    <form action={reopen}>
+      <button
+        type="submit"
+        className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+      >
+        Reabrir
+      </button>
+    </form>
+  );
+}
+
+export function CallRequestList({ rows }: { rows: CallRequestRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+        <p className="text-sm text-slate-500">No hay solicitudes de llamada con este filtro.</p>
+        <p className="mt-1 text-xs text-slate-400">
+          Aparecen aquí cuando el agente detecta que el cliente pidió que lo llamen.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {rows.map((r) => (
+        <li key={r.id} className="flex items-center gap-3 px-4 py-3">
+          <Link
+            href={`/dashboard/conversations/${r.conversationId}`}
+            className="-mx-2 min-w-0 flex-1 rounded-md px-2 py-1 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-medium text-slate-900">
+                {r.contactName || r.phone || "Sin contacto"}
+              </span>
+              <CallRequestStatusPill status={r.status} />
+            </div>
+            <p className="mt-0.5 truncate text-sm text-slate-500">
+              {r.phone ? `+${r.phone}` : "Sin número"} · {formatDate(r.createdAt)}
+              {r.note ? ` · ${r.note}` : ""}
+            </p>
+          </Link>
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="hidden text-xs text-slate-400 sm:inline">
+              {relativeTime(r.createdAt)}
+            </span>
+            <CallRequestActions id={r.id} status={r.status} />
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -32,6 +32,7 @@ export type RetargetStatus =
   | "skipped"
   | "cancelled"
   | "failed";
+export type CallRequestStatus = "pending" | "done" | "cancelled";
 
 export type Json =
   | string
@@ -527,6 +528,42 @@ export interface Database {
         };
         Relationships: [];
       };
+      call_requests: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          contact_id: string;
+          agent_id: string | null;
+          phone: string;
+          note: string | null;
+          status: CallRequestStatus;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          conversation_id: string;
+          contact_id: string;
+          agent_id?: string | null;
+          phone: string;
+          note?: string | null;
+          status?: CallRequestStatus;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          conversation_id?: string;
+          contact_id?: string;
+          agent_id?: string | null;
+          phone?: string;
+          note?: string | null;
+          status?: CallRequestStatus;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       reactivations: {
         Row: {
           id: string;
@@ -586,6 +623,7 @@ export interface Database {
       fulfillment_method: FulfillmentMethod;
       order_status: OrderStatus;
       retarget_status: RetargetStatus;
+      call_request_status: CallRequestStatus;
     };
   };
 }

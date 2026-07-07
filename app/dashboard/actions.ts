@@ -8,7 +8,7 @@ import { sendText, credsFromEnv } from "@/lib/callbell/sender";
 import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
 import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
-import type { Json } from "@/lib/supabase/types";
+import type { CallRequestStatus, Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
 import type { AgentEditInput, AgentCatalogInput } from "./agents/types";
 
@@ -53,6 +53,35 @@ export async function setConversationManual(
 
   revalidatePath(`/dashboard/conversations/${conversationId}`);
   revalidatePath("/dashboard/conversations");
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Cambia el estado de una solicitud de llamada (pending → done / cancelled, o
+ * reabrir a pending). Loguea el cambio para auditoría y revalida la sección
+ * Llamadas. Ver ADR-0034.
+ */
+export async function setCallRequestStatus(
+  callRequestId: string,
+  status: CallRequestStatus,
+): Promise<void> {
+  const supabase = createServiceClient();
+
+  const { data, error } = await supabase
+    .from("call_requests")
+    .update({ status })
+    .eq("id", callRequestId)
+    .select("conversation_id")
+    .maybeSingle();
+  if (error) throw new Error(`setCallRequestStatus: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: data?.conversation_id ?? null,
+    type: "call_request_status_changed",
+    payload: { callRequestId, status } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/calls");
   revalidatePath("/dashboard");
 }
 

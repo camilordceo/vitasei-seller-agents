@@ -141,6 +141,14 @@ export const env = {
     return optional("SALES_NOTIFY_PHONE") ?? "573103565492";
   },
 
+  // Notificación al dueño cuando un cliente pide llamada (`#llamada`), E.164 sin
+  // '+'. Se envía por el MISMO Callbell del agente. Default al mismo número que
+  // el aviso de venta. Vacío ("") = apagado. Mismo caveat de ventana 24h que las
+  // ventas. Ver ADR-0034.
+  get CALLS_NOTIFY_PHONE() {
+    return optional("CALLS_NOTIFY_PHONE") ?? "573103565492";
+  },
+
   // Admin (operaciones internas como la carga de catálogo)
   get CATALOG_ADMIN_SECRET() {
     return optional("CATALOG_ADMIN_SECRET");
