@@ -571,40 +571,58 @@ export type Label = {
 
 /**
  * Obtiene todas las etiquetas disponibles para un agente (globales + las del agente).
+ * Resiliente: devuelve array vacío si la tabla no existe o hay error.
  */
 export async function getLabels(agentId?: string | null): Promise<Label[]> {
-  const supabase = createServiceClient();
+  try {
+    const supabase = createServiceClient();
 
-  let query = supabase.from("labels").select("id, name, color, agent_id").order("name");
+    let query = supabase.from("labels").select("id, name, color, agent_id").order("name");
 
-  if (agentId) {
-    // Globales (agent_id = null) + las de este agente
-    query = query.or(`agent_id.is.null,agent_id.eq.${agentId}`);
-  } else {
-    // Solo globales si no hay agente
-    query = query.is("agent_id", null);
+    if (agentId) {
+      // Globales (agent_id = null) + las de este agente
+      query = query.or(`agent_id.is.null,agent_id.eq.${agentId}`);
+    } else {
+      // Solo globales si no hay agente
+      query = query.is("agent_id", null);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("[getLabels] error:", error.message);
+      return [];
+    }
+    return (data ?? []) as Label[];
+  } catch (e) {
+    console.error("[getLabels] unexpected error:", e);
+    return [];
   }
-
-  const { data, error } = await query;
-  if (error) throw new Error(`getLabels: ${error.message}`);
-  return (data ?? []) as Label[];
 }
 
 /**
  * Obtiene las etiquetas de una conversación específica.
+ * Resiliente: devuelve array vacío si la tabla no existe o hay error.
  */
 export async function getConversationLabels(conversationId: string): Promise<Label[]> {
-  const supabase = createServiceClient();
+  try {
+    const supabase = createServiceClient();
 
-  const { data, error } = await supabase
-    .from("conversation_labels")
-    .select("label_id, labels(id, name, color, agent_id)")
-    .eq("conversation_id", conversationId);
+    const { data, error } = await supabase
+      .from("conversation_labels")
+      .select("label_id, labels(id, name, color, agent_id)")
+      .eq("conversation_id", conversationId);
 
-  if (error) throw new Error(`getConversationLabels: ${error.message}`);
+    if (error) {
+      console.error("[getConversationLabels] error:", error.message);
+      return [];
+    }
 
-  // eslint-disable-next-line
-  return (data ?? []).map((row: any) => row.labels).filter(Boolean) as Label[];
+    // eslint-disable-next-line
+    return (data ?? []).map((row: any) => row.labels).filter(Boolean) as Label[];
+  } catch (e) {
+    console.error("[getConversationLabels] unexpected error:", e);
+    return [];
+  }
 }
 
 /**
