@@ -13,6 +13,7 @@ import {
   type ConversionReport,
   type OrderFact,
   type SalesReport,
+  type TransactionFact,
 } from "@/lib/dashboard/report";
 import type {
   CallRequestStatus,
@@ -718,26 +719,28 @@ export async function getSalesReport(): Promise<SalesReport> {
 }
 
 /**
- * Embudo de conversión por ACTIVIDAD: en cada ventana (hoy/7/30 días) y por día,
- * cuántas conversaciones DISTINTAS tuvieron un mensaje del cliente (inbound) y
- * cuántas convirtieron (orden no cancelada). Antes se contaba por `created_at` de
- * la conversación, pero como la ingesta reutiliza una sola conversación por
- * contacto entre días, "Hoy" mostraba solo los leads nuevos (p. ej. 6) y no las
- * conversaciones reales atendidas (p. ej. 26). El `total` sí es histórico: todas
- * las conversaciones vs. las que convirtieron. Lógica pura en report.ts. Ver
- * ADR-0035. Volumen v1 bajo → se cuenta en JS (paginado).
+ * Embudo de conversión. Dos medidas por periodo (hoy/7/30 días) y por día:
+ *  - **Conversaciones** = conversaciones DISTINTAS con un mensaje del cliente
+ *    (inbound) en el periodo. Antes se contaba por `created_at` de la conversación,
+ *    pero como la ingesta reutiliza una sola conversación por contacto entre días,
+ *    "Hoy" mostraba solo los leads nuevos (6) y no las atendidas (26).
+ *  - **Transacciones** = órdenes NO canceladas por su `created_at` — la MISMA base
+ *    que "Órdenes generadas" (`getSalesReport`), para que ambos cuadros coincidan.
+ *    Antes se contaban por la actividad de la conversación (una compra vieja
+ *    aparecía "hoy" si el cliente volvía a escribir).
+ * `total` es histórico. Lógica pura en report.ts. Ver ADR-0035. Paginado.
  */
 export async function getConversionReport(): Promise<ConversionReport> {
   const supabase = createServiceClient();
-  // La actividad de las ventanas/gráfico solo mira los últimos 30 días.
+  // Las ventanas/gráfico solo miran los últimos 30 días.
   const sinceIso = new Date(Date.now() - 30 * DAY_MS).toISOString();
 
   const [convCountRes, orders, inbound] = await Promise.all([
-    // `total` histórico: # de conversaciones sin traer las filas (count exacto).
+    // `total` histórico de conversaciones: count exacto (sin traer filas).
     supabase.from("conversations").select("*", { count: "exact", head: true }),
-    // Órdenes (todas) para saber qué conversaciones convirtieron. Paginado.
+    // Órdenes (todas) para las transacciones — se filtran canceladas acá. Paginado.
     fetchAllRows(
-      (from, to) => supabase.from("orders").select("conversation_id, status").range(from, to),
+      (from, to) => supabase.from("orders").select("status, created_at").range(from, to),
       "getConversionReport orders",
     ),
     // Actividad: inbound de los últimos 30 días. Paginado.
@@ -755,21 +758,19 @@ export async function getConversionReport(): Promise<ConversionReport> {
   if (convCountRes.error)
     throw new Error(`getConversionReport conversations: ${convCountRes.error.message}`);
 
-  // Conversaciones que convirtieron = tienen alguna orden NO cancelada.
-  const converting = new Set<string>();
-  for (const o of orders) {
-    if (o.status !== "cancelled") converting.add(o.conversation_id);
-  }
-
-  const facts: ConversationActivityFact[] = inbound.map((m) => ({
+  const activity: ConversationActivityFact[] = inbound.map((m) => ({
     conversationId: m.conversation_id,
     createdAt: m.created_at,
-    converted: converting.has(m.conversation_id),
   }));
 
-  return summarizeConversationActivity(facts, {
+  // Transacciones = órdenes NO canceladas (misma base que "Órdenes generadas").
+  const transactions: TransactionFact[] = orders
+    .filter((o) => o.status !== "cancelled")
+    .map((o) => ({ createdAt: o.created_at }));
+
+  return summarizeConversationActivity(activity, transactions, {
     conversations: convCountRes.count ?? 0,
-    converted: converting.size,
+    transactions: transactions.length,
   });
 }
 

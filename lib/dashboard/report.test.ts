@@ -5,6 +5,7 @@ import {
   summarizeOrders,
   type ConversationActivityFact,
   type OrderFact,
+  type TransactionFact,
 } from "./report";
 
 // Ancla fija: 2026-07-02 15:00 UTC = 2026-07-02 10:00 en Bogota (UTC-5).
@@ -86,61 +87,79 @@ describe("summarizeOrders", () => {
 });
 
 describe("summarizeConversationActivity", () => {
-  // Actividad = un inbound del cliente. Distintas conversaciones: A, B, C, D.
-  const facts: ConversationActivityFact[] = [
-    // A: activa HOY (dos mensajes → debe contar una vez) y hace 3 días. Convirtió.
-    { conversationId: "A", createdAt: "2026-07-02T14:00:00Z", converted: true },
-    { conversationId: "A", createdAt: "2026-07-02T09:00:00Z", converted: true },
-    { conversationId: "A", createdAt: "2026-06-29T10:00:00Z", converted: true },
-    // B: activa HOY, no convirtió.
-    { conversationId: "B", createdAt: "2026-07-02T09:30:00Z", converted: false },
-    // C: activa hace 3 días, convirtió.
-    { conversationId: "C", createdAt: "2026-06-29T12:00:00Z", converted: true },
-    // D: activa hace 20 días, no convirtió.
-    { conversationId: "D", createdAt: "2026-06-12T12:00:00Z", converted: false },
+  // Actividad = un inbound del cliente. Conversaciones distintas: A, B, C, D.
+  const activity: ConversationActivityFact[] = [
+    // A: activa HOY (dos mensajes → cuenta una vez) y hace 3 días.
+    { conversationId: "A", createdAt: "2026-07-02T14:00:00Z" },
+    { conversationId: "A", createdAt: "2026-07-02T09:00:00Z" },
+    { conversationId: "A", createdAt: "2026-06-29T10:00:00Z" },
+    // B: activa HOY.
+    { conversationId: "B", createdAt: "2026-07-02T09:30:00Z" },
+    // C: activa hace 3 días.
+    { conversationId: "C", createdAt: "2026-06-29T12:00:00Z" },
+    // D: activa hace 20 días.
+    { conversationId: "D", createdAt: "2026-06-12T12:00:00Z" },
   ];
-  // total histórico se pasa aparte (no se deriva de la actividad).
-  const c = summarizeConversationActivity(facts, { conversations: 10, converted: 4 }, NOW);
+  // Transacciones = órdenes no canceladas, por su FECHA DE CREACIÓN (no la actividad).
+  const transactions: TransactionFact[] = [
+    { createdAt: "2026-07-02T11:00:00Z" }, // orden creada hoy
+    { createdAt: "2026-06-29T12:00:00Z" }, // orden creada hace 3 días
+    { createdAt: "2026-06-10T12:00:00Z" }, // hace 22 días (en 30d, fuera de los 14 del gráfico)
+  ];
+  // total histórico se pasa aparte.
+  const c = summarizeConversationActivity(activity, transactions, { conversations: 10, transactions: 3 }, NOW);
 
-  it("total: histórico inyectado (10 conversaciones, 4 transacciones, 40%)", () => {
-    expect(c.total).toEqual({ conversations: 10, transactions: 4, rate: 0.4 });
+  it("total: histórico inyectado (10 conversaciones, 3 transacciones, 30%)", () => {
+    expect(c.total).toEqual({ conversations: 10, transactions: 3, rate: 0.3 });
   });
 
-  it("hoy: A y B distintas (A cuenta una sola vez pese a 2 mensajes)", () => {
+  it("hoy: 2 conversaciones (A, B) y 1 transacción (orden creada hoy)", () => {
     expect(c.today).toEqual({ conversations: 2, transactions: 1, rate: 0.5 });
   });
 
-  it("7 días: A, B, C distintas; A y C convirtieron", () => {
+  it("7 días: 3 conversaciones (A, B, C) y 2 transacciones (hoy + hace 3 días)", () => {
     expect(c.last7.conversations).toBe(3);
     expect(c.last7.transactions).toBe(2);
     expect(c.last7.rate).toBeCloseTo(2 / 3, 5);
   });
 
-  it("30 días incluye las 4 conversaciones", () => {
-    expect(c.last30).toEqual({ conversations: 4, transactions: 2, rate: 0.5 });
+  it("30 días: 4 conversaciones y las 3 transacciones", () => {
+    expect(c.last30).toEqual({ conversations: 4, transactions: 3, rate: 0.75 });
   });
 
-  it("rate = 0 y ventanas vacías cuando no hay actividad ni total", () => {
-    const empty = summarizeConversationActivity([], { conversations: 0, converted: 0 }, NOW);
+  it("una compra vieja NO cuenta como transacción de hoy aunque la conversación esté activa hoy", () => {
+    // A está activa hoy pero su única orden asociada (si la hubiera) no se
+    // atribuye a hoy: las transacciones salen de la fecha de la orden, no del chat.
+    const soloActividad = summarizeConversationActivity(
+      [{ conversationId: "A", createdAt: "2026-07-02T14:00:00Z" }],
+      [{ createdAt: "2026-06-28T12:00:00Z" }], // orden de hace días
+      { conversations: 1, transactions: 1 },
+      NOW,
+    );
+    expect(soloActividad.today).toEqual({ conversations: 1, transactions: 0, rate: 0 });
+  });
+
+  it("rate = 0 y ventanas vacías cuando no hay nada", () => {
+    const empty = summarizeConversationActivity([], [], { conversations: 0, transactions: 0 }, NOW);
     expect(empty.total).toEqual({ conversations: 0, transactions: 0, rate: 0 });
     expect(empty.today).toEqual({ conversations: 0, transactions: 0, rate: 0 });
   });
 
-  it("perDay cuenta conversaciones activas distintas por día", () => {
+  it("perDay: conversaciones activas distintas + transacciones por fecha de orden", () => {
     expect(c.perDay).toHaveLength(14);
-    // Hoy: A + B activas; solo A convirtió.
+    // Hoy: A + B activas; 1 orden creada hoy.
     expect(c.perDay[0]).toEqual({
       date: "2026-07-02",
       conversations: 2,
       transactions: 1,
       rate: 0.5,
     });
-    // Hace 3 días: A y C activas, ambas convirtieron.
+    // Hace 3 días: A y C activas; 1 orden creada ese día.
     expect(c.perDay.find((x) => x.date === "2026-06-29")).toEqual({
       date: "2026-06-29",
       conversations: 2,
-      transactions: 2,
-      rate: 1,
+      transactions: 1,
+      rate: 0.5,
     });
   });
 });

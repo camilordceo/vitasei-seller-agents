@@ -30,15 +30,23 @@ igual de bajo. El equipo no puede confiar en la tasa de conversión si el denomi
   inbound. Es justo lo que ahora medimos.
 
 ## Solución
-- **Métrica por actividad:** en hoy / 7 / 30 días y en el gráfico por día, "Conversaciones" =
+- **Conversaciones por actividad:** en hoy / 7 / 30 días y en el gráfico por día, "Conversaciones" =
   conversaciones **distintas** con al menos un **inbound** (mensaje del cliente) en el periodo.
   Fuente: `messages` (`direction = inbound`), últimos 30 días. Dedup por `conversation_id`
   (una conversación activa varios días cuenta una vez por ventana, pero aparece en cada día).
-- **Transacciones:** de esas conversaciones activas, las que tienen orden **no cancelada**.
-  Tasa = transacciones / conversaciones (≤ 100 %).
-- **Total** = histórico (todas las conversaciones vs. las que convirtieron); no cambia.
+- **Transacciones por fecha de orden:** órdenes **no canceladas** contadas por su `created_at` —
+  la **misma fuente** que "Órdenes generadas por día" (`summarizeOrders`), para que ambos cuadros
+  coincidan. Antes se contaban por la actividad de la conversación, así que una compra vieja aparecía
+  como transacción "hoy" si el cliente volvía a escribir. Tasa = transacciones / conversaciones.
+- **Total** = histórico (todas las conversaciones vs. todas las órdenes no canceladas); no cambia.
 - **Paginación** (`fetchAllRows`, páginas de 1000) en las consultas de reportes.
-- **UI:** el subtítulo aclara que hoy/7/30 son actividad del periodo y Total es histórico.
+- **UI:** el subtítulo aclara qué es cada barra y que Total es histórico.
+
+### Segundo ajuste (transacciones)
+En la primera versión las transacciones se contaban por la conversación que convirtió y se
+atribuían al día de **actividad** de la conversación → una compra del 4 jul aparecía como "1 hoy"
+si el cliente volvía a escribir, sin cuadrar con el cuadro de órdenes. Se corrigió a **órdenes no
+canceladas por `orders.created_at`** (misma base que "Órdenes generadas"). Ver ADR-0035.
 
 ## Archivos
 - `lib/dashboard/report.ts` — nueva función pura `summarizeConversationActivity` (reemplaza

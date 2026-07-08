@@ -163,17 +163,22 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
 
 // --- Conversión (conversaciones ACTIVAS → transacciones) --------------------
 //
-// "Conversaciones" en las ventanas por tiempo (hoy/7/30 días) y en el gráfico
-// por día NO son las conversaciones CREADAS en ese periodo, sino las que
-// tuvieron ACTIVIDAD del cliente (al menos un mensaje inbound) en él. La ingesta
-// reutiliza UNA sola conversación activa por (contacto, agente) entre días
-// (`processMessage.ts`), así que su `created_at` es el primer contacto de siempre;
-// contar por `created_at` mostraba solo los leads NUEVOS del día (p. ej. 6),
-// no las conversaciones reales que se atendieron (p. ej. 26). Ver ADR-0035.
+// DOS medidas independientes por ventana (hoy/7/30 días) y por día:
 //
-// `total` sí es histórico: TODAS las conversaciones vs. las que convirtieron
-// (mismas cifras de siempre), porque un total de actividad de vida ≈ el total de
-// conversaciones. Se inyecta aparte para no traer todo el historial de mensajes.
+//  - "Conversaciones" = conversaciones DISTINTAS que tuvieron ACTIVIDAD del
+//    cliente (al menos un mensaje inbound) en el periodo. NO las creadas ese día:
+//    la ingesta reutiliza una conversación por (contacto, agente) entre días
+//    (`processMessage.ts`), así que su `created_at` es el primer contacto de
+//    siempre; contar por creación mostraba solo los leads nuevos (6, no 26).
+//
+//  - "Transacciones" = órdenes NO canceladas ubicadas por su FECHA DE CREACIÓN
+//    (`orders.created_at`) — EXACTAMENTE la misma fuente que "Órdenes generadas
+//    por día" (`summarizeOrders`). Antes se contaban por la actividad de la
+//    conversación (una compra del 4 jul aparecía "hoy" si el cliente volvía a
+//    escribir), lo que no cuadraba con el cuadro de órdenes. Ver ADR-0035.
+//
+// `total` es histórico: TODAS las conversaciones vs. TODAS las órdenes no
+// canceladas. Se inyecta aparte para no traer todo el historial.
 
 export interface ConversionWindow {
   conversations: number;
@@ -204,97 +209,85 @@ export interface ConversationActivityFact {
   conversationId: string;
   /** ISO del `created_at` del mensaje inbound. */
   createdAt: string;
-  /** true si la conversación tiene al menos una orden NO cancelada. */
-  converted: boolean;
+}
+
+/** Una transacción = una orden NO cancelada, ubicada por su fecha de creación. */
+export interface TransactionFact {
+  /** ISO del `created_at` de la orden (misma base que "Órdenes generadas"). */
+  createdAt: string;
 }
 
 function rate(transactions: number, conversations: number): number {
   return conversations > 0 ? transactions / conversations : 0;
 }
 
-/** conversaciones distintas + las que convirtieron, en 0..1. */
-function windowOf(conversations: Set<string>, transactions: Set<string>): ConversionWindow {
-  return {
-    conversations: conversations.size,
-    transactions: transactions.size,
-    rate: rate(transactions.size, conversations.size),
-  };
+function convWindow(conversations: number, transactions: number): ConversionWindow {
+  return { conversations, transactions, rate: rate(transactions, conversations) };
 }
 
 /**
- * Embudo de conversión basado en ACTIVIDAD. Para cada ventana (hoy/7/30 días) y
- * cada día (últimos 14) cuenta cuántas conversaciones DISTINTAS tuvieron un
- * inbound del cliente y cuántas de ellas convirtieron (orden no cancelada). Una
- * conversación activa varios días cuenta en cada día, pero UNA sola vez por
- * ventana (dedup por `conversationId`). `total` (histórico) se pasa aparte.
- * `nowMs` inyectable para tests.
+ * Embudo de conversión. Conversaciones = actividad inbound DISTINTA por periodo;
+ * transacciones = órdenes no canceladas por su `created_at` (misma base que el
+ * cuadro de órdenes). Una conversación activa varios días cuenta en cada día,
+ * pero UNA sola vez por ventana (dedup por `conversationId`). `total` (histórico)
+ * se pasa aparte. `nowMs` inyectable para tests.
  */
 export function summarizeConversationActivity(
-  facts: ConversationActivityFact[],
-  total: { conversations: number; converted: number },
+  activity: ConversationActivityFact[],
+  transactions: TransactionFact[],
+  total: { conversations: number; transactions: number },
   nowMs: number = Date.now(),
 ): ConversionReport {
+  // Conversaciones distintas por ventana/día (actividad inbound).
   const todayC = new Set<string>();
-  const todayT = new Set<string>();
   const last7C = new Set<string>();
-  const last7T = new Set<string>();
   const last30C = new Set<string>();
-  const last30T = new Set<string>();
 
   const dayKeys: string[] = [];
   const dayC = new Map<string, Set<string>>();
-  const dayT = new Map<string, Set<string>>();
+  const dayT = new Map<string, number>();
   for (let i = 0; i < 14; i++) {
     const key = bogotaDayKey(nowMs - i * DAY_MS);
     dayKeys.push(key);
     dayC.set(key, new Set());
-    dayT.set(key, new Set());
+    dayT.set(key, 0);
   }
   const todayKey = dayKeys[0];
 
-  for (const f of facts) {
-    const ms = Date.parse(f.createdAt);
+  for (const a of activity) {
+    const ms = Date.parse(a.createdAt);
     if (!Number.isFinite(ms)) continue;
-    const id = f.conversationId;
+    const id = a.conversationId;
     const key = bogotaDayKey(ms);
+    if (key === todayKey) todayC.add(id);
+    if (ms >= nowMs - 7 * DAY_MS) last7C.add(id);
+    if (ms >= nowMs - 30 * DAY_MS) last30C.add(id);
+    dayC.get(key)?.add(id);
+  }
 
-    if (key === todayKey) {
-      todayC.add(id);
-      if (f.converted) todayT.add(id);
-    }
-    if (ms >= nowMs - 7 * DAY_MS) {
-      last7C.add(id);
-      if (f.converted) last7T.add(id);
-    }
-    if (ms >= nowMs - 30 * DAY_MS) {
-      last30C.add(id);
-      if (f.converted) last30T.add(id);
-    }
-    const c = dayC.get(key);
-    if (c) {
-      c.add(id);
-      if (f.converted) dayT.get(key)!.add(id);
-    }
+  // Transacciones = órdenes no canceladas, contadas por su fecha de creación.
+  let todayT = 0;
+  let last7T = 0;
+  let last30T = 0;
+  for (const t of transactions) {
+    const ms = Date.parse(t.createdAt);
+    if (!Number.isFinite(ms)) continue;
+    const key = bogotaDayKey(ms);
+    if (key === todayKey) todayT += 1;
+    if (ms >= nowMs - 7 * DAY_MS) last7T += 1;
+    if (ms >= nowMs - 30 * DAY_MS) last30T += 1;
+    if (dayT.has(key)) dayT.set(key, (dayT.get(key) ?? 0) + 1);
   }
 
   return {
-    total: {
-      conversations: total.conversations,
-      transactions: total.converted,
-      rate: rate(total.converted, total.conversations),
-    },
-    today: windowOf(todayC, todayT),
-    last7: windowOf(last7C, last7T),
-    last30: windowOf(last30C, last30T),
-    perDay: dayKeys.map((k) => windowDay(k, dayC.get(k)!, dayT.get(k)!)),
-  };
-}
-
-function windowDay(date: string, conversations: Set<string>, transactions: Set<string>): ConversionDay {
-  return {
-    date,
-    conversations: conversations.size,
-    transactions: transactions.size,
-    rate: rate(transactions.size, conversations.size),
+    total: convWindow(total.conversations, total.transactions),
+    today: convWindow(todayC.size, todayT),
+    last7: convWindow(last7C.size, last7T),
+    last30: convWindow(last30C.size, last30T),
+    perDay: dayKeys.map((k) => {
+      const conversations = dayC.get(k)!.size;
+      const transactions = dayT.get(k) ?? 0;
+      return { date: k, conversations, transactions, rate: rate(transactions, conversations) };
+    }),
   };
 }

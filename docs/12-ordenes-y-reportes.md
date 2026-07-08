@@ -45,9 +45,10 @@ Agrega **todas** las órdenes (lógica pura `summarizeOrders` en `lib/dashboard/
   **conversaciones vs. transacciones** y **% de conversión**. En hoy/7/30 días y en el gráfico,
   "Conversaciones" = conversaciones **activas** (con al menos un mensaje inbound del cliente) en el
   periodo, **distintas** (no las creadas ese día: la ingesta reutiliza una conversación por contacto
-  entre días). "Total" es histórico (todas las conversaciones vs. las que convirtieron). Transacción
-  = orden no cancelada. Lógica pura `summarizeConversationActivity`; datos con `getConversionReport`
-  (paginado, sobre `messages` inbound). Ver **ADR-0035** y `docs/17`.
+  entre días). "Transacciones" = órdenes **no canceladas** por su `created_at` (la MISMA base que
+  "Órdenes generadas por día", para que coincidan). "Total" es histórico (todas las conversaciones
+  vs. todas las órdenes no canceladas). Lógica pura `summarizeConversationActivity`; datos con
+  `getConversionReport` (paginado, sobre `messages` inbound + `orders`). Ver **ADR-0035** y `docs/17`.
 - **Copiar resumen:** botón que copia un resumen en texto plano (incluye la conversión) para pegar
   en WhatsApp/Slack.
 

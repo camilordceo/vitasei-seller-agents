@@ -24,10 +24,14 @@ tope, la agregación en JS **subcuenta en silencio** (y sin `.order()` el recort
   **inbound** (el cliente escribió) en ese periodo. Fuente: tabla `messages` (`direction = inbound`),
   últimos 30 días. Una conversación activa varios días cuenta en cada día, pero **una sola vez por
   ventana** (dedup por `conversation_id`).
-- **`total` sigue siendo histórico**: todas las conversaciones vs. las que convirtieron (orden no
-  cancelada). Se inyecta como cifra aparte (count exacto) para no traer todo el historial de mensajes.
-- **Transacciones** = de las conversaciones activas en el periodo, cuántas tienen una orden no
-  cancelada. La tasa queda ≤ 100 %.
+- **`total` sigue siendo histórico**: todas las conversaciones vs. todas las órdenes no canceladas.
+  Se inyecta como cifra aparte (count exacto) para no traer todo el historial de mensajes.
+- **Transacciones** = órdenes **no canceladas** ubicadas por su **fecha de creación**
+  (`orders.created_at`) — EXACTAMENTE la misma fuente que "Órdenes generadas por día"
+  (`summarizeOrders`), para que ambos cuadros coincidan. **No** se cuentan por la actividad de la
+  conversación: antes, una compra del 4 de julio aparecía como transacción "hoy" si el cliente
+  volvía a escribir (y no cuadraba con el cuadro de órdenes). Con esto, "Transacciones · Hoy" = las
+  órdenes creadas hoy, no las de días previos.
 - **Nueva función pura** `summarizeConversationActivity` (reemplaza `summarizeConversion`), testeada.
 - **Paginación** (`fetchAllRows`, páginas de 1000) en `getConversionReport` (órdenes + inbound) y
   `getSalesReport` (órdenes), para no subcontar al pasar de 1000 filas.

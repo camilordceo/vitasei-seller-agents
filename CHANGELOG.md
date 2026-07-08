@@ -79,9 +79,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   26** en un día): el embudo contaba las conversaciones por su `created_at`, pero la ingesta reutiliza
   **una sola conversación activa por (contacto, agente)** entre días, así que "Hoy" solo veía los
   **leads nuevos**, no las conversaciones **atendidas**. Ahora hoy/7/30 días y el gráfico por día
-  cuentan conversaciones **activas** (con inbound del cliente en el periodo), **distintas**; "Total"
-  sigue siendo histórico. Nueva función pura `summarizeConversationActivity` (reemplaza
-  `summarizeConversion`). De paso, `getConversionReport` y `getSalesReport` ahora **paginan**
+  cuentan conversaciones **activas** (con inbound del cliente en el periodo), **distintas**; las
+  **transacciones** son las órdenes **no canceladas** por su `created_at` (misma base que "Órdenes
+  generadas", para que ambos cuadros coincidan — antes una compra vieja aparecía "hoy" si el cliente
+  volvía a escribir); "Total" sigue siendo histórico. Nueva función pura
+  `summarizeConversationActivity` (reemplaza `summarizeConversion`). De paso, `getConversionReport` y
+  `getSalesReport` ahora **paginan**
   (`fetchAllRows`, páginas de 1000) para no subcontar al pasar del tope de 1000 filas de PostgREST.
   Ver **ADR-0035** y `docs/17`. (`lib/dashboard/report.ts`, `lib/dashboard/queries.ts`,
   `lib/dashboard/report.test.ts`, `app/dashboard/reports/page.tsx`, `docs/12-ordenes-y-reportes.md`).
