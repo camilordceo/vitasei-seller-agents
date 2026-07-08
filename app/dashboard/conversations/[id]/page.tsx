@@ -6,6 +6,8 @@ import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } fro
 import { ChatPanel } from "./ChatPanel";
 import { RetryButton } from "./RetryButton";
 import { CreateOrderButton } from "./CreateOrderButton";
+import { ConversationLabels } from "./ConversationLabels";
+import { getLabels, getConversationLabels } from "../../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,12 @@ export default async function ConversationDetailPage({ params }: { params: { id:
   const within24h = lastInbound
     ? Date.now() - new Date(lastInbound.createdAt).getTime() < DAY_MS
     : false;
+
+  // Cargar etiquetas de la conversación y las disponibles
+  const [conversationLabels, availableLabels] = await Promise.all([
+    getConversationLabels(params.id),
+    getLabels(convo.agentId),
+  ]);
 
   return (
     <div className="space-y-4">
@@ -53,6 +61,14 @@ export default async function ConversationDetailPage({ params }: { params: { id:
           <ManualToggle conversationId={convo.id} paused={convo.aiPaused} />
         </div>
       </div>
+
+      {/* Etiquetas de la conversación */}
+      <ConversationLabels
+        conversationId={convo.id}
+        agentId={convo.agentId}
+        initialLabels={conversationLabels}
+        initialAvailable={availableLabels}
+      />
       {convo.aiPaused ? (
         <p className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800">
           La IA está en pausa: un agente humano atiende esta conversación. Los mensajes del

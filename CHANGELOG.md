@@ -27,6 +27,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   Eventos: `hotmart_webhook_received`, `hotmart_cart_abandoned`, `hotmart_template_sent`/`_failed`.
   (`app/api/webhooks/hotmart/route.ts`, `lib/hotmart/types.ts`, `lib/hotmart/processEvent.ts`,
   `lib/env.ts`, `lib/supabase/types.ts`, `docs/17-hotmart-carritos.md`).
+- **Etiquetas de conversaciones** (ADR-0036): sistema de **labels personalizables** para clasificar
+  conversaciones ("No interesado", "Sin presupuesto", "Llamar después", "Cliente VIP", etc.). Cada
+  etiqueta tiene nombre y color (badge visual). Se gestionan desde el **detalle de conversación**:
+  ver badges de etiquetas actuales, agregar desde dropdown, crear nuevas con selector de color, y
+  quitar con un click. Nuevas tablas `labels` (catálogo con seed de etiquetas por defecto) y
+  `conversation_labels` (relación N:M). Las etiquetas pueden ser **globales** (`agent_id = NULL`)
+  o **por agente** (solo aparecen para conversaciones de ese agente). Server Actions:
+  `getLabels`, `getConversationLabels`, `createLabel`, `addLabelToConversation`,
+  `removeLabelFromConversation`, `deleteLabel`. Requiere aplicar la migración `0014_labels.sql`.
+  Eventos: `label_created`, `label_added`, `label_removed`, `label_deleted`.
+  (`supabase/migrations/0014_labels.sql`, `app/dashboard/actions.ts`,
+  `app/dashboard/conversations/[id]/ConversationLabels.tsx`, `lib/dashboard/queries.ts`,
+  `docs/18-etiquetas-conversaciones.md`).
 - **Solicitudes de llamada por `#llamada`** (ADR-0034): nuevo tag de flujo. Cuando el agente lo
   emite, el backend crea una **solicitud de llamada** (`call_requests`, estados pendiente/llamada/
   descartada) y **avisa al dueño** por WhatsApp (`CALLS_NOTIFY_PHONE`, default `573103565492`, por el

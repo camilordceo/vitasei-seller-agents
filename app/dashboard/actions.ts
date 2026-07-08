@@ -557,3 +557,162 @@ export async function sendManualMessage(conversationId: string, text: string): P
   revalidatePath("/dashboard/conversations");
   revalidatePath("/dashboard");
 }
+
+// ============================================================================
+// Labels (etiquetas de conversaciones) — ver docs/18, ADR-0036
+// ============================================================================
+
+export type Label = {
+  id: string;
+  name: string;
+  color: string;
+  agent_id: string | null;
+};
+
+/**
+ * Obtiene todas las etiquetas disponibles para un agente (globales + las del agente).
+ */
+export async function getLabels(agentId?: string | null): Promise<Label[]> {
+  const supabase = createServiceClient();
+
+  let query = supabase.from("labels").select("id, name, color, agent_id").order("name");
+
+  if (agentId) {
+    // Globales (agent_id = null) + las de este agente
+    query = query.or(`agent_id.is.null,agent_id.eq.${agentId}`);
+  } else {
+    // Solo globales si no hay agente
+    query = query.is("agent_id", null);
+  }
+
+  const { data, error } = await query;
+  if (error) throw new Error(`getLabels: ${error.message}`);
+  return (data ?? []) as Label[];
+}
+
+/**
+ * Obtiene las etiquetas de una conversación específica.
+ */
+export async function getConversationLabels(conversationId: string): Promise<Label[]> {
+  const supabase = createServiceClient();
+
+  const { data, error } = await supabase
+    .from("conversation_labels")
+    .select("label_id, labels(id, name, color, agent_id)")
+    .eq("conversation_id", conversationId);
+
+  if (error) throw new Error(`getConversationLabels: ${error.message}`);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data ?? []).map((row: any) => row.labels).filter(Boolean) as Label[];
+}
+
+/**
+ * Crea una etiqueta nueva. Devuelve el id de la etiqueta creada.
+ */
+export async function createLabel(input: {
+  name: string;
+  color: string;
+  agentId?: string | null;
+}): Promise<string> {
+  const name = input.name.trim();
+  if (name.length === 0) throw new Error("El nombre de la etiqueta es obligatorio.");
+
+  const supabase = createServiceClient();
+
+  const { data, error } = await supabase
+    .from("labels")
+    .insert({
+      name,
+      color: input.color || "#6B7280",
+      agent_id: input.agentId || null,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      throw new Error("Ya existe una etiqueta con ese nombre.");
+    }
+    throw new Error(`createLabel: ${error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "label_created",
+    payload: { labelId: data.id, name, color: input.color } as unknown as Json,
+  });
+
+  return data.id;
+}
+
+/**
+ * Agrega una etiqueta a una conversación. Idempotente.
+ */
+export async function addLabelToConversation(
+  conversationId: string,
+  labelId: string,
+): Promise<void> {
+  const supabase = createServiceClient();
+
+  const { error } = await supabase
+    .from("conversation_labels")
+    .upsert({ conversation_id: conversationId, label_id: labelId }, { onConflict: "conversation_id,label_id" });
+
+  if (error) throw new Error(`addLabelToConversation: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "label_added",
+    payload: { labelId } as unknown as Json,
+  });
+
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+}
+
+/**
+ * Quita una etiqueta de una conversación.
+ */
+export async function removeLabelFromConversation(
+  conversationId: string,
+  labelId: string,
+): Promise<void> {
+  const supabase = createServiceClient();
+
+  const { error } = await supabase
+    .from("conversation_labels")
+    .delete()
+    .eq("conversation_id", conversationId)
+    .eq("label_id", labelId);
+
+  if (error) throw new Error(`removeLabelFromConversation: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "label_removed",
+    payload: { labelId } as unknown as Json,
+  });
+
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+}
+
+/**
+ * Elimina una etiqueta del catálogo (cascade borra las asociaciones).
+ */
+export async function deleteLabel(labelId: string): Promise<void> {
+  const supabase = createServiceClient();
+
+  const { error } = await supabase.from("labels").delete().eq("id", labelId);
+
+  if (error) throw new Error(`deleteLabel: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "label_deleted",
+    payload: { labelId } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/conversations");
+}

@@ -397,6 +397,7 @@ export interface ConversationOrder {
 
 export interface ConversationDetail {
   id: string;
+  agentId: string | null;
   status: ConversationStatus;
   method: FulfillmentMethod;
   aiPaused: boolean;
@@ -410,7 +411,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   const supabase = createServiceClient();
   const { data: convo, error } = await supabase
     .from("conversations")
-    .select("id, contact_id, status, fulfillment_method, ai_paused, created_at")
+    .select("id, contact_id, agent_id, status, fulfillment_method, ai_paused, created_at")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`getConversation: ${error.message}`);
@@ -452,6 +453,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
 
   return {
     id: convo.id,
+    agentId: convo.agent_id,
     status: convo.status,
     method: convo.fulfillment_method,
     aiPaused: convo.ai_paused,

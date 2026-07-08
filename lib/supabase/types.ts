@@ -676,6 +676,51 @@ export interface Database {
         };
         Relationships: [];
       };
+      labels: {
+        Row: {
+          id: string;
+          name: string;
+          color: string;
+          agent_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          color?: string;
+          agent_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          color?: string;
+          agent_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      conversation_labels: {
+        Row: {
+          conversation_id: string;
+          label_id: string;
+          created_at: string;
+        };
+        Insert: {
+          conversation_id: string;
+          label_id: string;
+          created_at?: string;
+        };
+        Update: {
+          conversation_id?: string;
+          label_id?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
