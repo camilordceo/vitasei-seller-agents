@@ -44,6 +44,30 @@ export function formatDate(iso: string | null | undefined): string {
   return new Intl.DateTimeFormat("es-CO", { dateStyle: "medium" }).format(new Date(iso));
 }
 
+/**
+ * Fecha + hora en HORA COLOMBIA (America/Bogota, UTC-5). Importante en el server
+ * (Vercel corre en UTC): `formatDateTime` mostraría UTC. Úsalo para analítica de
+ * horarios ("¿a qué hora?").
+ */
+export function formatBogotaDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat("es-CO", {
+    timeZone: "America/Bogota",
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(iso));
+}
+
+/** Solo la hora (HH:mm) en hora Colombia. */
+export function formatBogotaTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat("es-CO", {
+    timeZone: "America/Bogota",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(iso));
+}
+
 /** "2026-07-02" (día key) → "2 jul" corto para ejes/listas. */
 export function formatDayKeyShort(dayKey: string): string {
   const [y, m, d] = dayKey.split("-").map(Number);

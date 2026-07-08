@@ -840,3 +840,35 @@ export async function deleteVideo(id: string): Promise<void> {
   });
   revalidatePath("/dashboard/videos");
 }
+
+// --- Fuente de producto de la conversación (ver docs/21) --------------------
+
+/**
+ * Fija o cambia la fuente/producto de una conversación (ej. "magnesio"). Vacío =
+ * quita la categoría. Sirve para categorizar a mano conversaciones viejas o
+ * corregir la autodetección. Corre server-side con service-role.
+ */
+export async function setConversationProductCategory(
+  conversationId: string,
+  category: string | null,
+): Promise<void> {
+  const value = textOrNull(category ?? "");
+  const supabase = createServiceClient();
+  const { error } = await supabase
+    .from("conversations")
+    .update({ product_category: value })
+    .eq("id", conversationId);
+  if (error) {
+    if (error.code === "42703")
+      throw new Error("Falta aplicar la migración 0018 (product_category) en Supabase.");
+    throw new Error(`setConversationProductCategory: ${error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "product_category_set",
+    payload: { category: value } as unknown as Json,
+  });
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+}

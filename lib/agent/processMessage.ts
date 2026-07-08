@@ -22,6 +22,7 @@ import {
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { sendKeywordVideos } from "@/lib/agent/videos";
+import { detectProductCategory } from "@/lib/agent/productCategory";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
 import { isAgentActiveNow } from "@/lib/agent/schedule";
 import {
@@ -717,6 +718,16 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       usage: gen.usage, // tokens para el KPI de costo del dashboard
       images: imageDataUrls.length, // # de imágenes (visión) para repartir el costo
     } as unknown as Json,
+  });
+
+  // Fuente de producto: categoriza la conversación por la primera palabra clave
+  // (magnesio, colageno…) que aparezca en el mensaje del cliente o la respuesta.
+  // Best-effort, no pisa una categoría ya asignada. Ver docs/21.
+  await detectProductCategory(supabase, {
+    conversationId,
+    agentId: agent.id,
+    clientText: input,
+    replyText: parsed.cleanText,
   });
 
   // --- S4: gate + envío por Callbell --------------------------------------

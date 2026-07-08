@@ -21,6 +21,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Fuente de producto + analítica de horarios** (`docs/21`, migración `0018`): (1) cada conversación
+  se **categoriza por producto** (`conversations.product_category`) — autodetectado por palabra clave
+  (magnesio, colageno…) en el mensaje del cliente o la respuesta, reutilizando el catálogo de videos,
+  y **editable a mano** en el detalle de la conversación (para viejas o correcciones). (2) El detalle
+  de la orden muestra **cuándo llegó el cliente** y **cuándo se hizo la orden** en **hora Colombia**,
+  más el **tiempo a la orden**. (3) Reportes nuevos: **por día de la semana** y **por hora del día**
+  (órdenes generadas, hora Colombia) y **conversión por producto**. Lógica pura testeada
+  (`summarizeOrders` con `byWeekday`/`byHour`, `summarizeProductConversion`, `bogotaWeekdayHour`).
+  Resiliente a la ventana de migración. Requiere aplicar `0018_conversation_product_category.sql`.
+  (`supabase/migrations/0018_conversation_product_category.sql`, `lib/agent/productCategory.ts`,
+  `lib/agent/processMessage.ts`, `lib/dashboard/report.ts`, `lib/dashboard/queries.ts`,
+  `lib/dashboard/format.ts`, `app/dashboard/actions.ts`, `app/dashboard/reports/page.tsx`,
+  `app/dashboard/conversations/[id]/*`, `app/dashboard/orders/[id]/page.tsx`).
 - **Etiquetas visibles en la lista de conversaciones** (`docs/18`): las etiquetas ahora se muestran
   como **chips de color** en cada fila de la lista (Resumen y `/dashboard/conversations`), para
   identificar las conversaciones de un vistazo sin abrirlas. `getRecentConversations` trae las

@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getConversation } from "@/lib/dashboard/queries";
+import { getConversation, getVideos } from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
 import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
 import { ChatPanel } from "./ChatPanel";
 import { RetryButton } from "./RetryButton";
 import { CreateOrderButton } from "./CreateOrderButton";
 import { ConversationLabels } from "./ConversationLabels";
+import { ProductCategoryEditor } from "./ProductCategoryEditor";
 import { getLabels, getConversationLabels } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -25,11 +26,14 @@ export default async function ConversationDetailPage({ params }: { params: { id:
     ? Date.now() - new Date(lastInbound.createdAt).getTime() < DAY_MS
     : false;
 
-  // Cargar etiquetas de la conversación y las disponibles
-  const [conversationLabels, availableLabels] = await Promise.all([
+  // Cargar etiquetas de la conversación y las disponibles + palabras de producto
+  const [conversationLabels, availableLabels, videos] = await Promise.all([
     getConversationLabels(params.id),
     getLabels(convo.agentId),
+    getVideos(),
   ]);
+  // Sugerencias para la fuente de producto = palabras clave configuradas (videos).
+  const productSuggestions = [...new Set(videos.map((v) => v.keyword))].sort();
 
   return (
     <div className="space-y-4">
@@ -104,6 +108,20 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                 <dd className="text-right text-slate-900">{formatDateTime(convo.createdAt)}</dd>
               </div>
             </dl>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-slate-700">Producto / fuente</h2>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Se detecta solo por palabra clave; puedes corregirla o fijarla a mano.
+            </p>
+            <div className="mt-2">
+              <ProductCategoryEditor
+                conversationId={convo.id}
+                initial={convo.productCategory}
+                suggestions={productSuggestions}
+              />
+            </div>
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-4">

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   bogotaDayKey,
+  bogotaWeekdayHour,
   summarizeConversationActivity,
   summarizeOrders,
+  summarizeProductConversion,
   type ConversationActivityFact,
   type OrderFact,
   type TransactionFact,
@@ -83,6 +85,58 @@ describe("summarizeOrders", () => {
     // hace 3 días (2026-06-29): la pendiente sin total.
     const d = r.perDay.find((x) => x.date === "2026-06-29");
     expect(d).toEqual({ date: "2026-06-29", count: 1, revenue: 0 });
+  });
+
+  it("byHour ubica las generadas por hora Colombia (excluye canceladas)", () => {
+    // 14:00Z→09h, 13:00Z→08h, 06-29 12:00Z→07h, 06-12 12:00Z→07h. La cancelada no cuenta.
+    expect(r.byHour[9].count).toBe(1);
+    expect(r.byHour[8].count).toBe(1);
+    expect(r.byHour[7].count).toBe(2);
+    expect(r.byHour.reduce((s, b) => s + b.count, 0)).toBe(4); // = generadas
+  });
+
+  it("byWeekday suma = generadas (7 días)", () => {
+    expect(r.byWeekday).toHaveLength(7);
+    expect(r.byWeekday.reduce((s, b) => s + b.count, 0)).toBe(4);
+  });
+});
+
+describe("bogotaWeekdayHour", () => {
+  it("da la hora en Bogota (UTC-5), cruzando el día si toca", () => {
+    expect(bogotaWeekdayHour(Date.parse("2026-07-02T14:00:00Z")).hour).toBe(9);
+    // 03:00Z → 22:00 del día anterior en Bogota.
+    expect(bogotaWeekdayHour(Date.parse("2026-07-02T03:00:00Z")).hour).toBe(22);
+  });
+});
+
+describe("summarizeProductConversion", () => {
+  const rows = summarizeProductConversion([
+    { productCategory: "magnesio", converted: true },
+    { productCategory: "magnesio", converted: false },
+    { productCategory: "colageno", converted: true },
+    { productCategory: null, converted: false },
+    { productCategory: "  ", converted: true }, // vacío → Sin categoría (null)
+  ]);
+
+  it("agrupa por producto y calcula conversión", () => {
+    expect(rows.find((x) => x.category === "magnesio")).toEqual({
+      category: "magnesio",
+      conversations: 2,
+      transactions: 1,
+      rate: 0.5,
+    });
+    expect(rows.find((x) => x.category === "colageno")).toEqual({
+      category: "colageno",
+      conversations: 1,
+      transactions: 1,
+      rate: 1,
+    });
+  });
+
+  it("agrupa null + vacío como 'Sin categoría' y lo deja al final", () => {
+    const none = rows.find((x) => x.category === null);
+    expect(none).toEqual({ category: null, conversations: 2, transactions: 1, rate: 0.5 });
+    expect(rows[rows.length - 1].category).toBe(null);
   });
 });
 

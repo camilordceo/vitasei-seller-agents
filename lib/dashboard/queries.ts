@@ -9,9 +9,12 @@ import {
 import {
   summarizeConversationActivity,
   summarizeOrders,
+  summarizeProductConversion,
   type ConversationActivityFact,
   type ConversionReport,
   type OrderFact,
+  type ProductConversionFact,
+  type ProductConversionRow,
   type SalesReport,
   type TransactionFact,
 } from "@/lib/dashboard/report";
@@ -463,6 +466,8 @@ export interface ConversationDetail {
   method: FulfillmentMethod;
   aiPaused: boolean;
   createdAt: string;
+  /** Producto/fuente de la conversación (null = sin categorizar). */
+  productCategory: string | null;
   contact: { name: string | null; phone: string } | null;
   messages: ConversationMessage[];
   order: ConversationOrder | null;
@@ -478,7 +483,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   if (error) throw new Error(`getConversation: ${error.message}`);
   if (!convo) return null;
 
-  const [contactRes, msgsRes, orderRes] = await Promise.all([
+  const [contactRes, msgsRes, orderRes, pcRes] = await Promise.all([
     supabase.from("contacts").select("name, phone").eq("id", convo.contact_id).maybeSingle(),
     supabase
       .from("messages")
@@ -492,8 +497,12 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Fuente de producto en consulta aparte: si falta la migración 0018 (columna),
+    // esta falla y se ignora sin romper el detalle. Ver docs/21.
+    supabase.from("conversations").select("product_category").eq("id", id).maybeSingle(),
   ]);
   if (msgsRes.error) throw new Error(`getConversation messages: ${msgsRes.error.message}`);
+  const productCategory = pcRes.error ? null : pcRes.data?.product_category ?? null;
 
   let order: ConversationOrder | null = null;
   if (orderRes.data) {
@@ -519,6 +528,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     method: convo.fulfillment_method,
     aiPaused: convo.ai_paused,
     createdAt: convo.created_at,
+    productCategory,
     contact: contactRes.data
       ? { name: contactRes.data.name, phone: contactRes.data.phone }
       : null,
@@ -628,6 +638,8 @@ export interface OrderDetail {
   currency: string;
   createdAt: string;
   updatedAt: string;
+  /** `created_at` de la conversación = cuándo llegó el cliente (analítica de horarios). */
+  clientArrivedAt: string | null;
   contact: { name: string | null; phone: string } | null;
   items: OrderItemDetail[];
 }
@@ -644,13 +656,15 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
   if (error) throw new Error(`getOrder: ${error.message}`);
   if (!order) return null;
 
-  const [contactRes, itemsRes] = await Promise.all([
+  const [contactRes, itemsRes, convoRes] = await Promise.all([
     supabase.from("contacts").select("name, phone").eq("id", order.contact_id).maybeSingle(),
     supabase
       .from("order_items")
       .select("id, sku, name, qty, unit_price, created_at")
       .eq("order_id", id)
       .order("created_at", { ascending: true }),
+    // Hora de llegada del cliente = created_at de la conversación de origen.
+    supabase.from("conversations").select("created_at").eq("id", order.conversation_id).maybeSingle(),
   ]);
   if (itemsRes.error) throw new Error(`getOrder items: ${itemsRes.error.message}`);
 
@@ -668,6 +682,7 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
     currency: order.currency,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
+    clientArrivedAt: convoRes.data?.created_at ?? null,
     contact: contactRes.data
       ? { name: contactRes.data.name, phone: contactRes.data.phone }
       : null,
@@ -806,6 +821,45 @@ export async function getConversionReport(): Promise<ConversionReport> {
     conversations: convCountRes.count ?? 0,
     transactions: transactions.length,
   });
+}
+
+/**
+ * Conversión por PRODUCTO: agrupa las conversaciones por `product_category` y
+ * cuenta cuántas convirtieron (orden no cancelada). Sirve para ver qué productos
+ * rinden mejor. Resiliente: si falta la migración 0018 (columna), todo cae en
+ * "Sin categoría". Lógica pura en report.ts. Ver docs/21. Paginado.
+ */
+export async function getProductConversion(): Promise<ProductConversionRow[]> {
+  const supabase = createServiceClient();
+
+  const orders = await fetchAllRows(
+    (from, to) => supabase.from("orders").select("conversation_id, status").range(from, to),
+    "getProductConversion orders",
+  );
+  const converting = new Set<string>();
+  for (const o of orders) if (o.status !== "cancelled") converting.add(o.conversation_id);
+
+  // Conversaciones con su categoría. Si falta la columna (0018), se cae al set de
+  // solo `id` (todo "Sin categoría") en vez de romper.
+  let convos: Array<{ id: string; product_category: string | null }>;
+  try {
+    convos = await fetchAllRows(
+      (from, to) => supabase.from("conversations").select("id, product_category").range(from, to),
+      "getProductConversion conversations",
+    );
+  } catch {
+    const ids = await fetchAllRows(
+      (from, to) => supabase.from("conversations").select("id").range(from, to),
+      "getProductConversion conv ids",
+    );
+    convos = ids.map((c) => ({ id: c.id, product_category: null }));
+  }
+
+  const facts: ProductConversionFact[] = convos.map((c) => ({
+    productCategory: c.product_category,
+    converted: converting.has(c.id),
+  }));
+  return summarizeProductConversion(facts);
 }
 
 // --- Videos por palabra clave (ver docs/20, ADR-0038) -----------------------

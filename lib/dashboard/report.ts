@@ -62,6 +62,10 @@ export interface SalesReport {
   last30: Bucket;
   /** Órdenes generadas por día, últimos 14 días (más reciente primero). */
   perDay: DayBucket[];
+  /** Órdenes generadas por día de la semana (índice 0=Dom … 6=Sáb), hora Bogota. */
+  byWeekday: Bucket[];
+  /** Órdenes generadas por hora del día (índice 0..23), hora Bogota. */
+  byHour: Bucket[];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -77,6 +81,16 @@ const bogotaDateFmt = new Intl.DateTimeFormat("en-CA", {
 export function bogotaDayKey(ms: number): string {
   // en-CA con partes 2-digit produce "YYYY-MM-DD".
   return bogotaDateFmt.format(new Date(ms));
+}
+
+/**
+ * Día de la semana (0=Dom … 6=Sáb) y hora (0..23) en hora Bogota. Colombia es
+ * UTC-5 fijo (sin horario de verano), así que restar 5h y leer en UTC es exacto
+ * y determinista (sirve en tests sin depender de Intl).
+ */
+export function bogotaWeekdayHour(ms: number): { weekday: number; hour: number } {
+  const d = new Date(ms - 5 * 60 * 60 * 1000);
+  return { weekday: d.getUTCDay(), hour: d.getUTCHours() };
 }
 
 function emptyBucket(): Bucket {
@@ -107,6 +121,8 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
   const today = emptyBucket();
   const last7 = emptyBucket();
   const last30 = emptyBucket();
+  const byWeekday = Array.from({ length: 7 }, emptyBucket);
+  const byHour = Array.from({ length: 24 }, emptyBucket);
 
   // Claves de los últimos 14 días (índice para acumular perDay).
   const dayKeys: string[] = [];
@@ -143,6 +159,11 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
         dayBucket.count += 1;
         dayBucket.revenue += Number.isFinite(f.total) ? (f.total as number) : 0;
       }
+      // Analítica de horarios (hora Colombia): ¿qué día de la semana y a qué hora
+      // se generan las ventas? Solo cuenta generadas (no canceladas).
+      const { weekday, hour } = bogotaWeekdayHour(createdMs);
+      add(byWeekday[weekday], f.total);
+      add(byHour[hour], f.total);
     }
   }
 
@@ -158,7 +179,53 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
     last7,
     last30,
     perDay: dayKeys.map((k) => dayIndex.get(k)!),
+    byWeekday,
+    byHour,
   };
+}
+
+// --- Conversión por producto (fuente de la conversación) --------------------
+
+export interface ProductConversionFact {
+  /** Categoría/producto de la conversación (null = sin categorizar). */
+  productCategory: string | null;
+  /** true si la conversación tiene al menos una orden NO cancelada. */
+  converted: boolean;
+}
+
+export interface ProductConversionRow {
+  /** null = "Sin categoría". */
+  category: string | null;
+  conversations: number;
+  transactions: number;
+  rate: number;
+}
+
+/**
+ * Agrupa las conversaciones por producto y calcula cuántas convirtieron. Ordena
+ * por # de conversaciones desc; "Sin categoría" (null) va al final. Puro/testeable.
+ */
+export function summarizeProductConversion(facts: ProductConversionFact[]): ProductConversionRow[] {
+  const byCat = new Map<string | null, { conversations: number; transactions: number }>();
+  for (const f of facts) {
+    const key = f.productCategory && f.productCategory.trim() ? f.productCategory.trim() : null;
+    const t = byCat.get(key) ?? { conversations: 0, transactions: 0 };
+    t.conversations += 1;
+    if (f.converted) t.transactions += 1;
+    byCat.set(key, t);
+  }
+  return [...byCat.entries()]
+    .map(([category, t]) => ({
+      category,
+      conversations: t.conversations,
+      transactions: t.transactions,
+      rate: t.conversations > 0 ? t.transactions / t.conversations : 0,
+    }))
+    .sort((a, b) => {
+      if (a.category === null) return 1; // "Sin categoría" al final
+      if (b.category === null) return -1;
+      return b.conversations - a.conversations;
+    });
 }
 
 // --- Conversión (conversaciones ACTIVAS → transacciones) --------------------

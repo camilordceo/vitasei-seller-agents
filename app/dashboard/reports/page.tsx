@@ -1,4 +1,9 @@
-import { getAiCostReport, getConversionReport, getSalesReport } from "@/lib/dashboard/queries";
+import {
+  getAiCostReport,
+  getConversionReport,
+  getProductConversion,
+  getSalesReport,
+} from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
   FULFILLMENT_METHODS,
@@ -58,14 +63,28 @@ function buildSummary(r: SalesReport, c: ConversionReport): string {
   ].join("\n");
 }
 
+// Días de la semana en orden Lun→Dom (los índices son 0=Dom … 6=Sáb).
+const WEEKDAYS: Array<{ i: number; l: string }> = [
+  { i: 1, l: "Lun" },
+  { i: 2, l: "Mar" },
+  { i: 3, l: "Mié" },
+  { i: 4, l: "Jue" },
+  { i: 5, l: "Vie" },
+  { i: 6, l: "Sáb" },
+  { i: 0, l: "Dom" },
+];
+
 export default async function ReportsPage() {
-  const [r, conv, ai] = await Promise.all([
+  const [r, conv, ai, products] = await Promise.all([
     getSalesReport(),
     getConversionReport(),
     getAiCostReport(),
+    getProductConversion(),
   ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
+  const maxWeekdayRev = Math.max(1, ...r.byWeekday.map((b) => b.revenue));
+  const maxHourRev = Math.max(1, ...r.byHour.map((b) => b.revenue));
   const convWindows = [
     { label: "Hoy", w: conv.today },
     { label: "Últimos 7 días", w: conv.last7 },
@@ -341,6 +360,108 @@ export default async function ReportsPage() {
             </li>
           ))}
         </ul>
+      </section>
+
+      {/* Analítica de horarios: día de la semana + hora del día (hora Colombia) */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700">Por día de la semana</h2>
+          <p className="mb-3 text-xs text-slate-400">Órdenes generadas · hora Colombia.</p>
+          <ul className="space-y-1.5">
+            {WEEKDAYS.map(({ i, l }) => {
+              const b = r.byWeekday[i];
+              return (
+                <li key={i} className="flex items-center gap-3">
+                  <span className="w-10 shrink-0 text-xs text-slate-500">{l}</span>
+                  <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                    <div
+                      className="h-full rounded bg-indigo-500/80"
+                      style={{ width: `${Math.round((b.revenue / maxWeekdayRev) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-8 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                    {b.count}
+                  </span>
+                  <span className="w-24 shrink-0 text-right text-xs tabular-nums text-slate-700">
+                    {formatCOP(b.revenue)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700">Por hora del día</h2>
+          <p className="mb-3 text-xs text-slate-400">Órdenes generadas · hora Colombia.</p>
+          <ul className="space-y-1">
+            {r.byHour.map((b, h) => (
+              <li key={h} className="flex items-center gap-3">
+                <span className="w-10 shrink-0 text-xs tabular-nums text-slate-500">
+                  {String(h).padStart(2, "0")}h
+                </span>
+                <div className="h-3.5 flex-1 overflow-hidden rounded bg-slate-100">
+                  <div
+                    className="h-full rounded bg-indigo-500/80"
+                    style={{ width: `${Math.round((b.revenue / maxHourRev) * 100)}%` }}
+                  />
+                </div>
+                <span className="w-8 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                  {b.count}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      {/* Conversión por producto */}
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold text-slate-700">Conversión por producto</h2>
+          <p className="text-xs text-slate-400">
+            Conversaciones agrupadas por su producto/fuente y cuántas terminaron en venta. Se
+            autocategoriza por palabra clave; también se ajusta a mano en cada conversación.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500">
+                <th className="pb-2 font-medium">Producto</th>
+                <th className="pb-2 text-right font-medium">Conversaciones</th>
+                <th className="pb-2 text-right font-medium">Transacciones</th>
+                <th className="pb-2 text-right font-medium">Conversión</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {products.length === 0 ? (
+                <tr>
+                  <td className="py-3 text-slate-400" colSpan={4}>
+                    Aún no hay conversaciones categorizadas.
+                  </td>
+                </tr>
+              ) : (
+                products.map((p) => (
+                  <tr key={p.category ?? "__none__"}>
+                    <td className="py-2 text-slate-700">
+                      {p.category ?? <span className="text-slate-400">Sin categoría</span>}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-900">
+                      {formatNumber(p.conversations)}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-900">
+                      {formatNumber(p.transactions)}
+                    </td>
+                    <td className="py-2 text-right font-medium tabular-nums text-emerald-700">
+                      {formatPercent(p.rate)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

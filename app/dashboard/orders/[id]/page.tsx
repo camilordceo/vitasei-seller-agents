@@ -1,11 +1,23 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getOrder } from "@/lib/dashboard/queries";
-import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
+import { formatCOP, formatBogotaDateTime } from "@/lib/dashboard/format";
 import { OrderStatusPill, MethodPill } from "../../ui";
 import { OrderEditor, type OrderEditorInitial } from "../OrderEditor";
 
 export const dynamic = "force-dynamic";
+
+/** Duración legible (para "tiempo hasta la orden"). */
+function humanDuration(ms: number): string {
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h < 24) return m ? `${h} h ${m} min` : `${h} h`;
+  const d = Math.floor(h / 24);
+  const hh = h % 24;
+  return hh ? `${d} d ${hh} h` : `${d} d`;
+}
 
 export default async function OrderDetailPage({ params }: { params: { id: string } }) {
   const order = await getOrder(params.id);
@@ -76,14 +88,37 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                 </dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-slate-500">Creada</dt>
-                <dd className="text-right text-slate-900">{formatDateTime(order.createdAt)}</dd>
+                <dt className="text-slate-500">Cliente llegó</dt>
+                <dd className="text-right text-slate-900">
+                  {formatBogotaDateTime(order.clientArrivedAt)}
+                </dd>
               </div>
               <div className="flex justify-between gap-2">
+                <dt className="text-slate-500">Orden creada</dt>
+                <dd className="text-right text-slate-900">
+                  {formatBogotaDateTime(order.createdAt)}
+                </dd>
+              </div>
+              {(() => {
+                const arrived = order.clientArrivedAt ? Date.parse(order.clientArrivedAt) : NaN;
+                const created = Date.parse(order.createdAt);
+                if (!Number.isFinite(arrived) || !Number.isFinite(created) || created < arrived)
+                  return null;
+                return (
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Tiempo a la orden</dt>
+                    <dd className="text-right text-slate-900">{humanDuration(created - arrived)}</dd>
+                  </div>
+                );
+              })()}
+              <div className="flex justify-between gap-2">
                 <dt className="text-slate-500">Últ. edición</dt>
-                <dd className="text-right text-slate-900">{formatDateTime(order.updatedAt)}</dd>
+                <dd className="text-right text-slate-900">
+                  {formatBogotaDateTime(order.updatedAt)}
+                </dd>
               </div>
             </dl>
+            <p className="mt-1 text-[11px] text-slate-400">Horas en hora Colombia.</p>
             <Link
               href={`/dashboard/conversations/${order.conversationId}`}
               className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"

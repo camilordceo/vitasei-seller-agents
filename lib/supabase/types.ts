@@ -83,6 +83,7 @@ export interface Database {
           fulfillment_method: FulfillmentMethod;
           ai_paused: boolean;
           source: ConversationSource;
+          product_category: string | null;
           openai_previous_response_id: string | null;
           assigned_team_uuid: string | null;
           last_inbound_at: string | null;
@@ -99,6 +100,7 @@ export interface Database {
           fulfillment_method?: FulfillmentMethod;
           ai_paused?: boolean;
           source?: ConversationSource;
+          product_category?: string | null;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
@@ -115,6 +117,7 @@ export interface Database {
           fulfillment_method?: FulfillmentMethod;
           ai_paused?: boolean;
           source?: ConversationSource;
+          product_category?: string | null;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
           last_inbound_at?: string | null;
