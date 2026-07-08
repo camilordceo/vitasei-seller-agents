@@ -1,4 +1,5 @@
 import "server-only";
+import type { PostgrestError } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   EST_IMAGE_INPUT_TOKENS,
@@ -6,9 +7,9 @@ import {
   tokenCostUsd,
 } from "@/lib/openai/pricing";
 import {
-  summarizeConversion,
+  summarizeConversationActivity,
   summarizeOrders,
-  type ConversationFact,
+  type ConversationActivityFact,
   type ConversionReport,
   type OrderFact,
   type SalesReport,
@@ -33,6 +34,31 @@ import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
  */
 
 // Precios en `lib/openai/pricing.ts` (punto único). Costo real de gpt-5-mini.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** PostgREST devuelve como máximo 1000 filas por request → paginamos por páginas de 1000. */
+const PAGE_SIZE = 1000;
+
+/**
+ * Trae TODAS las filas de un select paginando en bloques de 1000, superando el
+ * tope por defecto de PostgREST. Sube el `.range(from, to)` a la query cruda para
+ * poder aplicar filtros/orden en el callback. Volumen v1 bajo → aceptable; si
+ * crece mucho, mover la agregación a una vista/RPC en Postgres.
+ */
+async function fetchAllRows<Row>(
+  page: (from: number, to: number) => PromiseLike<{ data: Row[] | null; error: PostgrestError | null }>,
+  label: string,
+): Promise<Row[]> {
+  const out: Row[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await page(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(`${label}: ${error.message}`);
+    const rows = data ?? [];
+    out.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+  }
+  return out;
+}
 
 export interface Kpis {
   totalSales: number;
@@ -675,12 +701,14 @@ export async function getCallRequests(opts?: {
 /** Reporte de ventas agregado desde TODAS las órdenes (lógica pura en report.ts). */
 export async function getSalesReport(): Promise<SalesReport> {
   const supabase = createServiceClient();
-  const { data, error } = await supabase
-    .from("orders")
-    .select("status, fulfillment_method, total, created_at");
-  if (error) throw new Error(`getSalesReport: ${error.message}`);
+  // Paginado: sin esto, PostgREST corta en 1000 filas y el reporte subcuenta.
+  const rows = await fetchAllRows(
+    (from, to) =>
+      supabase.from("orders").select("status, fulfillment_method, total, created_at").range(from, to),
+    "getSalesReport",
+  );
 
-  const facts: OrderFact[] = (data ?? []).map((o) => ({
+  const facts: OrderFact[] = rows.map((o) => ({
     status: o.status,
     method: o.fulfillment_method,
     total: o.total,
@@ -690,30 +718,59 @@ export async function getSalesReport(): Promise<SalesReport> {
 }
 
 /**
- * Embudo de conversión: conversaciones vs. transacciones (conversaciones con al
- * menos una orden no cancelada) por ventana de tiempo y por día. Lógica pura en
- * report.ts. Volumen v1 bajo → se cuenta en JS.
+ * Embudo de conversión por ACTIVIDAD: en cada ventana (hoy/7/30 días) y por día,
+ * cuántas conversaciones DISTINTAS tuvieron un mensaje del cliente (inbound) y
+ * cuántas convirtieron (orden no cancelada). Antes se contaba por `created_at` de
+ * la conversación, pero como la ingesta reutiliza una sola conversación por
+ * contacto entre días, "Hoy" mostraba solo los leads nuevos (p. ej. 6) y no las
+ * conversaciones reales atendidas (p. ej. 26). El `total` sí es histórico: todas
+ * las conversaciones vs. las que convirtieron. Lógica pura en report.ts. Ver
+ * ADR-0035. Volumen v1 bajo → se cuenta en JS (paginado).
  */
 export async function getConversionReport(): Promise<ConversionReport> {
   const supabase = createServiceClient();
-  const [convRes, ordersRes] = await Promise.all([
-    supabase.from("conversations").select("id, created_at"),
-    supabase.from("orders").select("conversation_id, status"),
+  // La actividad de las ventanas/gráfico solo mira los últimos 30 días.
+  const sinceIso = new Date(Date.now() - 30 * DAY_MS).toISOString();
+
+  const [convCountRes, orders, inbound] = await Promise.all([
+    // `total` histórico: # de conversaciones sin traer las filas (count exacto).
+    supabase.from("conversations").select("*", { count: "exact", head: true }),
+    // Órdenes (todas) para saber qué conversaciones convirtieron. Paginado.
+    fetchAllRows(
+      (from, to) => supabase.from("orders").select("conversation_id, status").range(from, to),
+      "getConversionReport orders",
+    ),
+    // Actividad: inbound de los últimos 30 días. Paginado.
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("messages")
+          .select("conversation_id, created_at")
+          .eq("direction", "inbound")
+          .gte("created_at", sinceIso)
+          .range(from, to),
+      "getConversionReport inbound",
+    ),
   ]);
-  if (convRes.error) throw new Error(`getConversionReport conversations: ${convRes.error.message}`);
-  if (ordersRes.error) throw new Error(`getConversionReport orders: ${ordersRes.error.message}`);
+  if (convCountRes.error)
+    throw new Error(`getConversionReport conversations: ${convCountRes.error.message}`);
 
   // Conversaciones que convirtieron = tienen alguna orden NO cancelada.
   const converting = new Set<string>();
-  for (const o of ordersRes.data ?? []) {
+  for (const o of orders) {
     if (o.status !== "cancelled") converting.add(o.conversation_id);
   }
 
-  const facts: ConversationFact[] = (convRes.data ?? []).map((c) => ({
-    createdAt: c.created_at,
-    converted: converting.has(c.id),
+  const facts: ConversationActivityFact[] = inbound.map((m) => ({
+    conversationId: m.conversation_id,
+    createdAt: m.created_at,
+    converted: converting.has(m.conversation_id),
   }));
-  return summarizeConversion(facts);
+
+  return summarizeConversationActivity(facts, {
+    conversations: convCountRes.count ?? 0,
+    converted: converting.size,
+  });
 }
 
 // --- Reactivaciones por plantilla (7/15 días, ver docs/14) -------------------

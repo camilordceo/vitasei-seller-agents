@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   bogotaDayKey,
-  summarizeConversion,
+  summarizeConversationActivity,
   summarizeOrders,
-  type ConversationFact,
+  type ConversationActivityFact,
   type OrderFact,
 } from "./report";
 
@@ -85,50 +85,61 @@ describe("summarizeOrders", () => {
   });
 });
 
-describe("summarizeConversion", () => {
-  const facts: ConversationFact[] = [
-    { createdAt: "2026-07-02T14:00:00Z", converted: true }, // hoy, convirtió
-    { createdAt: "2026-07-02T09:00:00Z", converted: false }, // hoy, no
-    { createdAt: "2026-06-29T12:00:00Z", converted: true }, // hace 3 días, convirtió
-    { createdAt: "2026-06-12T12:00:00Z", converted: false }, // hace 20 días, no
+describe("summarizeConversationActivity", () => {
+  // Actividad = un inbound del cliente. Distintas conversaciones: A, B, C, D.
+  const facts: ConversationActivityFact[] = [
+    // A: activa HOY (dos mensajes → debe contar una vez) y hace 3 días. Convirtió.
+    { conversationId: "A", createdAt: "2026-07-02T14:00:00Z", converted: true },
+    { conversationId: "A", createdAt: "2026-07-02T09:00:00Z", converted: true },
+    { conversationId: "A", createdAt: "2026-06-29T10:00:00Z", converted: true },
+    // B: activa HOY, no convirtió.
+    { conversationId: "B", createdAt: "2026-07-02T09:30:00Z", converted: false },
+    // C: activa hace 3 días, convirtió.
+    { conversationId: "C", createdAt: "2026-06-29T12:00:00Z", converted: true },
+    // D: activa hace 20 días, no convirtió.
+    { conversationId: "D", createdAt: "2026-06-12T12:00:00Z", converted: false },
   ];
-  const c = summarizeConversion(facts, NOW);
+  // total histórico se pasa aparte (no se deriva de la actividad).
+  const c = summarizeConversationActivity(facts, { conversations: 10, converted: 4 }, NOW);
 
-  it("total: 4 conversaciones, 2 transacciones, 50%", () => {
-    expect(c.total).toEqual({ conversations: 4, transactions: 2, rate: 0.5 });
+  it("total: histórico inyectado (10 conversaciones, 4 transacciones, 40%)", () => {
+    expect(c.total).toEqual({ conversations: 10, transactions: 4, rate: 0.4 });
   });
 
-  it("hoy: 2 conversaciones, 1 transacción, 50%", () => {
+  it("hoy: A y B distintas (A cuenta una sola vez pese a 2 mensajes)", () => {
     expect(c.today).toEqual({ conversations: 2, transactions: 1, rate: 0.5 });
   });
 
-  it("7 días: 3 conversaciones, 2 transacciones", () => {
+  it("7 días: A, B, C distintas; A y C convirtieron", () => {
     expect(c.last7.conversations).toBe(3);
     expect(c.last7.transactions).toBe(2);
     expect(c.last7.rate).toBeCloseTo(2 / 3, 5);
   });
 
-  it("30 días incluye las 4", () => {
+  it("30 días incluye las 4 conversaciones", () => {
     expect(c.last30).toEqual({ conversations: 4, transactions: 2, rate: 0.5 });
   });
 
-  it("rate = 0 cuando no hay conversaciones", () => {
-    const empty = summarizeConversion([], NOW);
+  it("rate = 0 y ventanas vacías cuando no hay actividad ni total", () => {
+    const empty = summarizeConversationActivity([], { conversations: 0, converted: 0 }, NOW);
     expect(empty.total).toEqual({ conversations: 0, transactions: 0, rate: 0 });
+    expect(empty.today).toEqual({ conversations: 0, transactions: 0, rate: 0 });
   });
 
-  it("perDay ubica conversaciones y transacciones por día", () => {
+  it("perDay cuenta conversaciones activas distintas por día", () => {
     expect(c.perDay).toHaveLength(14);
+    // Hoy: A + B activas; solo A convirtió.
     expect(c.perDay[0]).toEqual({
       date: "2026-07-02",
       conversations: 2,
       transactions: 1,
       rate: 0.5,
     });
+    // Hace 3 días: A y C activas, ambas convirtieron.
     expect(c.perDay.find((x) => x.date === "2026-06-29")).toEqual({
       date: "2026-06-29",
-      conversations: 1,
-      transactions: 1,
+      conversations: 2,
+      transactions: 2,
       rate: 1,
     });
   });

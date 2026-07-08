@@ -75,6 +75,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `app/dashboard/orders/NewOrderButton.tsx`).
 
 ### Fixed
+- **Reportes · Conversión mostraba muchas menos conversaciones de las reales** (p. ej. **6 en vez de
+  26** en un día): el embudo contaba las conversaciones por su `created_at`, pero la ingesta reutiliza
+  **una sola conversación activa por (contacto, agente)** entre días, así que "Hoy" solo veía los
+  **leads nuevos**, no las conversaciones **atendidas**. Ahora hoy/7/30 días y el gráfico por día
+  cuentan conversaciones **activas** (con inbound del cliente en el periodo), **distintas**; "Total"
+  sigue siendo histórico. Nueva función pura `summarizeConversationActivity` (reemplaza
+  `summarizeConversion`). De paso, `getConversionReport` y `getSalesReport` ahora **paginan**
+  (`fetchAllRows`, páginas de 1000) para no subcontar al pasar del tope de 1000 filas de PostgREST.
+  Ver **ADR-0035** y `docs/17`. (`lib/dashboard/report.ts`, `lib/dashboard/queries.ts`,
+  `lib/dashboard/report.test.ts`, `app/dashboard/reports/page.tsx`, `docs/12-ordenes-y-reportes.md`).
 - **Retargets ("¿sigues ahí?") que podían dispararse tras una compra**: al crear la orden se
   cancelaban las reactivaciones (7/15d) pero **no** los seguimientos (1h/8h), y la creación
   **manual** de orden desde el dashboard tampoco los cancelaba. Ahora, defensa en dos capas

@@ -161,14 +161,19 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
   };
 }
 
-// --- Conversión (conversaciones → transacciones) ----------------------------
-
-export interface ConversationFact {
-  /** ISO del `created_at` de la conversación. */
-  createdAt: string;
-  /** true si la conversación generó al menos una orden NO cancelada. */
-  converted: boolean;
-}
+// --- Conversión (conversaciones ACTIVAS → transacciones) --------------------
+//
+// "Conversaciones" en las ventanas por tiempo (hoy/7/30 días) y en el gráfico
+// por día NO son las conversaciones CREADAS en ese periodo, sino las que
+// tuvieron ACTIVIDAD del cliente (al menos un mensaje inbound) en él. La ingesta
+// reutiliza UNA sola conversación activa por (contacto, agente) entre días
+// (`processMessage.ts`), así que su `created_at` es el primer contacto de siempre;
+// contar por `created_at` mostraba solo los leads NUEVOS del día (p. ej. 6),
+// no las conversaciones reales que se atendieron (p. ej. 26). Ver ADR-0035.
+//
+// `total` sí es histórico: TODAS las conversaciones vs. las que convirtieron
+// (mismas cifras de siempre), porque un total de actividad de vida ≈ el total de
+// conversaciones. Se inyecta aparte para no traer todo el historial de mensajes.
 
 export interface ConversionWindow {
   conversations: number;
@@ -193,65 +198,103 @@ export interface ConversionReport {
   perDay: ConversionDay[];
 }
 
+/** Un mensaje inbound (actividad del cliente) atado a su conversación. */
+export interface ConversationActivityFact {
+  /** Conversación a la que pertenece el inbound (clave para contar distintas). */
+  conversationId: string;
+  /** ISO del `created_at` del mensaje inbound. */
+  createdAt: string;
+  /** true si la conversación tiene al menos una orden NO cancelada. */
+  converted: boolean;
+}
+
 function rate(transactions: number, conversations: number): number {
   return conversations > 0 ? transactions / conversations : 0;
 }
 
-interface Tally {
-  conversations: number;
-  transactions: number;
-}
-
-function bumpTally(t: Tally, converted: boolean): void {
-  t.conversations += 1;
-  if (converted) t.transactions += 1;
-}
-
-function toWindow(t: Tally): ConversionWindow {
-  return { conversations: t.conversations, transactions: t.transactions, rate: rate(t.transactions, t.conversations) };
+/** conversaciones distintas + las que convirtieron, en 0..1. */
+function windowOf(conversations: Set<string>, transactions: Set<string>): ConversionWindow {
+  return {
+    conversations: conversations.size,
+    transactions: transactions.size,
+    rate: rate(transactions.size, conversations.size),
+  };
 }
 
 /**
- * Embudo de conversión: por ventana de tiempo y por día, cuántas conversaciones
- * hubo y cuántas terminaron en transacción (orden no cancelada). `nowMs` inyectable.
+ * Embudo de conversión basado en ACTIVIDAD. Para cada ventana (hoy/7/30 días) y
+ * cada día (últimos 14) cuenta cuántas conversaciones DISTINTAS tuvieron un
+ * inbound del cliente y cuántas de ellas convirtieron (orden no cancelada). Una
+ * conversación activa varios días cuenta en cada día, pero UNA sola vez por
+ * ventana (dedup por `conversationId`). `total` (histórico) se pasa aparte.
+ * `nowMs` inyectable para tests.
  */
-export function summarizeConversion(
-  facts: ConversationFact[],
+export function summarizeConversationActivity(
+  facts: ConversationActivityFact[],
+  total: { conversations: number; converted: number },
   nowMs: number = Date.now(),
 ): ConversionReport {
-  const total: Tally = { conversations: 0, transactions: 0 };
-  const today: Tally = { conversations: 0, transactions: 0 };
-  const last7: Tally = { conversations: 0, transactions: 0 };
-  const last30: Tally = { conversations: 0, transactions: 0 };
+  const todayC = new Set<string>();
+  const todayT = new Set<string>();
+  const last7C = new Set<string>();
+  const last7T = new Set<string>();
+  const last30C = new Set<string>();
+  const last30T = new Set<string>();
 
   const dayKeys: string[] = [];
-  const dayIndex = new Map<string, Tally>();
+  const dayC = new Map<string, Set<string>>();
+  const dayT = new Map<string, Set<string>>();
   for (let i = 0; i < 14; i++) {
     const key = bogotaDayKey(nowMs - i * DAY_MS);
     dayKeys.push(key);
-    dayIndex.set(key, { conversations: 0, transactions: 0 });
+    dayC.set(key, new Set());
+    dayT.set(key, new Set());
   }
   const todayKey = dayKeys[0];
 
   for (const f of facts) {
-    bumpTally(total, f.converted);
-    const createdMs = Date.parse(f.createdAt);
-    if (!Number.isFinite(createdMs)) continue;
-    if (bogotaDayKey(createdMs) === todayKey) bumpTally(today, f.converted);
-    if (createdMs >= nowMs - 7 * DAY_MS) bumpTally(last7, f.converted);
-    if (createdMs >= nowMs - 30 * DAY_MS) bumpTally(last30, f.converted);
-    const day = dayIndex.get(bogotaDayKey(createdMs));
-    if (day) bumpTally(day, f.converted);
+    const ms = Date.parse(f.createdAt);
+    if (!Number.isFinite(ms)) continue;
+    const id = f.conversationId;
+    const key = bogotaDayKey(ms);
+
+    if (key === todayKey) {
+      todayC.add(id);
+      if (f.converted) todayT.add(id);
+    }
+    if (ms >= nowMs - 7 * DAY_MS) {
+      last7C.add(id);
+      if (f.converted) last7T.add(id);
+    }
+    if (ms >= nowMs - 30 * DAY_MS) {
+      last30C.add(id);
+      if (f.converted) last30T.add(id);
+    }
+    const c = dayC.get(key);
+    if (c) {
+      c.add(id);
+      if (f.converted) dayT.get(key)!.add(id);
+    }
   }
 
   return {
-    total: toWindow(total),
-    today: toWindow(today),
-    last7: toWindow(last7),
-    last30: toWindow(last30),
-    perDay: dayKeys.map((k) => {
-      const d = dayIndex.get(k)!;
-      return { date: k, conversations: d.conversations, transactions: d.transactions, rate: rate(d.transactions, d.conversations) };
-    }),
+    total: {
+      conversations: total.conversations,
+      transactions: total.converted,
+      rate: rate(total.converted, total.conversations),
+    },
+    today: windowOf(todayC, todayT),
+    last7: windowOf(last7C, last7T),
+    last30: windowOf(last30C, last30T),
+    perDay: dayKeys.map((k) => windowDay(k, dayC.get(k)!, dayT.get(k)!)),
+  };
+}
+
+function windowDay(date: string, conversations: Set<string>, transactions: Set<string>): ConversionDay {
+  return {
+    date,
+    conversations: conversations.size,
+    transactions: transactions.size,
+    rate: rate(transactions.size, conversations.size),
   };
 }
