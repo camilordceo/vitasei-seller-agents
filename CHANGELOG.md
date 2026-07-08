@@ -75,6 +75,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `app/dashboard/orders/NewOrderButton.tsx`).
 
 ### Fixed
+- **Borrar un contacto/conversación fallaba si tenía un evento de Hotmart** (`ERROR 23503:
+  violates foreign key constraint "hotmart_events_contact_id_fkey"`): la migración `0013` creó
+  `hotmart_events` con FKs a `contacts`/`conversations` **sin** `on delete cascade`, a diferencia
+  de todo el resto del esquema. Se corrige con la migración `0015_hotmart_events_cascade.sql`, que
+  recrea las FKs con `on delete cascade` (contacto/conversación) y `on delete set null` (agente).
+  Requiere **aplicar la migración** en Supabase. (`supabase/migrations/0015_hotmart_events_cascade.sql`).
 - **Reportes · Conversión mostraba muchas menos conversaciones de las reales** (p. ej. **6 en vez de
   26** en un día): el embudo contaba las conversaciones por su `created_at`, pero la ingesta reutiliza
   **una sola conversación activa por (contacto, agente)** entre días, así que "Hoy" solo veía los
