@@ -9,9 +9,11 @@ Envía un video automáticamente cuando la **respuesta del bot** menciona una pa
   **caption** opcional), y puede **editarlos**, activarlos/desactivarlos o eliminarlos.
 - En el **backend**, después de que el bot envía su respuesta normal, si el texto menciona una de
   esas palabras, se envía el video correspondiente por Callbell — **una sola vez por conversación**.
-- **Caption** (ej. "Mira acá los beneficios del colágeno"): Callbell NO admite caption incrustado en
-  video (`type: document`; solo `image` lo soporta), así que se envía como un **mensaje de texto
-  justo antes del video** (best-effort: si el caption falla, igual se manda el video).
+- **Caption** (ej. "Mira acá los beneficios del colágeno"): va **pegado al video en el MISMO
+  mensaje** (`content.text`), para no mandar mensajes de más. La doc de Callbell solo documenta
+  caption para `image`, pero WhatsApp lo soporta en video y Callbell parece reenviarlo; si en algún
+  caso no lo reenviara, el video llega sin caption (no rompe). Antes se mandaba como un texto aparte
+  (3 mensajes al cliente); ahora son 2: la respuesta del bot + el video con su caption.
 
 ## Cómo funciona (backend)
 1. Tras enviar la respuesta (rama normal, no handoff) en `generateAndSend`, se llama a
@@ -28,11 +30,14 @@ Envía un video automáticamente cuando la **respuesta del bot** menciona una pa
 ## Callbell (envío de video)
 `sendVideo` usa `POST /v1/messages/send` con:
 ```json
-{ "to": "57...", "from": "whatsapp", "type": "document", "content": { "url": "https://…/magnesio.mp4" } }
+{ "to": "57...", "from": "whatsapp", "type": "document",
+  "content": { "url": "https://…/magnesio.mp4", "text": "Mira acá los beneficios" } }
 ```
 Callbell manda video/audio/documento como `type: "document"` (WhatsApp reconoce el video por la
-extensión). Solo `image` admite caption. **Requiere cuenta con WhatsApp Business API oficial**
-(la que ya usa Vitasei). Doc: <https://docs.callbell.eu/api/reference/messages_api/post_send_messages/>.
+extensión). El `content.text` es el caption: la doc lo documenta solo para `image`, pero se envía
+igual en el video para que texto y video queden en un mismo mensaje (WhatsApp lo soporta). **Requiere
+cuenta con WhatsApp Business API oficial** (la que ya usa Vitasei).
+Doc: <https://docs.callbell.eu/api/reference/messages_api/post_send_messages/>.
 
 ## Datos (migraciones 0016 + 0017)
 Tabla `videos`: `keyword`, `video_url`, `caption` (opcional), `enabled`, `agent_id` (NULL = global).

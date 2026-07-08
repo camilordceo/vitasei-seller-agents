@@ -12,6 +12,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Changed
+- **Videos por palabra clave · caption pegado al video** (`docs/20`): el caption ahora viaja en el
+  **mismo mensaje** que el video (`content.text`) en vez de mandarse como un texto aparte. Antes el
+  cliente recibía 3 mensajes (respuesta + caption + video); ahora recibe 2 (respuesta + video con su
+  caption). La doc de Callbell solo documenta caption para `image`, pero WhatsApp lo soporta en video
+  y se envía igual; si no se reenviara, el video llega sin caption (no rompe).
+  (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
+
 ### Added
 - **Videos por palabra clave · caption + edición** (`docs/20`, migración `0017_videos_caption.sql`):
   cada video ahora admite un **caption** opcional (ej. "Mira acá los beneficios del colágeno") que se

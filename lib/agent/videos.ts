@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sendText, sendVideo, type CallbellCreds } from "@/lib/callbell/sender";
+import { sendVideo, type CallbellCreds } from "@/lib/callbell/sender";
 import { matchVideos, type VideoRule } from "./videoMatch";
 import type { Database, Json } from "@/lib/supabase/types";
 
@@ -120,28 +120,16 @@ export async function sendKeywordVideos(
     if (sentIds.has(v.id) || sentUrls.has(v.videoUrl)) continue;
 
     try {
-      // Caption: Callbell NO admite texto incrustado en video (solo en image), así
-      // que va como un mensaje de TEXTO justo antes del video. Best-effort: si el
-      // caption falla, igual se manda el video.
-      const caption = v.caption?.trim();
-      if (caption) {
-        try {
-          await sendText(creds, phone, caption, { metadata });
-        } catch (e) {
-          console.error(
-            "[sendKeywordVideos] caption failed:",
-            e instanceof Error ? e.message : String(e),
-          );
-        }
-      }
-
-      const sent = await sendVideo(creds, phone, v.videoUrl, { metadata });
+      // Caption PEGADO al video: va en el MISMO mensaje (content.text), no como un
+      // texto aparte, para no mandar 3 mensajes al cliente. Ver docs/20.
+      const caption = v.caption?.trim() || null;
+      const sent = await sendVideo(creds, phone, v.videoUrl, caption, { metadata });
       await supabase.from("messages").insert({
         conversation_id: conversationId,
         direction: "outbound",
         role: "assistant",
         type: "video",
-        content: caption ?? null,
+        content: caption,
         media_url: v.videoUrl,
         tags: [v.keyword] as unknown as Json,
         callbell_message_uuid: sent.uuid,
