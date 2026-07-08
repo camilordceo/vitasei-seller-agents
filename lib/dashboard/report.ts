@@ -175,7 +175,7 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
 //    (`orders.created_at`) — EXACTAMENTE la misma fuente que "Órdenes generadas
 //    por día" (`summarizeOrders`). Antes se contaban por la actividad de la
 //    conversación (una compra del 4 jul aparecía "hoy" si el cliente volvía a
-//    escribir), lo que no cuadraba con el cuadro de órdenes. Ver ADR-0035.
+//    escribir), lo que no cuadraba con el cuadro de órdenes. Ver ADR-0037.
 //
 // `total` es histórico: TODAS las conversaciones vs. TODAS las órdenes no
 // canceladas. Se inyecta aparte para no traer todo el historial.

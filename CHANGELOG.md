@@ -86,7 +86,7 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `summarizeConversationActivity` (reemplaza `summarizeConversion`). De paso, `getConversionReport` y
   `getSalesReport` ahora **paginan**
   (`fetchAllRows`, páginas de 1000) para no subcontar al pasar del tope de 1000 filas de PostgREST.
-  Ver **ADR-0035** y `docs/17`. (`lib/dashboard/report.ts`, `lib/dashboard/queries.ts`,
+  Ver **ADR-0037** y `docs/19`. (`lib/dashboard/report.ts`, `lib/dashboard/queries.ts`,
   `lib/dashboard/report.test.ts`, `app/dashboard/reports/page.tsx`, `docs/12-ordenes-y-reportes.md`).
 - **Retargets ("¿sigues ahí?") que podían dispararse tras una compra**: al crear la orden se
   cancelaban las reactivaciones (7/15d) pero **no** los seguimientos (1h/8h), y la creación

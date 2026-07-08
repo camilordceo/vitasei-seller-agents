@@ -1,4 +1,4 @@
-# ADR-0035: Conversión por conversaciones ACTIVAS (no por `created_at`)
+# ADR-0037: Conversión por conversaciones ACTIVAS (no por `created_at`)
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-07-08

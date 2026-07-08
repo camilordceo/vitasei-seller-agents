@@ -48,7 +48,7 @@ Agrega **todas** las órdenes (lógica pura `summarizeOrders` en `lib/dashboard/
   entre días). "Transacciones" = órdenes **no canceladas** por su `created_at` (la MISMA base que
   "Órdenes generadas por día", para que coincidan). "Total" es histórico (todas las conversaciones
   vs. todas las órdenes no canceladas). Lógica pura `summarizeConversationActivity`; datos con
-  `getConversionReport` (paginado, sobre `messages` inbound + `orders`). Ver **ADR-0035** y `docs/17`.
+  `getConversionReport` (paginado, sobre `messages` inbound + `orders`). Ver **ADR-0037** y `docs/19`.
 - **Copiar resumen:** botón que copia un resumen en texto plano (incluye la conversión) para pegar
   en WhatsApp/Slack.
 

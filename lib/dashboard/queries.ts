@@ -728,7 +728,7 @@ export async function getSalesReport(): Promise<SalesReport> {
  *    que "Órdenes generadas" (`getSalesReport`), para que ambos cuadros coincidan.
  *    Antes se contaban por la actividad de la conversación (una compra vieja
  *    aparecía "hoy" si el cliente volvía a escribir).
- * `total` es histórico. Lógica pura en report.ts. Ver ADR-0035. Paginado.
+ * `total` es histórico. Lógica pura en report.ts. Ver ADR-0037. Paginado.
  */
 export async function getConversionReport(): Promise<ConversionReport> {
   const supabase = createServiceClient();

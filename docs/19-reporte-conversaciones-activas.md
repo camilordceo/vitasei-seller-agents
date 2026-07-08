@@ -1,7 +1,7 @@
-# 17 — PRD: Conversaciones "activas" en Reportes (fix del gráfico de conversión)
+# 19 — PRD: Conversaciones "activas" en Reportes (fix del gráfico de conversión)
 
 Corrige el gráfico y las cifras de **Conversión** en Reportes, que mostraban muchas menos
-conversaciones de las reales (p. ej. **6 en vez de 26** en un día). Ver **ADR-0035**.
+conversaciones de las reales (p. ej. **6 en vez de 26** en un día). Ver **ADR-0037**.
 
 ## Problema (síntoma)
 En `/dashboard/reports`, sección **Conversión**, "Conversaciones · Hoy" mostró **6** un día con
@@ -46,7 +46,7 @@ igual de bajo. El equipo no puede confiar en la tasa de conversión si el denomi
 En la primera versión las transacciones se contaban por la conversación que convirtió y se
 atribuían al día de **actividad** de la conversación → una compra del 4 jul aparecía como "1 hoy"
 si el cliente volvía a escribir, sin cuadrar con el cuadro de órdenes. Se corrigió a **órdenes no
-canceladas por `orders.created_at`** (misma base que "Órdenes generadas"). Ver ADR-0035.
+canceladas por `orders.created_at`** (misma base que "Órdenes generadas"). Ver ADR-0037.
 
 ## Archivos
 - `lib/dashboard/report.ts` — nueva función pura `summarizeConversationActivity` (reemplaza
@@ -65,5 +65,5 @@ canceladas por `orders.created_at`** (misma base que "Órdenes generadas"). Ver 
 
 ## Qué NO hace (v1)
 - No agrega un contador separado de **leads nuevos** (conversaciones creadas hoy). Es una mejora
-  útil y barata, pero se deja como follow-up para acotar el cambio (ver ADR-0035, alternativa b).
+  útil y barata, pero se deja como follow-up para acotar el cambio (ver ADR-0037, alternativa b).
 - No mueve la agregación a vistas/RPC en Postgres (se hará si el volumen lo pide).
