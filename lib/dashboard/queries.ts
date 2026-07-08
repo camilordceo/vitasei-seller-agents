@@ -211,7 +211,7 @@ export interface ConversationFilters {
 export async function getRecentConversations(
   opts: ConversationFilters = {},
 ): Promise<ConversationRow[]> {
-  const limit = opts.limit ?? 30;
+  const limit = opts.limit ?? 100;
   const supabase = createServiceClient();
 
   let q = supabase
