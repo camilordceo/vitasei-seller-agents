@@ -54,9 +54,32 @@ export async function loadKeywordVideos(supabase: DB, agentId: string): Promise<
 }
 
 /**
- * Si el texto de la respuesta menciona una palabra configurada, envía el/los
- * video(s) correspondiente(s) por Callbell — UNA sola vez por conversación
- * (idempotencia por `media_url`). Best-effort: cualquier fallo se loguea y se
+ * IDs de los videos que YA se enviaron en esta conversación. Es el marcador de
+ * "ya se envió", leído del `events_log` (`keyword_video_sent`) en UNA consulta.
+ * Se clave por **id de video** (no por URL), así que sobrevive a que se edite la
+ * URL del video. Best-effort: ante un error devuelve un set vacío.
+ */
+async function loadSentVideoIds(supabase: DB, conversationId: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from("events_log")
+    .select("payload")
+    .eq("conversation_id", conversationId)
+    .eq("type", "keyword_video_sent");
+  const ids = new Set<string>();
+  if (error) return ids;
+  for (const row of data ?? []) {
+    const p = row.payload as { videoId?: unknown } | null;
+    if (p && typeof p === "object" && typeof p.videoId === "string") ids.add(p.videoId);
+  }
+  return ids;
+}
+
+/**
+ * Si el texto de la respuesta menciona una palabra configurada, envía el video
+ * correspondiente por Callbell **la PRIMERA vez que la palabra aparece** en una
+ * respuesta de la conversación, y **NO** en las siguientes que la mencionen: cada
+ * video se manda **una sola vez por conversación** (marcador por id en
+ * `events_log.keyword_video_sent`). Best-effort: cualquier fallo se loguea y se
  * sigue (nunca lanza). Se invoca tras enviar la respuesta normal (no en handoff).
  */
 export async function sendKeywordVideos(
@@ -86,17 +109,15 @@ export async function sendKeywordVideos(
   const matched = matchVideos(replyText, rules);
   if (matched.length === 0) return;
 
+  // "Ya se envió": ids de videos mandados antes en esta conversación (1 consulta).
+  const sentIds = await loadSentVideoIds(supabase, conversationId);
+  // Guarda en memoria por URL: si dos palabras del MISMO turno apuntan al mismo
+  // video, no lo mandes dos veces.
+  const sentUrls = new Set<string>();
+
   for (const v of matched) {
-    // Idempotencia: si ya se envió ESTE video en la conversación, no repetir.
-    const { data: already } = await supabase
-      .from("messages")
-      .select("id")
-      .eq("conversation_id", conversationId)
-      .eq("type", "video")
-      .eq("media_url", v.videoUrl)
-      .limit(1)
-      .maybeSingle();
-    if (already) continue;
+    // Idempotencia: si este video YA se envió en la conversación, no repetir.
+    if (sentIds.has(v.id) || sentUrls.has(v.videoUrl)) continue;
 
     try {
       // Caption: Callbell NO admite texto incrustado en video (solo en image), así
@@ -130,6 +151,7 @@ export async function sendKeywordVideos(
         type: "keyword_video_sent",
         payload: { videoId: v.id, keyword: v.keyword, uuid: sent.uuid } as unknown as Json,
       });
+      sentUrls.add(v.videoUrl); // marca este turno (idempotencia intra-turno)
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.error("[sendKeywordVideos] send failed:", message);

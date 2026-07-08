@@ -19,10 +19,11 @@ Envía un video automáticamente cuando la **respuesta del bot** menciona una pa
 2. Se cargan los videos habilitados del agente + los globales (`agent_id null`).
 3. `matchVideos` (puro, testeado) empareja **case- y acento-insensible**, por **palabra completa**,
    preservando la ñ (año ≠ ano).
-4. Por cada match: si ese video **no** se envió antes en la conversación (idempotencia por
-   `media_url` en `messages`), se manda por Callbell y se guarda el `messages` (type `video`) +
-   evento `keyword_video_sent`. Best-effort: un fallo se loguea (`keyword_video_failed`) y no rompe
-   la respuesta.
+4. Por cada match: el video se manda **la primera vez que la palabra aparece** y **no** en las
+   respuestas siguientes que la mencionen — cada video sale **una sola vez por conversación**. El
+   marcador de "ya se envió" es por **id de video** en `events_log` (`keyword_video_sent`), así que
+   sobrevive a que se edite la URL del video. Al enviar se guarda el `messages` (type `video`) + el
+   evento. Best-effort: un fallo se loguea (`keyword_video_failed`) y no rompe la respuesta.
 
 ## Callbell (envío de video)
 `sendVideo` usa `POST /v1/messages/send` con:
