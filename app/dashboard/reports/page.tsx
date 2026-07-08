@@ -171,7 +171,7 @@ export default async function ReportsPage() {
           <div>
             <h2 className="text-sm font-semibold text-slate-700">Conversión</h2>
             <p className="text-xs text-slate-400">
-              Conversaciones que terminaron en transacción (orden no cancelada).
+              Conversaciones activas en el período que terminaron en transacción (orden no cancelada).
             </p>
           </div>
           <div className="text-right">

@@ -693,11 +693,16 @@ export async function getSalesReport(): Promise<SalesReport> {
  * Embudo de conversión: conversaciones vs. transacciones (conversaciones con al
  * menos una orden no cancelada) por ventana de tiempo y por día. Lógica pura en
  * report.ts. Volumen v1 bajo → se cuenta en JS.
+ *
+ * NOTA: Usamos `updated_at` (última actividad) en lugar de `created_at` para los
+ * cortes de tiempo. "Hoy" = conversaciones activas hoy, no solo creadas hoy.
+ * La fecha de referencia para el corte es `updated_at`, pero la conversación se
+ * creó en `created_at`.
  */
 export async function getConversionReport(): Promise<ConversionReport> {
   const supabase = createServiceClient();
   const [convRes, ordersRes] = await Promise.all([
-    supabase.from("conversations").select("id, created_at"),
+    supabase.from("conversations").select("id, updated_at"),
     supabase.from("orders").select("conversation_id, status"),
   ]);
   if (convRes.error) throw new Error(`getConversionReport conversations: ${convRes.error.message}`);
@@ -709,8 +714,9 @@ export async function getConversionReport(): Promise<ConversionReport> {
     if (o.status !== "cancelled") converting.add(o.conversation_id);
   }
 
+  // Usamos updated_at como fecha de referencia para los cortes de tiempo
   const facts: ConversationFact[] = (convRes.data ?? []).map((c) => ({
-    createdAt: c.created_at,
+    createdAt: c.updated_at, // updated_at para los cortes de actividad
     converted: converting.has(c.id),
   }));
   return summarizeConversion(facts);

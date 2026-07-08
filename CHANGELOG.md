@@ -12,6 +12,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Fixed
+- **Reporte de conversión ahora cuenta por actividad, no por creación**: el corte "Hoy" y los
+  cortes de tiempo del reporte de conversión ahora usan `updated_at` (última actividad) en lugar
+  de `created_at`. Esto corrige el problema donde "Hoy" mostraba solo conversaciones **creadas**
+  hoy, cuando el usuario espera ver conversaciones **activas** hoy. Ahora las 27 conversaciones
+  activas hoy aparecerán correctamente en el reporte, no solo las 6 que fueron creadas hoy.
+  (`lib/dashboard/queries.ts:getConversionReport`).
+
 ### Added
 - **Carritos abandonados de Hotmart** (ADR-0035): nuevo webhook `POST /api/webhooks/hotmart` que
   recibe eventos de carrito abandonado (`PURCHASE_OUT_OF_SHOPPING_CART`) y **envía automáticamente
