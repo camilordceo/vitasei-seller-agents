@@ -603,7 +603,7 @@ export async function getConversationLabels(conversationId: string): Promise<Lab
 
   if (error) throw new Error(`getConversationLabels: ${error.message}`);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line
   return (data ?? []).map((row: any) => row.labels).filter(Boolean) as Label[];
 }
 
