@@ -532,6 +532,30 @@ export function ReactivationList({ rows }: { rows: ReactivationRow[] }) {
   );
 }
 
+/** Texto claro u oscuro según la luminancia del color de la etiqueta (contraste). */
+function labelTextClass(hex: string): string {
+  const h = hex.replace("#", "");
+  if (h.length < 6) return "text-white";
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? "text-slate-800" : "text-white";
+}
+
+/** Chip de etiqueta (presentacional) para la lista de conversaciones. */
+function LabelChip({ name, color }: { name: string; color: string }) {
+  return (
+    <span
+      className={`inline-flex max-w-[10rem] items-center truncate rounded-full px-2 py-0.5 text-[11px] font-medium ${labelTextClass(color)}`}
+      style={{ backgroundColor: color }}
+      title={name}
+    >
+      {name}
+    </span>
+  );
+}
+
 export function ConversationList({
   rows,
   filtered = false,
@@ -570,6 +594,9 @@ export function ConversationList({
                 <StatusPill status={c.status} />
                 {c.hasOrder && c.orderStatus ? <OrderBadge status={c.orderStatus} /> : null}
                 {c.aiPaused ? <ManualPill /> : null}
+                {c.labels.map((l) => (
+                  <LabelChip key={l.id} name={l.name} color={l.color} />
+                ))}
               </div>
               <p className="mt-0.5 truncate text-sm text-slate-500">
                 {c.lastMessage ?? "Sin mensajes"}

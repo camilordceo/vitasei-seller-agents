@@ -14,6 +14,11 @@ para clasificarlas y organizarlas mejor. Ejemplos de etiquetas:
 **Resultado:** mejor organización del pipeline de ventas, filtrado rápido y contexto visual
 al abrir una conversación.
 
+Las etiquetas se muestran como **chips de color en la lista de conversaciones** (Resumen y
+`/dashboard/conversations`), para identificar cada conversación de un vistazo sin tener que abrirla.
+Se cargan en `getRecentConversations` (embed de `labels`, resiliente si falta la migración 0014) y
+se renderizan en `ConversationList` (`app/dashboard/ui.tsx`).
+
 ---
 
 ## 2. Modelo de Datos

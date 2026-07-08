@@ -210,6 +210,13 @@ export async function getAiCostReport(): Promise<AiCostReport> {
   };
 }
 
+/** Etiqueta liviana para los chips de la lista (id + nombre + color). */
+export interface ConversationLabelLite {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface ConversationRow {
   id: string;
   contactName: string | null;
@@ -223,6 +230,8 @@ export interface ConversationRow {
   hasOrder: boolean;
   /** Estado del pedido más reciente (para el badge de la lista). null si no tiene. */
   orderStatus: OrderStatus | null;
+  /** Etiquetas de la conversación (para identificarla de un vistazo). */
+  labels: ConversationLabelLite[];
 }
 
 export interface ConversationFilters {
@@ -264,7 +273,7 @@ export async function getRecentConversations(
   const contactIds = [...new Set(rows.map((r) => r.contact_id))];
   const convoIds = rows.map((r) => r.id);
 
-  const [contactsRes, msgsRes, ordersRes] = await Promise.all([
+  const [contactsRes, msgsRes, ordersRes, labelsRes] = await Promise.all([
     supabase.from("contacts").select("id, name, phone").in("id", contactIds),
     supabase
       .from("messages")
@@ -276,6 +285,12 @@ export async function getRecentConversations(
       .select("conversation_id, status, created_at")
       .in("conversation_id", convoIds)
       .order("created_at", { ascending: false }),
+    // Etiquetas por conversación (embed de `labels`). Resiliente: si aún no se
+    // aplicó la migración 0014, esta consulta falla y se ignora (sin chips).
+    supabase
+      .from("conversation_labels")
+      .select("conversation_id, labels(id, name, color)")
+      .in("conversation_id", convoIds),
   ]);
   if (contactsRes.error) throw new Error(`getRecentConversations contacts: ${contactsRes.error.message}`);
   if (msgsRes.error) throw new Error(`getRecentConversations messages: ${msgsRes.error.message}`);
@@ -296,6 +311,24 @@ export async function getRecentConversations(
     }
   }
 
+  // Etiquetas por conversación. El embed `labels(...)` puede venir como objeto o
+  // arreglo según PostgREST; se normaliza. Si la consulta falló (tabla ausente),
+  // el mapa queda vacío y la lista no muestra chips (resiliencia).
+  const labelsByConvo = new Map<string, ConversationLabelLite[]>();
+  if (!labelsRes.error) {
+    type EmbedRow = {
+      conversation_id: string;
+      labels: ConversationLabelLite | ConversationLabelLite[] | null;
+    };
+    for (const row of (labelsRes.data ?? []) as EmbedRow[]) {
+      const label = Array.isArray(row.labels) ? row.labels[0] : row.labels;
+      if (!label) continue;
+      const arr = labelsByConvo.get(row.conversation_id) ?? [];
+      arr.push({ id: label.id, name: label.name, color: label.color });
+      labelsByConvo.set(row.conversation_id, arr);
+    }
+  }
+
   let mapped: ConversationRow[] = rows.map((r) => {
     const c = contactById.get(r.contact_id);
     const lm = lastMsgByConvo.get(r.id);
@@ -311,6 +344,7 @@ export async function getRecentConversations(
       lastMessage: lm ? (lm.type === "text" ? lm.content : `[${lm.type}]`) : null,
       hasOrder: orderStatus != null,
       orderStatus,
+      labels: labelsByConvo.get(r.id) ?? [],
     };
   });
 

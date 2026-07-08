@@ -21,6 +21,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Etiquetas visibles en la lista de conversaciones** (`docs/18`): las etiquetas ahora se muestran
+  como **chips de color** en cada fila de la lista (Resumen y `/dashboard/conversations`), para
+  identificar las conversaciones de un vistazo sin abrirlas. `getRecentConversations` trae las
+  etiquetas por conversación (embed de `labels`, resiliente si falta la migración 0014) y
+  `ConversationList` las renderiza. (`lib/dashboard/queries.ts`, `app/dashboard/ui.tsx`).
 - **Videos por palabra clave · caption + edición** (`docs/20`, migración `0017_videos_caption.sql`):
   cada video ahora admite un **caption** opcional (ej. "Mira acá los beneficios del colágeno") que se
   envía como **mensaje de texto justo antes del video** (Callbell no admite caption incrustado en
