@@ -49,7 +49,10 @@ export interface SendOptions {
 interface SendBody {
   to: string;
   from: "whatsapp";
-  type: "text" | "image";
+  // Callbell manda video/audio/documento TODOS como `document` (WhatsApp infiere
+  // el tipo por la extensión del archivo). Solo `image` admite caption. Ver
+  // https://docs.callbell.eu/api/reference/messages_api/post_send_messages/
+  type: "text" | "image" | "document";
   content: Record<string, unknown>;
   channel_uuid?: string;
   metadata?: Record<string, unknown>;
@@ -159,6 +162,29 @@ export function sendImage(
     from: "whatsapp",
     type: "image",
     content,
+    channel_uuid: creds.channelUuid ?? undefined,
+    metadata: options?.metadata,
+  });
+}
+
+/**
+ * Envía un VIDEO por URL. Callbell lo manda como `type: "document"` con
+ * `content: { url }` (WhatsApp reconoce el video por la extensión, ej. .mp4).
+ * NO admite caption en el mismo mensaje (solo `image` lo soporta). Requiere una
+ * cuenta con la API oficial de WhatsApp Business. Ver docs de Callbell:
+ * https://docs.callbell.eu/api/reference/messages_api/post_send_messages/
+ */
+export function sendVideo(
+  creds: CallbellCreds,
+  to: string,
+  url: string,
+  options?: { metadata?: Record<string, unknown> },
+): Promise<SentMessage> {
+  return send(creds, {
+    to,
+    from: "whatsapp",
+    type: "document",
+    content: { url },
     channel_uuid: creds.channelUuid ?? undefined,
     metadata: options?.metadata,
   });

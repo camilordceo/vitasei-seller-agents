@@ -13,6 +13,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Videos por palabra clave** (ADR-0038, `docs/20`): nueva sección **Videos** en el dashboard
+  (`/dashboard/videos`) para configurar pares **palabra → video**. Cuando la **respuesta del bot**
+  menciona una palabra (ej. "magnesio"), el backend envía el video correspondiente por Callbell
+  **justo después** del mensaje, **una sola vez por conversación** (idempotente por `media_url`). El
+  match es **case- y acento-insensible**, por **palabra completa** y **preserva la ñ** (lógica pura
+  `lib/agent/videoMatch.ts`, 9 tests). Envío con `sendVideo` (`type: "document"` + `content.url`, como
+  documenta Callbell para video; requiere WhatsApp Business API oficial). Best-effort: nunca rompe la
+  respuesta; se traza con `keyword_video_sent`/`keyword_video_failed` (no altera el costo de IA).
+  Requiere aplicar la migración `0016_videos.sql`. (`supabase/migrations/0016_videos.sql`,
+  `lib/supabase/types.ts`, `lib/callbell/sender.ts`, `lib/agent/videoMatch.ts`, `lib/agent/videos.ts`,
+  `lib/agent/processMessage.ts`, `lib/dashboard/queries.ts`, `app/dashboard/actions.ts`,
+  `app/dashboard/videos/page.tsx`, `app/dashboard/videos/VideosManager.tsx`, `app/dashboard/layout.tsx`).
 - **Carritos abandonados de Hotmart** (ADR-0035): nuevo webhook `POST /api/webhooks/hotmart` que
   recibe eventos de carrito abandonado (`PURCHASE_OUT_OF_SHOPPING_CART`) y **envía automáticamente
   una plantilla de WhatsApp** vía Callbell para recuperar la venta. El flujo: Hotmart detecta

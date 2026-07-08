@@ -49,6 +49,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 Reportes
               </Link>
               <Link
+                href="/dashboard/videos"
+                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                Videos
+              </Link>
+              <Link
                 href="/dashboard/retargets"
                 className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
               >

@@ -568,6 +568,36 @@ export interface Database {
         };
         Relationships: [];
       };
+      videos: {
+        Row: {
+          id: string;
+          agent_id: string | null;
+          keyword: string;
+          video_url: string;
+          enabled: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          agent_id?: string | null;
+          keyword: string;
+          video_url: string;
+          enabled?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          agent_id?: string | null;
+          keyword?: string;
+          video_url?: string;
+          enabled?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       reactivations: {
         Row: {
           id: string;

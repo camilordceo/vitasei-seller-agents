@@ -734,3 +734,62 @@ export async function deleteLabel(labelId: string): Promise<void> {
 
   revalidatePath("/dashboard/conversations");
 }
+
+// --- Videos por palabra clave (ver docs/20, ADR-0038) -----------------------
+
+/**
+ * Crea una regla de video: cuando la respuesta del bot menciona `keyword`, envía
+ * `videoUrl`. Se crea GLOBAL (agent_id null → aplica a todas las marcas). Valida
+ * que la palabra no esté vacía y que la URL sea http(s). Corre server-side con
+ * service-role, protegida por el Basic Auth del dashboard.
+ */
+export async function createVideo(keyword: string, videoUrl: string): Promise<string> {
+  const kw = keyword.trim();
+  const url = videoUrl.trim();
+  if (!kw) throw new Error("La palabra clave no puede estar vacía.");
+  if (!/^https?:\/\/\S+/i.test(url))
+    throw new Error("La URL del video debe empezar por http:// o https://");
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("videos")
+    .insert({ keyword: kw, video_url: url })
+    .select("id")
+    .single();
+  if (error) {
+    // El índice único (palabra por marca) da 23505 si ya existe esa palabra.
+    if (error.code === "23505")
+      throw new Error(`Ya existe un video para la palabra "${kw}".`);
+    throw new Error(`createVideo: ${error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "video_created",
+    payload: { keyword: kw } as unknown as Json,
+  });
+  revalidatePath("/dashboard/videos");
+  return data.id;
+}
+
+/** Activa o desactiva una regla de video (sin borrarla). */
+export async function setVideoEnabled(id: string, enabled: boolean): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.from("videos").update({ enabled }).eq("id", id);
+  if (error) throw new Error(`setVideoEnabled: ${error.message}`);
+  revalidatePath("/dashboard/videos");
+}
+
+/** Elimina una regla de video. */
+export async function deleteVideo(id: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.from("videos").delete().eq("id", id);
+  if (error) throw new Error(`deleteVideo: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "video_deleted",
+    payload: { videoId: id } as unknown as Json,
+  });
+  revalidatePath("/dashboard/videos");
+}

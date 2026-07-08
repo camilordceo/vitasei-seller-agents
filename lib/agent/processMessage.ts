@@ -21,6 +21,7 @@ import {
 } from "@/lib/agent/agents";
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
+import { sendKeywordVideos } from "@/lib/agent/videos";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
 import { isAgentActiveNow } from "@/lib/agent/schedule";
 import {
@@ -1033,6 +1034,18 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         payload: { uuid: sent.uuid } as unknown as Json,
       });
     }
+
+    // Videos por palabra clave: si la respuesta del bot menciona una palabra
+    // configurada (ej. "magnesio"), enviar el video correspondiente tras la
+    // respuesta — una sola vez por conversación. Best-effort (no rompe nada).
+    // Ver docs/20, ADR-0038.
+    await sendKeywordVideos(supabase, creds, {
+      conversationId,
+      phone,
+      agentId: agent.id,
+      replyText: parsed.cleanText,
+      metadata: meta.metadata,
+    });
   }
 
   // Handoff: apagar el bot en nuestra DB y cerrar la orden.

@@ -774,6 +774,38 @@ export async function getConversionReport(): Promise<ConversionReport> {
   });
 }
 
+// --- Videos por palabra clave (ver docs/20, ADR-0038) -----------------------
+
+export interface VideoRow {
+  id: string;
+  keyword: string;
+  videoUrl: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+/** Lista de videos configurados (palabra → video), recientes primero. */
+export async function getVideos(): Promise<VideoRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("videos")
+    .select("id, keyword, video_url, enabled, created_at")
+    .order("created_at", { ascending: false });
+  // Resiliencia: si aún no se aplicó la migración 0016, la tabla no existe
+  // (42P01) → la sección se muestra vacía en vez de romper. Ver ADR-0038.
+  if (error) {
+    if (error.code === "42P01") return [];
+    throw new Error(`getVideos: ${error.message}`);
+  }
+  return (data ?? []).map((v) => ({
+    id: v.id,
+    keyword: v.keyword,
+    videoUrl: v.video_url,
+    enabled: v.enabled,
+    createdAt: v.created_at,
+  }));
+}
+
 // --- Reactivaciones por plantilla (7/15 días, ver docs/14) -------------------
 
 export interface AgentReactivationConfig {
