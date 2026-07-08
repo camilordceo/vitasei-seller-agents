@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sendVideo, type CallbellCreds } from "@/lib/callbell/sender";
+import { sendText, sendVideo, type CallbellCreds } from "@/lib/callbell/sender";
 import { matchVideos, type VideoRule } from "./videoMatch";
 import type { Database, Json } from "@/lib/supabase/types";
 
@@ -14,18 +14,43 @@ type DB = SupabaseClient<Database>;
 
 /** Carga los videos habilitados del agente + los globales (agent_id null). */
 export async function loadKeywordVideos(supabase: DB, agentId: string): Promise<VideoRule[]> {
-  const { data, error } = await supabase
+  const filter = `agent_id.eq.${agentId},agent_id.is.null`;
+
+  const withCaption = await supabase
     .from("videos")
-    .select("id, keyword, video_url")
+    .select("id, keyword, video_url, caption")
     .eq("enabled", true)
-    .or(`agent_id.eq.${agentId},agent_id.is.null`);
-  // Si aún no se aplicó la migración 0016 (tabla inexistente, 42P01), no hay
-  // videos configurados → no es un error, simplemente no se envía nada.
-  if (error) {
-    if (error.code === "42P01") return [];
-    throw new Error(`loadKeywordVideos: ${error.message}`);
+    .or(filter);
+
+  // Resiliencia a la ventana de migración:
+  //  - 42P01 (tabla inexistente, falta 0016) → sin videos configurados.
+  //  - 42703 (columna caption inexistente, falta 0017) → reintenta sin caption.
+  if (withCaption.error && withCaption.error.code === "42P01") return [];
+  if (withCaption.error && withCaption.error.code === "42703") {
+    const noCaption = await supabase
+      .from("videos")
+      .select("id, keyword, video_url")
+      .eq("enabled", true)
+      .or(filter);
+    if (noCaption.error) {
+      if (noCaption.error.code === "42P01") return [];
+      throw new Error(`loadKeywordVideos: ${noCaption.error.message}`);
+    }
+    return (noCaption.data ?? []).map((v) => ({
+      id: v.id,
+      keyword: v.keyword,
+      videoUrl: v.video_url,
+      caption: null,
+    }));
   }
-  return (data ?? []).map((v) => ({ id: v.id, keyword: v.keyword, videoUrl: v.video_url }));
+  if (withCaption.error) throw new Error(`loadKeywordVideos: ${withCaption.error.message}`);
+
+  return (withCaption.data ?? []).map((v) => ({
+    id: v.id,
+    keyword: v.keyword,
+    videoUrl: v.video_url,
+    caption: v.caption,
+  }));
 }
 
 /**
@@ -74,13 +99,28 @@ export async function sendKeywordVideos(
     if (already) continue;
 
     try {
+      // Caption: Callbell NO admite texto incrustado en video (solo en image), así
+      // que va como un mensaje de TEXTO justo antes del video. Best-effort: si el
+      // caption falla, igual se manda el video.
+      const caption = v.caption?.trim();
+      if (caption) {
+        try {
+          await sendText(creds, phone, caption, { metadata });
+        } catch (e) {
+          console.error(
+            "[sendKeywordVideos] caption failed:",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      }
+
       const sent = await sendVideo(creds, phone, v.videoUrl, { metadata });
       await supabase.from("messages").insert({
         conversation_id: conversationId,
         direction: "outbound",
         role: "assistant",
         type: "video",
-        content: null,
+        content: caption ?? null,
         media_url: v.videoUrl,
         tags: [v.keyword] as unknown as Json,
         callbell_message_uuid: sent.uuid,

@@ -780,6 +780,7 @@ export interface VideoRow {
   id: string;
   keyword: string;
   videoUrl: string;
+  caption: string | null;
   enabled: boolean;
   createdAt: string;
 }
@@ -787,20 +788,42 @@ export interface VideoRow {
 /** Lista de videos configurados (palabra → video), recientes primero. */
 export async function getVideos(): Promise<VideoRow[]> {
   const supabase = createServiceClient();
-  const { data, error } = await supabase
+
+  const withCaption = await supabase
     .from("videos")
-    .select("id, keyword, video_url, enabled, created_at")
+    .select("id, keyword, video_url, caption, enabled, created_at")
     .order("created_at", { ascending: false });
-  // Resiliencia: si aún no se aplicó la migración 0016, la tabla no existe
-  // (42P01) → la sección se muestra vacía en vez de romper. Ver ADR-0038.
-  if (error) {
-    if (error.code === "42P01") return [];
-    throw new Error(`getVideos: ${error.message}`);
+
+  // Resiliencia a la ventana de migración:
+  //  - 42P01 (tabla inexistente, falta 0016) → sección vacía.
+  //  - 42703 (columna caption inexistente, falta 0017) → reintenta sin caption.
+  // Ver ADR-0038.
+  if (withCaption.error && withCaption.error.code === "42P01") return [];
+  if (withCaption.error && withCaption.error.code === "42703") {
+    const noCaption = await supabase
+      .from("videos")
+      .select("id, keyword, video_url, enabled, created_at")
+      .order("created_at", { ascending: false });
+    if (noCaption.error) {
+      if (noCaption.error.code === "42P01") return [];
+      throw new Error(`getVideos: ${noCaption.error.message}`);
+    }
+    return (noCaption.data ?? []).map((v) => ({
+      id: v.id,
+      keyword: v.keyword,
+      videoUrl: v.video_url,
+      caption: null,
+      enabled: v.enabled,
+      createdAt: v.created_at,
+    }));
   }
-  return (data ?? []).map((v) => ({
+  if (withCaption.error) throw new Error(`getVideos: ${withCaption.error.message}`);
+
+  return (withCaption.data ?? []).map((v) => ({
     id: v.id,
     keyword: v.keyword,
     videoUrl: v.video_url,
+    caption: v.caption,
     enabled: v.enabled,
     createdAt: v.created_at,
   }));

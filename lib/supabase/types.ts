@@ -574,6 +574,7 @@ export interface Database {
           agent_id: string | null;
           keyword: string;
           video_url: string;
+          caption: string | null;
           enabled: boolean;
           created_at: string;
           updated_at: string;
@@ -583,6 +584,7 @@ export interface Database {
           agent_id?: string | null;
           keyword: string;
           video_url: string;
+          caption?: string | null;
           enabled?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -592,6 +594,7 @@ export interface Database {
           agent_id?: string | null;
           keyword?: string;
           video_url?: string;
+          caption?: string | null;
           enabled?: boolean;
           created_at?: string;
           updated_at?: string;

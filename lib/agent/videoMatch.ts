@@ -12,6 +12,8 @@ export interface VideoRule {
   id: string;
   keyword: string;
   videoUrl: string;
+  /** Texto opcional que se envía (como mensaje aparte) junto con el video. */
+  caption?: string | null;
 }
 
 // Centinela (área de uso privado) para proteger la ñ/Ñ durante la normalización:

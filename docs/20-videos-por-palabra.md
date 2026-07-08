@@ -5,10 +5,13 @@ Envía un video automáticamente cuando la **respuesta del bot** menciona una pa
 **ADR-0038**.
 
 ## Qué hace
-- Sección **`/dashboard/videos`**: el equipo agrega pares **palabra → URL de video**, y puede
-  activarlos/desactivarlos o eliminarlos.
+- Sección **`/dashboard/videos`**: el equipo agrega pares **palabra → URL de video** (con un
+  **caption** opcional), y puede **editarlos**, activarlos/desactivarlos o eliminarlos.
 - En el **backend**, después de que el bot envía su respuesta normal, si el texto menciona una de
   esas palabras, se envía el video correspondiente por Callbell — **una sola vez por conversación**.
+- **Caption** (ej. "Mira acá los beneficios del colágeno"): Callbell NO admite caption incrustado en
+  video (`type: document`; solo `image` lo soporta), así que se envía como un **mensaje de texto
+  justo antes del video** (best-effort: si el caption falla, igual se manda el video).
 
 ## Cómo funciona (backend)
 1. Tras enviar la respuesta (rama normal, no handoff) en `generateAndSend`, se llama a
@@ -30,9 +33,11 @@ Callbell manda video/audio/documento como `type: "document"` (WhatsApp reconoce 
 extensión). Solo `image` admite caption. **Requiere cuenta con WhatsApp Business API oficial**
 (la que ya usa Vitasei). Doc: <https://docs.callbell.eu/api/reference/messages_api/post_send_messages/>.
 
-## Datos (migración 0016)
-Tabla `videos`: `keyword`, `video_url`, `enabled`, `agent_id` (NULL = global). Índice único por
-`(lower(keyword), agent_id)`. **Requiere aplicar `0016_videos.sql` en Supabase.**
+## Datos (migraciones 0016 + 0017)
+Tabla `videos`: `keyword`, `video_url`, `caption` (opcional), `enabled`, `agent_id` (NULL = global).
+Índice único por `(lower(keyword), agent_id)`. **Requiere aplicar `0016_videos.sql` y
+`0017_videos_caption.sql` en Supabase.** Las consultas son resilientes a la ventana de migración:
+si falta la tabla (42P01) o la columna `caption` (42703), degradan sin romper.
 
 ## Archivos
 - `supabase/migrations/0016_videos.sql`, `lib/supabase/types.ts` (tabla `videos`).

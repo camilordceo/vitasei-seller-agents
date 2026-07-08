@@ -52,4 +52,13 @@ describe("matchVideos", () => {
     const withEmpty: VideoRule[] = [{ id: "x", keyword: "  ", videoUrl: "u" }];
     expect(matchVideos("cualquier cosa", withEmpty)).toEqual([]);
   });
+
+  it("preserva el caption de la regla emparejada", () => {
+    const withCaption: VideoRule[] = [
+      { id: "c", keyword: "colágeno", videoUrl: "u", caption: "Mira los beneficios del colágeno" },
+    ];
+    const m = matchVideos("Prueba el colageno", withCaption);
+    expect(m).toHaveLength(1);
+    expect(m[0].caption).toBe("Mira los beneficios del colágeno");
+  });
 });

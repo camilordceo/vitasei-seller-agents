@@ -743,7 +743,11 @@ export async function deleteLabel(labelId: string): Promise<void> {
  * que la palabra no esté vacía y que la URL sea http(s). Corre server-side con
  * service-role, protegida por el Basic Auth del dashboard.
  */
-export async function createVideo(keyword: string, videoUrl: string): Promise<string> {
+export async function createVideo(
+  keyword: string,
+  videoUrl: string,
+  caption?: string,
+): Promise<string> {
   const kw = keyword.trim();
   const url = videoUrl.trim();
   if (!kw) throw new Error("La palabra clave no puede estar vacía.");
@@ -751,11 +755,20 @@ export async function createVideo(keyword: string, videoUrl: string): Promise<st
     throw new Error("La URL del video debe empezar por http:// o https://");
 
   const supabase = createServiceClient();
-  const { data, error } = await supabase
+  let res = await supabase
     .from("videos")
-    .insert({ keyword: kw, video_url: url })
+    .insert({ keyword: kw, video_url: url, caption: textOrNull(caption ?? "") })
     .select("id")
     .single();
+  // Ventana de migración: si aún no existe la columna caption (0017), guarda sin ella.
+  if (res.error?.code === "42703") {
+    res = await supabase
+      .from("videos")
+      .insert({ keyword: kw, video_url: url })
+      .select("id")
+      .single();
+  }
+  const { data, error } = res;
   if (error) {
     // El índice único (palabra por marca) da 23505 si ya existe esa palabra.
     if (error.code === "23505")
@@ -770,6 +783,40 @@ export async function createVideo(keyword: string, videoUrl: string): Promise<st
   });
   revalidatePath("/dashboard/videos");
   return data.id;
+}
+
+/** Edita una regla de video (palabra, URL y/o caption) y guarda. */
+export async function updateVideo(
+  id: string,
+  input: { keyword: string; videoUrl: string; caption?: string },
+): Promise<void> {
+  const kw = input.keyword.trim();
+  const url = input.videoUrl.trim();
+  if (!kw) throw new Error("La palabra clave no puede estar vacía.");
+  if (!/^https?:\/\/\S+/i.test(url))
+    throw new Error("La URL del video debe empezar por http:// o https://");
+
+  const supabase = createServiceClient();
+  let { error } = await supabase
+    .from("videos")
+    .update({ keyword: kw, video_url: url, caption: textOrNull(input.caption ?? "") })
+    .eq("id", id);
+  // Ventana de migración: si aún no existe la columna caption (0017), guarda sin ella.
+  if (error?.code === "42703") {
+    ({ error } = await supabase.from("videos").update({ keyword: kw, video_url: url }).eq("id", id));
+  }
+  if (error) {
+    if (error.code === "23505")
+      throw new Error(`Ya existe un video para la palabra "${kw}".`);
+    throw new Error(`updateVideo: ${error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "video_updated",
+    payload: { videoId: id, keyword: kw } as unknown as Json,
+  });
+  revalidatePath("/dashboard/videos");
 }
 
 /** Activa o desactiva una regla de video (sin borrarla). */

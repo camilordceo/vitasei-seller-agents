@@ -13,6 +13,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Videos por palabra clave · caption + edición** (`docs/20`, migración `0017_videos_caption.sql`):
+  cada video ahora admite un **caption** opcional (ej. "Mira acá los beneficios del colágeno") que se
+  envía como **mensaje de texto justo antes del video** (Callbell no admite caption incrustado en
+  video, solo en imagen; best-effort). La sección **Videos** permite **editar** palabra, URL y caption
+  con guardado (`updateVideo`). Las consultas son resilientes a la ventana de migración (si falta la
+  columna `caption`, degradan sin romper). Requiere aplicar `0017_videos_caption.sql`.
+  (`supabase/migrations/0017_videos_caption.sql`, `lib/agent/videos.ts`, `lib/dashboard/queries.ts`,
+  `app/dashboard/actions.ts`, `app/dashboard/videos/VideosManager.tsx`, `lib/supabase/types.ts`).
 - **Videos por palabra clave** (ADR-0038, `docs/20`): nueva sección **Videos** en el dashboard
   (`/dashboard/videos`) para configurar pares **palabra → video**. Cuando la **respuesta del bot**
   menciona una palabra (ej. "magnesio"), el backend envía el video correspondiente por Callbell
