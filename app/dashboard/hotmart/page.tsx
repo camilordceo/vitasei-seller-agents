@@ -1,15 +1,22 @@
 import Link from "next/link";
-import { getHotmartTemplates, getRecentHotmartEvents, getAgents } from "@/lib/dashboard/queries";
+import {
+  getHotmartTemplates,
+  getRecentHotmartEvents,
+  getAgents,
+  getHotmartAgentId,
+} from "@/lib/dashboard/queries";
 import { formatDateTime } from "@/lib/dashboard/format";
 import { HotmartTemplatesManager } from "./HotmartTemplatesManager";
+import { HotmartAgentSelector } from "./HotmartAgentSelector";
 
 export const dynamic = "force-dynamic";
 
 export default async function HotmartPage() {
-  const [templates, agents, events] = await Promise.all([
+  const [templates, agents, events, hotmartAgentId] = await Promise.all([
     getHotmartTemplates(),
     getAgents(),
     getRecentHotmartEvents(25),
+    getHotmartAgentId(),
   ]);
   const agentOptions = agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }));
 
@@ -23,6 +30,8 @@ export default async function HotmartPage() {
           tocar código. Si el cliente responde, el bot lo atiende como flujo de Hotmart.
         </p>
       </div>
+
+      <HotmartAgentSelector agents={agentOptions} current={hotmartAgentId} />
 
       <HotmartTemplatesManager initial={templates} agents={agentOptions} />
 

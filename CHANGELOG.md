@@ -21,6 +21,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Hotmart · agente designado desde el dashboard** (`docs/17`, `ADR-0041`, migración `0020`): se
+  puede **elegir qué agente maneja Hotmart** (con su teléfono y su cuenta de Callbell) desde
+  `/dashboard/hotmart` → selector **"Agente de Hotmart"** (marca `agents.hotmart_enabled`, exclusiva),
+  sin tocar env ni redeploy. El webhook resuelve: agente marcado → `HOTMART_AGENT_ID` (env, fallback) →
+  primer agente activo. La marca **no** se agrega a `AGENT_COLS` (ruta crítica de inbound intacta): se
+  lee aparte y resiliente (`findHotmartAgentId`), así que si falta la migración cae al fallback sin
+  romper nada. Requiere aplicar `0020_agent_hotmart_flag.sql`.
+  (`supabase/migrations/0020_agent_hotmart_flag.sql`, `lib/agent/agents.ts`, `lib/hotmart/processEvent.ts`,
+  `lib/dashboard/queries.ts`, `app/dashboard/actions.ts`, `app/dashboard/hotmart/*`,
+  `lib/supabase/types.ts`, `lib/env.ts`).
 - **Hotmart · plantillas editables en el dashboard + flujo de cursos** (`docs/17`, `ADR-0040`,
   migración `0019`): (1) la plantilla de Callbell y el **texto del mensaje** del carrito abandonado
   ahora se administran en **`/dashboard/hotmart`** (tabla `hotmart_templates`, global o por

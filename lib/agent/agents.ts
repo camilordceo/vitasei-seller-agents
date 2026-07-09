@@ -147,3 +147,22 @@ export async function loadAgentReactivationSettings(
   const agent = await loadAgent(supabase, agentId);
   return agent ? agentReactivationSettings(agent) : null;
 }
+
+/**
+ * id del agente marcado como "de Hotmart" (`hotmart_enabled`), habilitado y más
+ * antiguo si hubiera más de uno. Consulta APARTE (no está en `AGENT_COLS`) para NO
+ * arriesgar la ruta crítica de inbound: si falta la columna (42703, migración 0020
+ * sin aplicar) o falla, devuelve null y el llamador usa el fallback. Ver ADR-0041.
+ */
+export async function findHotmartAgentId(supabase: DB): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("agents")
+    .select("id")
+    .eq("enabled", true)
+    .eq("hotmart_enabled", true)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) return null; // columna ausente o error → sin marca (usa fallback)
+  return data?.id ?? null;
+}

@@ -976,3 +976,37 @@ export async function deleteHotmartTemplate(id: string): Promise<void> {
   });
   revalidatePath("/dashboard/hotmart");
 }
+
+/**
+ * Designa qué agente maneja los eventos de Hotmart (marca `hotmart_enabled`).
+ * Exclusivo: apaga la marca en todos y la prende en el elegido. `null` = ninguno
+ * (usa el fallback env/primer-activo). Ver ADR-0041.
+ */
+export async function setHotmartAgent(agentId: string | null): Promise<void> {
+  const supabase = createServiceClient();
+
+  // Apagar la marca en cualquier agente que la tuviera (exclusividad).
+  const off = await supabase
+    .from("agents")
+    .update({ hotmart_enabled: false })
+    .eq("hotmart_enabled", true);
+  if (off.error) {
+    if (off.error.code === "42703")
+      throw new Error("Falta aplicar la migración 0020 (hotmart_enabled) en Supabase.");
+    throw new Error(`setHotmartAgent off: ${off.error.message}`);
+  }
+
+  // Prender en el agente elegido (si hay).
+  if (agentId) {
+    const on = await supabase.from("agents").update({ hotmart_enabled: true }).eq("id", agentId);
+    if (on.error) throw new Error(`setHotmartAgent on: ${on.error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "hotmart_agent_set",
+    payload: { agentId } as unknown as Json,
+  });
+  revalidatePath("/dashboard/hotmart");
+  revalidatePath("/dashboard/agents");
+}

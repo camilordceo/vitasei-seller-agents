@@ -110,6 +110,22 @@ POST /api/webhooks/hotmart
 (`/dashboard/hotmart`). Esta env solo se usa como fallback si no hay plantilla
 configurada ahí.
 
+## 4.0. Qué agente maneja Hotmart (ADR-0041)
+
+Los eventos de Hotmart no traen canal de Callbell, así que el agente se **designa**
+en el dashboard: `/dashboard/hotmart` → **"Agente de Hotmart"** (marca
+`agents.hotmart_enabled`, exclusiva). Prioridad de resolución:
+
+1. Agente marcado en el dashboard (`hotmart_enabled`).
+2. `HOTMART_AGENT_ID` (env, fallback legado).
+3. Primer agente activo (último recurso).
+
+Los carritos se envían por la **cuenta de Callbell de ese agente**, así que su
+plantilla (UUID) debe existir en esa cuenta. Para mover Hotmart a un **agente
+nuevo** (otro teléfono/otra cuenta): (1) créalo en `/dashboard/agents` con su
+teléfono + API key + canal de Callbell, (2) selecciónalo en "Agente de Hotmart",
+(3) crea/edita la plantilla en `/dashboard/hotmart` **scoped a ese agente**.
+
 ## 4.1. Plantillas editables desde el dashboard (ADR-0040)
 
 La plantilla de Callbell y el texto del mensaje se administran en

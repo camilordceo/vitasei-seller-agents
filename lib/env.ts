@@ -163,7 +163,9 @@ export const env = {
   get HOTMART_ABANDONED_CART_TEMPLATE_UUID() {
     return optional("HOTMART_ABANDONED_CART_TEMPLATE_UUID");
   },
-  // ID del agente que maneja los eventos de Hotmart (opcional; fallback al primer agente activo).
+  // ID del agente que maneja los eventos de Hotmart. FALLBACK: desde ADR-0041 el
+  // agente se designa en el dashboard (agents.hotmart_enabled, /dashboard/hotmart);
+  // esta env solo se usa si no hay ninguno marcado (y si no, el primer agente activo).
   get HOTMART_AGENT_ID() {
     return optional("HOTMART_AGENT_ID");
   },

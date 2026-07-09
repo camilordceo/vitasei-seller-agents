@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendTemplate, type CallbellCreds } from "@/lib/callbell/sender";
-import { loadAgent, agentCallbellCreds } from "@/lib/agent/agents";
+import { loadAgent, agentCallbellCreds, findHotmartAgentId } from "@/lib/agent/agents";
 import type { Database, Json } from "@/lib/supabase/types";
 import type { HotmartWebhookPayload, ExtractedCartData } from "./types";
 import { extractCartData, isCartAbandonmentEvent } from "./types";
@@ -231,18 +231,27 @@ export async function processHotmartCartAbandonment(
 
 /**
  * Resuelve qué agente debe manejar los eventos de Hotmart.
- * Orden de prioridad:
- * 1. HOTMART_AGENT_ID (env) — agente específico para Hotmart.
- * 2. Primer agente activo en la base de datos.
+ * Orden de prioridad (ver ADR-0041):
+ * 1. Agente marcado en el dashboard (`hotmart_enabled`) — autoritativo.
+ * 2. `HOTMART_AGENT_ID` (env) — override legado.
+ * 3. Primer agente activo en la base de datos (último recurso).
  */
 async function resolveHotmartAgent(supabase: DB) {
-  const agentId = env.HOTMART_AGENT_ID;
-
-  if (agentId) {
-    return loadAgent(supabase, agentId);
+  // 1) Agente designado desde el dashboard. Resiliente a que falte la columna.
+  const flaggedId = await findHotmartAgentId(supabase);
+  if (flaggedId) {
+    const agent = await loadAgent(supabase, flaggedId);
+    if (agent) return agent;
   }
 
-  // Fallback: primer agente activo
+  // 2) Env (fallback legado).
+  const agentId = env.HOTMART_AGENT_ID;
+  if (agentId) {
+    const agent = await loadAgent(supabase, agentId);
+    if (agent) return agent;
+  }
+
+  // 3) Fallback: primer agente activo.
   const { data } = await supabase
     .from("agents")
     .select("*")

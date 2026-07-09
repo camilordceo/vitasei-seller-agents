@@ -325,6 +325,7 @@ export interface Database {
           reactivation_enabled: boolean;
           reactivation_template_7d: string | null;
           reactivation_template_15d: string | null;
+          hotmart_enabled: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -348,6 +349,7 @@ export interface Database {
           reactivation_enabled?: boolean;
           reactivation_template_7d?: string | null;
           reactivation_template_15d?: string | null;
+          hotmart_enabled?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -371,6 +373,7 @@ export interface Database {
           reactivation_enabled?: boolean;
           reactivation_template_7d?: string | null;
           reactivation_template_15d?: string | null;
+          hotmart_enabled?: boolean;
           created_at?: string;
           updated_at?: string;
         };

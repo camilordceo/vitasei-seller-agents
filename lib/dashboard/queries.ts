@@ -28,6 +28,7 @@ import type {
   RetargetStatus,
 } from "@/lib/supabase/types";
 import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
+import { findHotmartAgentId } from "@/lib/agent/agents";
 
 /**
  * Consultas de solo lectura del dashboard (Sprint 6).
@@ -1182,6 +1183,16 @@ export interface HotmartEventRow {
   messageSent: boolean;
   sendError: string | null;
   createdAt: string;
+}
+
+/**
+ * id del agente designado como "de Hotmart" (`hotmart_enabled`) o null si no hay
+ * ninguno marcado (se usará el fallback env/primer-activo). Resiliente a que falte
+ * la migración 0020. Alimenta el selector del dashboard. Ver ADR-0041.
+ */
+export async function getHotmartAgentId(): Promise<string | null> {
+  const supabase = createServiceClient();
+  return findHotmartAgentId(supabase);
 }
 
 /**
