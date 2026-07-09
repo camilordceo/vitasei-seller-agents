@@ -1133,6 +1133,43 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
   };
 }
 
+// --- Inventario: productos por agente (ver docs/22, ADR-0042) ---------------
+
+export interface ProductRow {
+  id: string;
+  sku: string;
+  name: string;
+  price: number | null;
+  currency: string;
+  imageUrl: string | null;
+  inStock: boolean;
+}
+
+/**
+ * Productos (catálogo) de un agente, para el inventario del dashboard. Ordenados
+ * por nombre. Volumen v1 bajo → una página (tope 1000 de PostgREST). Solo lectura;
+ * la edición de la imagen NO toca el vector store. Ver ADR-0042.
+ */
+export async function getAgentProducts(agentId: string): Promise<ProductRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, sku, name, price, currency, image_url, in_stock")
+    .eq("agent_id", agentId)
+    .order("name", { ascending: true })
+    .limit(1000);
+  if (error) throw new Error(`getAgentProducts: ${error.message}`);
+  return (data ?? []).map((p) => ({
+    id: p.id,
+    sku: p.sku,
+    name: p.name,
+    price: p.price,
+    currency: p.currency,
+    imageUrl: p.image_url,
+    inStock: p.in_stock,
+  }));
+}
+
 // --- Hotmart: plantillas + carritos (ver docs/17, ADR-0040) -----------------
 
 export interface HotmartTemplateRow {

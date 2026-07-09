@@ -37,6 +37,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 Órdenes
               </Link>
               <Link
+                href="/dashboard/inventory"
+                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                Inventario
+              </Link>
+              <Link
                 href="/dashboard/calls"
                 className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
               >

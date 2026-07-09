@@ -21,6 +21,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Inventario · editar la imagen del producto por agente** (`docs/22`, `ADR-0042`): nueva sección
+  **`/dashboard/inventory`** con selector de **agente** que lista el catálogo (miniatura + SKU +
+  nombre + precio + stock + link) y permite **cambiar el `image_url`** que el bot envía por WhatsApp
+  (a veces la foto de WhatsApp no es la de la página). Con búsqueda por nombre/SKU y vista previa.
+  **No sube archivos** (no usa Storage, para no gastar almacenamiento) y **no re-sincroniza el vector
+  store** (`image_url` no es parte del documento de `file_search`; la acción `updateProductImage` solo
+  hace UPDATE en `products`). No requiere migración. (`app/dashboard/inventory/*`,
+  `lib/dashboard/queries.ts` `getAgentProducts`, `app/dashboard/actions.ts` `updateProductImage`,
+  `app/dashboard/layout.tsx`).
 - **Hotmart · agente designado desde el dashboard** (`docs/17`, `ADR-0041`, migración `0020`): se
   puede **elegir qué agente maneja Hotmart** (con su teléfono y su cuenta de Callbell) desde
   `/dashboard/hotmart` → selector **"Agente de Hotmart"** (marca `agents.hotmart_enabled`, exclusiva),

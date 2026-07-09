@@ -1010,3 +1010,31 @@ export async function setHotmartAgent(agentId: string | null): Promise<void> {
   revalidatePath("/dashboard/hotmart");
   revalidatePath("/dashboard/agents");
 }
+
+// --- Inventario: imagen del producto (ver docs/22, ADR-0042) ----------------
+
+/**
+ * Cambia SOLO el `image_url` de un producto (la foto que el bot envía por WhatsApp).
+ * Vacío = quita la imagen. Valida que sea http(s). **No** toca el vector store ni
+ * sube archivos: es solo el link que se reenvía a Callbell. Service-role, protegida
+ * por el Basic Auth del dashboard. Ver ADR-0042.
+ */
+export async function updateProductImage(productId: string, imageUrl: string): Promise<void> {
+  const url = imageUrl.trim();
+  if (url.length > 0 && !/^https?:\/\/\S+/i.test(url))
+    throw new Error("El link de la imagen debe empezar por http:// o https://");
+
+  const supabase = createServiceClient();
+  const { error } = await supabase
+    .from("products")
+    .update({ image_url: url.length > 0 ? url : null })
+    .eq("id", productId);
+  if (error) throw new Error(`updateProductImage: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "product_image_updated",
+    payload: { productId, hasImage: url.length > 0 } as unknown as Json,
+  });
+  revalidatePath("/dashboard/inventory");
+}
