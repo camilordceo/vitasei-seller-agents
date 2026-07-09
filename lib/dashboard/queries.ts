@@ -468,6 +468,8 @@ export interface ConversationDetail {
   createdAt: string;
   /** Producto/fuente de la conversación (null = sin categorizar). */
   productCategory: string | null;
+  /** ¿La conversación entró por el flujo de Hotmart (carrito de cursos)? */
+  hotmartFlow: boolean;
   contact: { name: string | null; phone: string } | null;
   messages: ConversationMessage[];
   order: ConversationOrder | null;
@@ -483,7 +485,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   if (error) throw new Error(`getConversation: ${error.message}`);
   if (!convo) return null;
 
-  const [contactRes, msgsRes, orderRes, pcRes] = await Promise.all([
+  const [contactRes, msgsRes, orderRes, pcRes, hfRes] = await Promise.all([
     supabase.from("contacts").select("name, phone").eq("id", convo.contact_id).maybeSingle(),
     supabase
       .from("messages")
@@ -500,9 +502,13 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     // Fuente de producto en consulta aparte: si falta la migración 0018 (columna),
     // esta falla y se ignora sin romper el detalle. Ver docs/21.
     supabase.from("conversations").select("product_category").eq("id", id).maybeSingle(),
+    // Marca de flujo Hotmart en consulta aparte (mismo motivo: resiliente a que
+    // falte la migración 0019). Ver ADR-0040.
+    supabase.from("conversations").select("hotmart_flow").eq("id", id).maybeSingle(),
   ]);
   if (msgsRes.error) throw new Error(`getConversation messages: ${msgsRes.error.message}`);
   const productCategory = pcRes.error ? null : pcRes.data?.product_category ?? null;
+  const hotmartFlow = hfRes.error ? false : hfRes.data?.hotmart_flow === true;
 
   let order: ConversationOrder | null = null;
   if (orderRes.data) {
@@ -529,6 +535,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     aiPaused: convo.ai_paused,
     createdAt: convo.created_at,
     productCategory,
+    hotmartFlow,
     contact: contactRes.data
       ? { name: contactRes.data.name, phone: contactRes.data.phone }
       : null,
@@ -1123,4 +1130,83 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
     createdAt: data.created_at,
     updatedAt: data.updated_at,
   };
+}
+
+// --- Hotmart: plantillas + carritos (ver docs/17, ADR-0040) -----------------
+
+export interface HotmartTemplateRow {
+  id: string;
+  agentId: string | null;
+  eventType: string;
+  productId: string | null;
+  name: string;
+  templateUuid: string | null;
+  messageText: string | null;
+  enabled: boolean;
+  createdAt: string;
+}
+
+/**
+ * Plantillas de Hotmart configuradas (para el manager del dashboard). Resiliente:
+ * si falta la migración 0019 (tabla ausente, 42P01) devuelve vacío. Ver ADR-0040.
+ */
+export async function getHotmartTemplates(): Promise<HotmartTemplateRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("hotmart_templates")
+    .select("id, agent_id, event_type, product_id, name, template_uuid, message_text, enabled, created_at")
+    .order("created_at", { ascending: false });
+  if (error) {
+    if (error.code === "42P01") return [];
+    throw new Error(`getHotmartTemplates: ${error.message}`);
+  }
+  return (data ?? []).map((t) => ({
+    id: t.id,
+    agentId: t.agent_id,
+    eventType: t.event_type,
+    productId: t.product_id,
+    name: t.name,
+    templateUuid: t.template_uuid,
+    messageText: t.message_text,
+    enabled: t.enabled,
+    createdAt: t.created_at,
+  }));
+}
+
+export interface HotmartEventRow {
+  id: string;
+  conversationId: string | null;
+  phone: string;
+  buyerName: string | null;
+  productName: string | null;
+  messageSent: boolean;
+  sendError: string | null;
+  createdAt: string;
+}
+
+/**
+ * Últimos carritos abandonados recibidos (para ver el flujo funcionando en el
+ * dashboard). Resiliente a que falte la tabla (42P01). Ver docs/17.
+ */
+export async function getRecentHotmartEvents(limit = 25): Promise<HotmartEventRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("hotmart_events")
+    .select("id, conversation_id, phone, buyer_name, product_name, message_sent, send_error, created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    if (error.code === "42P01") return [];
+    throw new Error(`getRecentHotmartEvents: ${error.message}`);
+  }
+  return (data ?? []).map((e) => ({
+    id: e.id,
+    conversationId: e.conversation_id,
+    phone: e.phone,
+    buyerName: e.buyer_name,
+    productName: e.product_name,
+    messageSent: e.message_sent,
+    sendError: e.send_error,
+    createdAt: e.created_at,
+  }));
 }

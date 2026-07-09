@@ -102,10 +102,26 @@ POST /api/webhooks/hotmart
 | Variable | Descripción | Requerida |
 |----------|-------------|-----------|
 | `HOTMART_WEBHOOK_SECRET` | Secret para validar el webhook | Sí (prod) |
-| `HOTMART_ABANDONED_CART_TEMPLATE_UUID` | UUID de la plantilla de WhatsApp en Callbell | Sí |
+| `HOTMART_ABANDONED_CART_TEMPLATE_UUID` | **Fallback** de la plantilla (ver abajo) | No** |
 | `HOTMART_AGENT_ID` | ID del agente que maneja los carritos de Hotmart | Opcional* |
 
 *Si no se especifica, usa el primer agente activo o el agente seed.
+**Desde ADR-0040 la plantilla y el texto se editan en el dashboard
+(`/dashboard/hotmart`). Esta env solo se usa como fallback si no hay plantilla
+configurada ahí.
+
+## 4.1. Plantillas editables desde el dashboard (ADR-0040)
+
+La plantilla de Callbell y el texto del mensaje se administran en
+`/dashboard/hotmart` (tabla `hotmart_templates`), sin tocar código:
+
+- **Nombre**, **UUID de plantilla de Callbell**, **texto del mensaje** (soporta
+  `{{nombre}}` y `{{producto}}`), **marca/agente** (global o específico) y
+  **producto de Hotmart** (opcional, para un curso puntual).
+- El webhook elige la plantilla por (agente, evento, producto). El **match de
+  agente pesa más** que el de producto: el `template_uuid` solo existe en la
+  cuenta de Callbell de ese agente.
+- Si no hay ninguna plantilla configurada, se usa la env como fallback.
 
 ---
 
@@ -180,9 +196,24 @@ Cuando el cliente responde, el flujo normal del webhook de Callbell se activa:
 2. Se asocia a la conversación existente.
 3. El agente de IA responde con contexto del carrito abandonado.
 
-**Nota para el prompt del agente:** se puede agregar una instrucción especial para
-manejar clientes que vienen de carrito abandonado (si el último mensaje outbound
-tiene tag `hotmart-recovery`).
+### Marca `Es flujo hotmart` (ADR-0040)
+
+La conversación queda marcada con `conversations.hotmart_flow = true` al adjuntar
+la plantilla (tanto en conversaciones **nuevas como existentes**). Cuando el
+cliente responde, el backend **anexa `Es flujo hotmart` al texto que ve la IA**
+(no al mensaje guardado — el hilo del panel queda limpio). Así el agente
+identifica el caso y ejecuta el flujo de cursos.
+
+**Paso manual (prompt del agente):** para que la IA **haga** el flujo de cursos
+hay que describirlo en su system prompt (en `/dashboard/agents`). Ejemplo:
+
+> Si en el mensaje del cliente aparece **"Es flujo hotmart"**, es alguien que dejó
+> pendiente la compra de un **curso en Hotmart**. Salúdalo por su nombre, resuelve
+> sus dudas sobre el curso y ayúdalo a completar la inscripción. No lo trates como
+> un pedido de producto físico ni pidas dirección de envío.
+
+En el detalle de la conversación se muestra un badge **"Hotmart · Cursos"** cuando
+`hotmart_flow` está activo.
 
 ---
 

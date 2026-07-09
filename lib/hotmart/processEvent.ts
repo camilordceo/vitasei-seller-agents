@@ -6,6 +6,11 @@ import { loadAgent, agentCallbellCreds } from "@/lib/agent/agents";
 import type { Database, Json } from "@/lib/supabase/types";
 import type { HotmartWebhookPayload, ExtractedCartData } from "./types";
 import { extractCartData, isCartAbandonmentEvent } from "./types";
+import {
+  resolveHotmartTemplate,
+  renderHotmartMessage,
+  DEFAULT_HOTMART_EVENT,
+} from "./templates";
 import { env } from "@/lib/env";
 
 type DB = SupabaseClient<Database>;
@@ -108,6 +113,12 @@ export async function processHotmartCartAbandonment(
   // 6) Get-or-create de la conversación
   const conversationId = await getOrCreateConversation(supabase, contactId, agent.id);
 
+  // 6.1) Marcar la conversación como "flujo hotmart". Es el rastro autoritativo y
+  //      la compuerta para inyectar "Es flujo hotmart" cuando el cliente responda.
+  //      Aplica a conversaciones NUEVAS y EXISTENTES (a diferencia de `source`, que
+  //      solo se fija al crear). Best-effort y resiliente a que falte la columna.
+  await markHotmartFlow(supabase, conversationId);
+
   // 7) Insertar el evento de Hotmart (antes del envío para trazabilidad)
   const { data: hotmartEvent, error: insertErr } = await supabase
     .from("hotmart_events")
@@ -139,12 +150,24 @@ export async function processHotmartCartAbandonment(
     };
   }
 
-  // 8) Enviar la plantilla de WhatsApp
-  const templateUuid = env.HOTMART_ABANDONED_CART_TEMPLATE_UUID;
+  // 8) Resolver la plantilla: primero el dashboard (`hotmart_templates`) y, si no
+  //    hay, la env como fallback (retrocompatibilidad). El texto sale de la
+  //    plantilla del dashboard con {{nombre}}/{{producto}} ya interpolados.
+  const tpl = await resolveHotmartTemplate(supabase, {
+    agentId: agent.id,
+    eventType: DEFAULT_HOTMART_EVENT,
+    productId: data.productId,
+  });
+  const templateUuid = tpl?.template_uuid ?? env.HOTMART_ABANDONED_CART_TEMPLATE_UUID ?? null;
+  const messageText = renderHotmartMessage(tpl?.message_text, {
+    name: data.buyerName,
+    product: data.productName,
+  });
+
   if (!templateUuid) {
     await supabase
       .from("hotmart_events")
-      .update({ send_error: "HOTMART_ABANDONED_CART_TEMPLATE_UUID not configured" })
+      .update({ send_error: "No hay plantilla configurada (dashboard ni env)" })
       .eq("id", hotmartEvent.id);
 
     return {
@@ -163,6 +186,7 @@ export async function processHotmartCartAbandonment(
     conversationId,
     data,
     templateUuid,
+    messageText,
   );
 
   // 9) Actualizar el evento con el resultado del envío
@@ -299,6 +323,21 @@ async function getOrCreateConversation(
   return inserted.id;
 }
 
+/**
+ * Marca la conversación como `hotmart_flow = true`. Best-effort: si la columna aún
+ * no existe (42703, falta la migración 0019) o falla, se ignora — el rastro es un
+ * plus y NUNCA debe tumbar el envío de la plantilla. Ver ADR-0040.
+ */
+async function markHotmartFlow(supabase: DB, conversationId: string): Promise<void> {
+  const { error } = await supabase
+    .from("conversations")
+    .update({ hotmart_flow: true })
+    .eq("id", conversationId);
+  if (error && error.code !== "42703") {
+    console.error("[markHotmartFlow] update failed:", error.message);
+  }
+}
+
 interface SendTemplateResult {
   success: boolean;
   messageUuid: string | null;
@@ -315,6 +354,8 @@ async function sendHotmartTemplate(
   conversationId: string,
   data: ExtractedCartData,
   templateUuid: string,
+  /** Texto de la plantilla del dashboard, ya interpolado ({{nombre}}/{{producto}}). */
+  messageText: string,
 ): Promise<SendTemplateResult> {
   try {
     // Variables de la plantilla: {{1}} = nombre, {{2}} = producto
@@ -323,7 +364,15 @@ async function sendHotmartTemplate(
       data.productName || "tu producto",
     ];
 
+    // Texto que se muestra/guarda en el hilo: el de la plantilla del dashboard (ya
+    // interpolado) o, si está vacío, una nota con el producto (comportamiento previo).
+    const storedText =
+      messageText.trim().length > 0
+        ? messageText
+        : `[Plantilla Hotmart: ${data.productName || "Carrito abandonado"}]`;
+
     const sent = await sendTemplate(creds, data.phone, templateUuid, {
+      text: messageText.trim().length > 0 ? messageText : undefined,
       templateValues,
       metadata: { conversation_id: conversationId, source: "hotmart" },
     });
@@ -334,7 +383,7 @@ async function sendHotmartTemplate(
       direction: "outbound",
       role: "assistant",
       type: "text",
-      content: `[Plantilla Hotmart: ${data.productName || "Carrito abandonado"}]`,
+      content: storedText,
       tags: ["hotmart-recovery"] as unknown as Json,
       callbell_message_uuid: sent.uuid,
     });

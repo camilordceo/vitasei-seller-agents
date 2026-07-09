@@ -83,6 +83,7 @@ export interface Database {
           fulfillment_method: FulfillmentMethod;
           ai_paused: boolean;
           source: ConversationSource;
+          hotmart_flow: boolean;
           product_category: string | null;
           openai_previous_response_id: string | null;
           assigned_team_uuid: string | null;
@@ -100,6 +101,7 @@ export interface Database {
           fulfillment_method?: FulfillmentMethod;
           ai_paused?: boolean;
           source?: ConversationSource;
+          hotmart_flow?: boolean;
           product_category?: string | null;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
@@ -117,6 +119,7 @@ export interface Database {
           fulfillment_method?: FulfillmentMethod;
           ai_paused?: boolean;
           source?: ConversationSource;
+          hotmart_flow?: boolean;
           product_category?: string | null;
           openai_previous_response_id?: string | null;
           assigned_team_uuid?: string | null;
@@ -709,6 +712,45 @@ export interface Database {
           send_error?: string | null;
           raw_payload?: Json;
           created_at?: string;
+        };
+        Relationships: [];
+      };
+      hotmart_templates: {
+        Row: {
+          id: string;
+          agent_id: string | null;
+          event_type: string;
+          product_id: string | null;
+          name: string;
+          template_uuid: string | null;
+          message_text: string | null;
+          enabled: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          agent_id?: string | null;
+          event_type?: string;
+          product_id?: string | null;
+          name: string;
+          template_uuid?: string | null;
+          message_text?: string | null;
+          enabled?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          agent_id?: string | null;
+          event_type?: string;
+          product_id?: string | null;
+          name?: string;
+          template_uuid?: string | null;
+          message_text?: string | null;
+          enabled?: boolean;
+          created_at?: string;
+          updated_at?: string;
         };
         Relationships: [];
       };

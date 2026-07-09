@@ -872,3 +872,107 @@ export async function setConversationProductCategory(
   revalidatePath(`/dashboard/conversations/${conversationId}`);
   revalidatePath("/dashboard/conversations");
 }
+
+// --- Plantillas de Hotmart (dashboard, ver docs/17, ADR-0040) ---------------
+
+const DEFAULT_HOTMART_EVENT = "PURCHASE_OUT_OF_SHOPPING_CART";
+
+export interface HotmartTemplateInput {
+  name: string;
+  templateUuid: string;
+  messageText: string;
+  /** Producto de Hotmart (id); vacío = aplica a todos. */
+  productId?: string;
+  /** Agente dueño; vacío/null = global (todas las marcas). */
+  agentId?: string | null;
+}
+
+/** Traduce el 42P01 (tabla ausente) a un mensaje accionable para el operador. */
+function hotmartTableError(code?: string): string | null {
+  if (code === "42P01")
+    return "Falta aplicar la migración 0019 (hotmart_templates) en Supabase.";
+  return null;
+}
+
+/**
+ * Crea una plantilla de Hotmart (carrito abandonado). Global por defecto
+ * (agent_id null). Valida nombre. Service-role, protegida por el Basic Auth.
+ */
+export async function createHotmartTemplate(input: HotmartTemplateInput): Promise<string> {
+  const name = input.name.trim();
+  if (!name) throw new Error("El nombre de la plantilla es obligatorio.");
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("hotmart_templates")
+    .insert({
+      name,
+      event_type: DEFAULT_HOTMART_EVENT,
+      template_uuid: textOrNull(input.templateUuid),
+      message_text: textOrNull(input.messageText),
+      product_id: textOrNull(input.productId ?? ""),
+      agent_id: input.agentId || null,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(hotmartTableError(error.code) ?? `createHotmartTemplate: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "hotmart_template_created",
+    payload: { id: data.id, name } as unknown as Json,
+  });
+  revalidatePath("/dashboard/hotmart");
+  return data.id;
+}
+
+/** Edita una plantilla de Hotmart (nombre, UUID, texto, producto, agente). */
+export async function updateHotmartTemplate(
+  id: string,
+  input: HotmartTemplateInput,
+): Promise<void> {
+  const name = input.name.trim();
+  if (!name) throw new Error("El nombre de la plantilla es obligatorio.");
+
+  const supabase = createServiceClient();
+  const { error } = await supabase
+    .from("hotmart_templates")
+    .update({
+      name,
+      template_uuid: textOrNull(input.templateUuid),
+      message_text: textOrNull(input.messageText),
+      product_id: textOrNull(input.productId ?? ""),
+      agent_id: input.agentId || null,
+    })
+    .eq("id", id);
+  if (error) throw new Error(hotmartTableError(error.code) ?? `updateHotmartTemplate: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "hotmart_template_updated",
+    payload: { id, name } as unknown as Json,
+  });
+  revalidatePath("/dashboard/hotmart");
+}
+
+/** Activa o desactiva una plantilla de Hotmart (sin borrarla). */
+export async function setHotmartTemplateEnabled(id: string, enabled: boolean): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.from("hotmart_templates").update({ enabled }).eq("id", id);
+  if (error) throw new Error(hotmartTableError(error.code) ?? `setHotmartTemplateEnabled: ${error.message}`);
+  revalidatePath("/dashboard/hotmart");
+}
+
+/** Elimina una plantilla de Hotmart. */
+export async function deleteHotmartTemplate(id: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.from("hotmart_templates").delete().eq("id", id);
+  if (error) throw new Error(hotmartTableError(error.code) ?? `deleteHotmartTemplate: ${error.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "hotmart_template_deleted",
+    payload: { id } as unknown as Json,
+  });
+  revalidatePath("/dashboard/hotmart");
+}

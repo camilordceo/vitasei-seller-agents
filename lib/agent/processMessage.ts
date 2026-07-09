@@ -36,6 +36,7 @@ import {
   type TranscriptMessage,
 } from "@/lib/agent/order";
 import { buildCallRequestNotification } from "@/lib/agent/callRequest";
+import { appendHotmartMarker } from "@/lib/hotmart/flow";
 import { env } from "@/lib/env";
 import type { Database, Json, MessageType } from "@/lib/supabase/types";
 
@@ -341,7 +342,8 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
     // solo turno MULTIMODAL: texto + notas de voz transcritas + imágenes (visión).
     // El `previous_response_id` aporta el contexto previo. Ver docs/15.
     const openai = createOpenAIClient();
-    const content = await gatherPendingContent(supabase, openai, conversationId);
+    const hotmartFlow = await readHotmartFlow(supabase, conversationId);
+    const content = await gatherPendingContent(supabase, openai, conversationId, hotmartFlow);
     if (!content.hasContent) return; // nada que responder (ni texto ni media legible)
 
     await generateAndSend({
@@ -420,7 +422,8 @@ export async function regenerateReply(conversationId: string): Promise<void> {
   // Juntar los inbound sin responder (posteriores al último outbound). En el caso
   // típico —el bot nunca respondió— no hay outbound, así que entra todo el hilo.
   const openai = createOpenAIClient();
-  const content = await gatherPendingContent(supabase, openai, conversationId);
+  const hotmartFlow = await readHotmartFlow(supabase, conversationId);
+  const content = await gatherPendingContent(supabase, openai, conversationId, hotmartFlow);
   if (!content.hasContent)
     throw new Error("No hay mensajes del cliente pendientes por responder.");
 
@@ -461,6 +464,8 @@ async function gatherPendingContent(
   supabase: DB,
   openai: OpenAI,
   conversationId: string,
+  /** ¿La conversación entró por el flujo de Hotmart? Anexa la marca al input de la IA. */
+  hotmartFlow: boolean,
 ): Promise<PendingContent> {
   const { data: lastOut } = await supabase
     .from("messages")
@@ -529,8 +534,28 @@ async function gatherPendingContent(
     }
   }
 
-  const text = textParts.join("\n");
-  return { text, imageDataUrls, hasContent: text.length > 0 || imageDataUrls.length > 0 };
+  const baseText = textParts.join("\n");
+  const hasContent = baseText.length > 0 || imageDataUrls.length > 0;
+  // Flujo Hotmart (cursos): anexa "Es flujo hotmart" al texto que ve la IA (no al
+  // mensaje guardado) para que identifique el caso y ejecute el flujo. Solo cuando
+  // el turno ya tiene contenido (texto o imagen); nunca fuerza una respuesta vacía.
+  const text = hasContent ? appendHotmartMarker(baseText, hotmartFlow) : baseText;
+  return { text, imageDataUrls, hasContent };
+}
+
+/**
+ * Lee la marca `hotmart_flow` de la conversación. Best-effort: si falta la columna
+ * (42703, migración 0019 sin aplicar) o la consulta falla, devuelve false — el
+ * marcador es un plus y no debe romper la respuesta. Ver ADR-0040.
+ */
+async function readHotmartFlow(supabase: DB, conversationId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("hotmart_flow")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (error) return false;
+  return data?.hotmart_flow === true;
 }
 
 /**

@@ -52,6 +52,14 @@ export default async function ConversationDetailPage({ params }: { params: { id:
         <StatusPill status={convo.status} />
         <MethodPill method={convo.method} />
         {convo.aiPaused ? <ManualPill /> : null}
+        {convo.hotmartFlow ? (
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2.5 py-1 text-xs font-medium text-orange-700"
+            title="Entró por un carrito abandonado de Hotmart (cursos). Cuando el cliente responde, el bot recibe la marca 'Es flujo hotmart'."
+          >
+            Hotmart · Cursos
+          </span>
+        ) : null}
         <div className="ml-auto flex items-start gap-2">
           <RetryButton
             conversationId={convo.id}
