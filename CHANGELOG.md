@@ -21,6 +21,31 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Conversación · panel "¿Por qué (no) respondió?"** (diagnóstico): la vista de detalle de una
+  conversación ahora muestra el **rastro de decisiones del bot** (`events_log`) traducido a lenguaje
+  humano, para entender por qué un mensaje **no obtuvo respuesta**: fuera de horario
+  (`reply_skipped: agent-inactive`), modo manual, **error de OpenAI/Callbell** (`process_error`, con
+  la fase y el mensaje), fuera de la ventana de 24 h, gate anti-alucinación, etc. Cada evento con
+  color por severidad (ok/aviso/error) y hora **Colombia**. Si tras "Mensaje recibido" no hay ni
+  respuesta ni motivo, la tarea en segundo plano no se completó. Antes esto solo se veía consultando
+  Supabase/Vercel a mano. Solo lectura; humanizado puro y testeado (`describeEvent`, 8 casos); la
+  query es resiliente (ante error no rompe el detalle). Sin migración.
+  (`lib/dashboard/events.ts` + `events.test.ts`, `lib/dashboard/queries.ts` `getConversationEvents`,
+  `app/dashboard/conversations/[id]/DiagnosticsPanel.tsx`, `app/dashboard/conversations/[id]/page.tsx`).
+- **Reactivaciones · plantillas con imagen (header) opcional por etapa** (`docs/14`, `ADR-0044`,
+  migración `0022`): cada etapa (día 7 y día 15) puede ser **de solo texto** o **con imagen**, y el
+  envío a Callbell cambia según eso: sin link → `type:"text"` con la variable en `content.text`
+  (comportamiento actual); con link → `type:"image"`, la imagen (header) en `content.url` y la
+  variable del cuerpo en `template_values`. El **link de imagen** es opcional y se configura por
+  agente en `/dashboard/retargets` → Reactivaciones (nuevas columnas `agents.reactivation_image_7d/15d`);
+  cada etapa muestra un badge **"Con imagen / Solo texto"** y vista previa. Las URL se leen aparte y
+  resiliente (`loadReactivationImages`, **no** en `AGENT_COLS`) y la query/acción del dashboard toleran
+  la ventana de migración: si falta `0022`, se envía como solo texto sin romper nada. El outbound queda
+  registrado como `image` (con `media_url`) cuando lleva imagen. Cambio de payload fijado con tests del
+  sender (`sendTemplate`, 4 casos). Requiere aplicar `0022_agent_reactivation_images.sql`.
+  (`supabase/migrations/0022_agent_reactivation_images.sql`, `lib/callbell/sender.ts` + `sender.test.ts`,
+  `lib/agent/agents.ts`, `lib/agent/reactivation.ts`, `lib/dashboard/queries.ts`, `app/dashboard/actions.ts`,
+  `app/dashboard/retargets/ReactivationSettings.tsx`, `lib/supabase/types.ts`).
 - **Retargets · instrucciones editables por agente** (`docs/10`, `ADR-0043`, migración `0021`): la
   **guía** (tono/estrategia) de los seguimientos de **~1h y ~8h** ahora se edita **por agente** en
   `/dashboard/retargets` → "Instrucciones de los seguimientos" (columnas `agents.retarget_instruction_1/2`),

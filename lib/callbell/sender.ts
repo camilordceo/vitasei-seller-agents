@@ -112,10 +112,18 @@ export function sendText(
 
 /**
  * Envía un mensaje de PLANTILLA aprobada (WhatsApp). Es lo único permitido fuera
- * de la ventana de 24h. `content.text` lleva el texto de respaldo/variable (como
- * en el ejemplo de Callbell); `templateValues` es para plantillas con varias
- * variables. `optin_contact: true` porque el cliente nos escribió primero. Ver
- * docs/14 y ADR-0021.
+ * de la ventana de 24h. `optin_contact: true` porque el cliente nos escribió primero.
+ *
+ * Dos formas según si la plantilla tiene header de imagen (ver docs/14, ADR-0021/0044):
+ *  - **Sin imagen** (`imageUrl` vacío): `type:"text"`, la variable única va en
+ *    `content.text` (convención de Callbell para plantillas de una variable).
+ *  - **Con imagen** (`imageUrl`): `type:"image"`, el header viaja en `content.url`
+ *    (como en `sendImage`) y las variables del cuerpo van en `template_values` — NO
+ *    en `content.text`, que en un mensaje de imagen sería el caption y chocaría con
+ *    el cuerpo de la plantilla. Si solo hay una variable (el nombre) y no se pasó
+ *    `templateValues`, se usa `[text]`.
+ *
+ * `templateValues` es para plantillas con varias variables (tiene prioridad).
  */
 export function sendTemplate(
   creds: CallbellCreds,
@@ -124,9 +132,31 @@ export function sendTemplate(
   options?: {
     text?: string;
     templateValues?: string[];
+    /** Header de imagen de la plantilla. Si viene, el envío es `type:"image"`. */
+    imageUrl?: string | null;
     metadata?: Record<string, unknown>;
   },
 ): Promise<SentMessage> {
+  const templateValues =
+    options?.templateValues && options.templateValues.length > 0
+      ? options.templateValues
+      : undefined;
+
+  if (options?.imageUrl) {
+    return send(creds, {
+      to,
+      from: "whatsapp",
+      type: "image",
+      content: { url: options.imageUrl },
+      channel_uuid: creds.channelUuid ?? undefined,
+      template_uuid: templateUuid,
+      // Con imagen, la variable del cuerpo va en template_values (no en content.text).
+      template_values: templateValues ?? (options.text ? [options.text] : undefined),
+      optin_contact: true,
+      metadata: options?.metadata,
+    });
+  }
+
   return send(creds, {
     to,
     from: "whatsapp",
@@ -134,10 +164,7 @@ export function sendTemplate(
     content: { text: options?.text ?? "" },
     channel_uuid: creds.channelUuid ?? undefined,
     template_uuid: templateUuid,
-    template_values:
-      options?.templateValues && options.templateValues.length > 0
-        ? options.templateValues
-        : undefined,
+    template_values: templateValues,
     optin_contact: true,
     metadata: options?.metadata,
   });

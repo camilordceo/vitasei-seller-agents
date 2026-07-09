@@ -7,6 +7,7 @@ import {
   agentCallbellCreds,
   agentReactivationSettings,
   loadAgentReactivationSettings,
+  loadReactivationImages,
 } from "@/lib/agent/agents";
 import { isAgentActiveNow } from "@/lib/agent/schedule";
 import { evaluateReactivation, planReactivations } from "@/lib/agent/reactivationPlan";
@@ -261,18 +262,29 @@ async function processReactivationRow(
   // en esa cuenta. Fallback a env si no hay agente (datos legados).
   const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
 
+  // Header de imagen de la plantilla de esta etapa (si el agente configuró una).
+  // Consulta aparte y resiliente (no en AGENT_COLS): sin imagen → plantilla de solo
+  // texto (comportamiento actual). El payload a Callbell cambia según esto. Ver ADR-0044.
+  const images = agent
+    ? await loadReactivationImages(supabase, agent.id)
+    : { image7d: null, image15d: null };
+  const imageUrl = row.stage === 1 ? images.image7d : images.image15d;
+
   const sent = await sendTemplate(creds, row.phone, templateUuid as string, {
     text: firstName,
+    imageUrl,
     metadata: { conversation_id: row.conversation_id, reactivation_stage: row.stage },
   });
 
-  // Registrar el outbound para que se vea en el hilo.
+  // Registrar el outbound para que se vea en el hilo. Si la plantilla lleva imagen,
+  // se guarda como `image` con su URL para que el hilo la muestre.
   await supabase.from("messages").insert({
     conversation_id: row.conversation_id,
     direction: "outbound",
     role: "assistant",
-    type: "text",
-    content: `Plantilla de reactivación (día ${row.stage === 1 ? 7 : 15})`,
+    type: imageUrl ? "image" : "text",
+    content: `Plantilla de reactivación (día ${row.stage === 1 ? 7 : 15})${imageUrl ? " · con imagen" : ""}`,
+    media_url: imageUrl,
     tags: [`reactivacion-${row.stage}`] as unknown as Json,
     callbell_message_uuid: sent.uuid,
   });
@@ -296,6 +308,7 @@ async function processReactivationRow(
       uuid: sent.uuid,
       status: sent.status,
       costUsd: REACTIVATION_COST_USD,
+      hasImage: !!imageUrl,
     } as unknown as Json,
   });
 

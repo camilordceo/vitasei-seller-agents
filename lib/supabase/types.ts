@@ -325,6 +325,8 @@ export interface Database {
           reactivation_enabled: boolean;
           reactivation_template_7d: string | null;
           reactivation_template_15d: string | null;
+          reactivation_image_7d: string | null;
+          reactivation_image_15d: string | null;
           hotmart_enabled: boolean;
           retarget_instruction_1: string | null;
           retarget_instruction_2: string | null;
@@ -351,6 +353,8 @@ export interface Database {
           reactivation_enabled?: boolean;
           reactivation_template_7d?: string | null;
           reactivation_template_15d?: string | null;
+          reactivation_image_7d?: string | null;
+          reactivation_image_15d?: string | null;
           hotmart_enabled?: boolean;
           retarget_instruction_1?: string | null;
           retarget_instruction_2?: string | null;
@@ -377,6 +381,8 @@ export interface Database {
           reactivation_enabled?: boolean;
           reactivation_template_7d?: string | null;
           reactivation_template_15d?: string | null;
+          reactivation_image_7d?: string | null;
+          reactivation_image_15d?: string | null;
           hotmart_enabled?: boolean;
           retarget_instruction_1?: string | null;
           retarget_instruction_2?: string | null;

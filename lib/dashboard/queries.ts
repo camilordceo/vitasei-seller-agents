@@ -553,6 +553,39 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   };
 }
 
+export interface ConversationEvent {
+  id: string;
+  type: string;
+  payload: unknown;
+  createdAt: string;
+}
+
+/**
+ * Eventos recientes de una conversación (`events_log`) para el panel de diagnóstico
+ * "¿por qué no respondió?" del detalle (lo más reciente primero). El humanizado vive
+ * en `lib/dashboard/events.ts` (puro). Resiliente: ante error devuelve [] — el
+ * diagnóstico es un plus y no debe romper el detalle de la conversación.
+ */
+export async function getConversationEvents(
+  conversationId: string,
+  limit = 25,
+): Promise<ConversationEvent[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("events_log")
+    .select("id, type, payload, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) return [];
+  return (data ?? []).map((e) => ({
+    id: e.id,
+    type: e.type,
+    payload: e.payload,
+    createdAt: e.created_at,
+  }));
+}
+
 // --- Órdenes (sección dedicada, ver docs/12) --------------------------------
 
 export interface OrderRow {
@@ -934,26 +967,57 @@ export interface AgentReactivationConfig {
   enabled: boolean;
   template7d: string | null;
   template15d: string | null;
+  /** URL del header de imagen de la plantilla día 7 (null = plantilla de solo texto). */
+  image7d: string | null;
+  /** URL del header de imagen de la plantilla día 15 (null = plantilla de solo texto). */
+  image15d: string | null;
 }
 
 /**
  * Config de reactivación POR AGENTE (las plantillas viven en la cuenta de Callbell
- * de cada agente). Alimenta el selector de la página de Retargets. Ver ADR-0030.
+ * de cada agente). Alimenta el selector de la página de Retargets. Ver ADR-0030/0044.
+ * Resiliente: si faltan las columnas de imagen (42703, migración 0022 sin aplicar)
+ * reintenta sin ellas (imágenes = null) para no romper la página.
  */
 export async function getAgentsReactivationConfig(): Promise<AgentReactivationConfig[]> {
   const supabase = createServiceClient();
-  const { data, error } = await supabase
+  const full = await supabase
     .from("agents")
-    .select("id, name, brand, reactivation_enabled, reactivation_template_7d, reactivation_template_15d, created_at")
+    .select(
+      "id, name, brand, reactivation_enabled, reactivation_template_7d, reactivation_template_15d, reactivation_image_7d, reactivation_image_15d, created_at",
+    )
     .order("created_at", { ascending: true });
-  if (error) throw new Error(`getAgentsReactivationConfig: ${error.message}`);
-  return (data ?? []).map((a) => ({
+
+  if (full.error) {
+    if (full.error.code === "42703") {
+      const basic = await supabase
+        .from("agents")
+        .select("id, name, brand, reactivation_enabled, reactivation_template_7d, reactivation_template_15d, created_at")
+        .order("created_at", { ascending: true });
+      if (basic.error) throw new Error(`getAgentsReactivationConfig: ${basic.error.message}`);
+      return (basic.data ?? []).map((a) => ({
+        agentId: a.id,
+        name: a.name,
+        brand: a.brand,
+        enabled: a.reactivation_enabled,
+        template7d: a.reactivation_template_7d,
+        template15d: a.reactivation_template_15d,
+        image7d: null,
+        image15d: null,
+      }));
+    }
+    throw new Error(`getAgentsReactivationConfig: ${full.error.message}`);
+  }
+
+  return (full.data ?? []).map((a) => ({
     agentId: a.id,
     name: a.name,
     brand: a.brand,
     enabled: a.reactivation_enabled,
     template7d: a.reactivation_template_7d,
     template15d: a.reactivation_template_15d,
+    image7d: a.reactivation_image_7d ?? null,
+    image15d: a.reactivation_image_15d ?? null,
   }));
 }
 

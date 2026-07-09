@@ -347,6 +347,9 @@ export async function updateReactivationSettings(
     enabled: boolean;
     template7d: string;
     template15d: string;
+    /** Link del header de imagen (opcional). Vacío = plantilla de solo texto. */
+    image7d: string;
+    image15d: string;
   },
 ): Promise<void> {
   const supabase = createServiceClient();
@@ -354,15 +357,31 @@ export async function updateReactivationSettings(
     const t = s.trim();
     return t.length > 0 ? t : null;
   };
+  const cleanUrl = (s: string): string | null => {
+    const t = s.trim();
+    if (t.length === 0) return null;
+    if (!/^https?:\/\/\S+/i.test(t))
+      throw new Error("El link de la imagen debe empezar por http:// o https://");
+    return t;
+  };
 
-  const { error } = await supabase
+  const img7 = cleanUrl(input.image7d);
+  const img15 = cleanUrl(input.image15d);
+  const base = {
+    reactivation_enabled: input.enabled,
+    reactivation_template_7d: clean(input.template7d),
+    reactivation_template_15d: clean(input.template15d),
+  };
+
+  let { error } = await supabase
     .from("agents")
-    .update({
-      reactivation_enabled: input.enabled,
-      reactivation_template_7d: clean(input.template7d),
-      reactivation_template_15d: clean(input.template15d),
-    })
+    .update({ ...base, reactivation_image_7d: img7, reactivation_image_15d: img15 })
     .eq("id", agentId);
+  // Ventana de migración: si aún no existen las columnas de imagen (0022), guarda sin
+  // ellas (ON/OFF + UUIDs sí se guardan) para no bloquear la edición. Ver ADR-0044.
+  if (error?.code === "42703") {
+    ({ error } = await supabase.from("agents").update(base).eq("id", agentId));
+  }
   if (error) throw new Error(`updateReactivationSettings: ${error.message}`);
 
   await supabase.from("events_log").insert({
@@ -373,6 +392,8 @@ export async function updateReactivationSettings(
       enabled: input.enabled,
       has7d: clean(input.template7d) != null,
       has15d: clean(input.template15d) != null,
+      hasImage7d: img7 != null,
+      hasImage15d: img15 != null,
     } as unknown as Json,
   });
 

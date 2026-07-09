@@ -14,10 +14,24 @@ Feature de crecimiento: reengancha por WhatsApp a los clientes que escribieron y
    hace < 24h (está activo), o la reactivación venció hace > 3 días.
 4. **Costo:** cada envío guarda `cost_usd` (US$0,015); el dashboard suma el total.
 
+## Plantilla con o sin imagen (ADR-0044)
+Cada etapa (día 7 y día 15) puede ser **de solo texto** o **con imagen** (header), y el envío a
+Callbell cambia según eso:
+- **Solo texto** (link de imagen vacío): `type:"text"`, la variable (nombre) va en `content.text`.
+  Es el comportamiento por defecto.
+- **Con imagen** (link puesto): `type:"image"`, la imagen (header) va en `content.url` y la variable
+  del cuerpo en `template_values`. La plantilla debe estar **aprobada en Callbell con header de
+  imagen**; el link debe ser una URL pública y directa a la imagen.
+
+Las URL viven por agente en `agents.reactivation_image_7d/15d` (NULL = solo texto) y se leen aparte
+y resiliente (`loadReactivationImages`, **no** en `AGENT_COLS`): si falta la migración `0022`, se
+envía como solo texto y la ruta de inbound no se toca.
+
 ## Dashboard (Retargets → Reactivaciones)
 - **Estado del feature:** interruptor ON/OFF. Apagado detiene programación y envíos.
-- **UUID de plantilla · día 7 / día 15:** pega aquí el UUID de la plantilla de Callbell. Si un
-  campo queda vacío, esa etapa no se envía.
+- **Plantilla · día 7 / día 15:** una tarjeta por etapa con el **UUID** de la plantilla de Callbell y
+  un **link de imagen** opcional. Un badge indica **"Con imagen" / "Solo texto"** y muestra la vista
+  previa. Si el UUID queda vacío, esa etapa no se envía; el link vacío = solo texto.
 - **Métricas:** programadas, enviadas, canceladas, saltadas/fallidas y **costo total** de plantillas.
 - **Lista:** reactivaciones recientes con estado, etapa (Día 7 / Día 15) y costo; enlazan a la
   conversación.
@@ -36,5 +50,7 @@ Los delays por defecto son 7 y 15 días. Se pueden acortar con env (`REACTIVATIO
 la DB (editables desde el dashboard sin re-deploy).
 
 ## Supabase
-**Aplicar la migración `0008_reactivations.sql`** (crea `app_settings` + `reactivations`). Es el
-único paso manual en Supabase. Reusa el enum `retarget_status` (0006).
+**Aplicar la migración `0008_reactivations.sql`** (crea `app_settings` + `reactivations`). Reusa el
+enum `retarget_status` (0006). El ON/OFF y los UUID por agente vienen de `0011`. Para las **plantillas
+con imagen** aplicar **`0022_agent_reactivation_images.sql`** (agrega `reactivation_image_7d/15d`);
+sin ella, las etapas se envían como solo texto (el dashboard ignora el link al guardar). Ver ADR-0044.

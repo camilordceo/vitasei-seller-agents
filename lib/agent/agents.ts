@@ -148,6 +148,36 @@ export async function loadAgentReactivationSettings(
   return agent ? agentReactivationSettings(agent) : null;
 }
 
+export interface AgentReactivationImages {
+  /** URL del header de imagen de la plantilla día 7 (null = plantilla de solo texto). */
+  image7d: string | null;
+  /** URL del header de imagen de la plantilla día 15 (null = plantilla de solo texto). */
+  image15d: string | null;
+}
+
+/**
+ * URLs de imagen (header) de las plantillas de reactivación 7/15d de un agente.
+ * Consulta APARTE y resiliente (NO está en `AGENT_COLS`) para no arriesgar la ruta
+ * crítica de inbound: si faltan las columnas (42703, migración 0022 sin aplicar)
+ * devuelve nulls → se envía como plantilla de solo texto (comportamiento actual).
+ * Ver ADR-0044.
+ */
+export async function loadReactivationImages(
+  supabase: DB,
+  agentId: string,
+): Promise<AgentReactivationImages> {
+  const { data, error } = await supabase
+    .from("agents")
+    .select("reactivation_image_7d, reactivation_image_15d")
+    .eq("id", agentId)
+    .maybeSingle();
+  if (error || !data) return { image7d: null, image15d: null };
+  return {
+    image7d: data.reactivation_image_7d ?? null,
+    image15d: data.reactivation_image_15d ?? null,
+  };
+}
+
 /**
  * id del agente marcado como "de Hotmart" (`hotmart_enabled`), habilitado y más
  * antiguo si hubiera más de uno. Consulta APARTE (no está en `AGENT_COLS`) para NO

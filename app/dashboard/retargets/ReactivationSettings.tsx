@@ -25,6 +25,8 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
   const [enabled, setEnabled] = useState(current?.enabled ?? false);
   const [t7, setT7] = useState(current?.template7d ?? "");
   const [t15, setT15] = useState(current?.template15d ?? "");
+  const [img7, setImg7] = useState(current?.image7d ?? "");
+  const [img15, setImg15] = useState(current?.image15d ?? "");
 
   const dirty = () => {
     setSaved(false);
@@ -37,6 +39,8 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
     setEnabled(a?.enabled ?? false);
     setT7(a?.template7d ?? "");
     setT15(a?.template15d ?? "");
+    setImg7(a?.image7d ?? "");
+    setImg15(a?.image15d ?? "");
     setSaved(false);
     setError(null);
   };
@@ -45,7 +49,13 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
     setError(null);
     startTransition(async () => {
       try {
-        await updateReactivationSettings(selectedId, { enabled, template7d: t7, template15d: t15 });
+        await updateReactivationSettings(selectedId, {
+          enabled,
+          template7d: t7,
+          template15d: t15,
+          image7d: img7,
+          image15d: img15,
+        });
         setSaved(true);
         router.refresh();
       } catch (e) {
@@ -131,40 +141,40 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
       </span>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label htmlFor="t7" className={labelCls}>
-            UUID plantilla · día 7
-          </label>
-          <input
-            id="t7"
-            value={t7}
-            onChange={(e) => {
-              dirty();
-              setT7(e.target.value);
-            }}
-            className={inputCls}
-            placeholder="UUID de Callbell"
-          />
-        </div>
-        <div>
-          <label htmlFor="t15" className={labelCls}>
-            UUID plantilla · día 15
-          </label>
-          <input
-            id="t15"
-            value={t15}
-            onChange={(e) => {
-              dirty();
-              setT15(e.target.value);
-            }}
-            className={inputCls}
-            placeholder="UUID de Callbell"
-          />
-        </div>
+        <TemplateStageFields
+          idBase="react-7"
+          title="Día 7"
+          uuid={t7}
+          onUuid={(v) => {
+            dirty();
+            setT7(v);
+          }}
+          image={img7}
+          onImage={(v) => {
+            dirty();
+            setImg7(v);
+          }}
+        />
+        <TemplateStageFields
+          idBase="react-15"
+          title="Día 15"
+          uuid={t15}
+          onUuid={(v) => {
+            dirty();
+            setT15(v);
+          }}
+          image={img15}
+          onImage={(v) => {
+            dirty();
+            setImg15(v);
+          }}
+        />
       </div>
       <p className="text-xs text-slate-400">
         Crea y aprueba las plantillas en la cuenta de Callbell de este agente, copia su UUID y pégalo
-        aquí. Si un campo queda vacío, esa etapa no se envía.
+        aquí. Si el UUID de una etapa queda vacío, esa etapa no se envía. El{" "}
+        <span className="font-medium">link de imagen</span> es opcional: con link, la plantilla se
+        envía con imagen (header); vacío, se envía como plantilla de solo texto.
       </p>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -187,5 +197,93 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
         {error ? <span className="text-sm text-rose-600">{error}</span> : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Campos de UNA etapa de plantilla (día 7 o día 15): UUID + link de imagen opcional.
+ * El badge y la vista previa cambian según si hay imagen — con link, la plantilla se
+ * envía con imagen (header, `type:"image"`); vacío, se envía como solo texto. Ver ADR-0044.
+ */
+function TemplateStageFields({
+  idBase,
+  title,
+  uuid,
+  onUuid,
+  image,
+  onImage,
+}: {
+  idBase: string;
+  title: string;
+  uuid: string;
+  onUuid: (v: string) => void;
+  image: string;
+  onImage: (v: string) => void;
+}) {
+  const hasImage = image.trim().length > 0;
+  return (
+    <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-slate-700">Plantilla · {title}</h4>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium ${
+            hasImage ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-500"
+          }`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${hasImage ? "bg-indigo-500" : "bg-slate-400"}`}
+            aria-hidden="true"
+          />
+          {hasImage ? "Con imagen" : "Solo texto"}
+        </span>
+      </div>
+      <div>
+        <label htmlFor={`${idBase}-uuid`} className={labelCls}>
+          UUID de la plantilla
+        </label>
+        <input
+          id={`${idBase}-uuid`}
+          value={uuid}
+          onChange={(e) => onUuid(e.target.value)}
+          className={inputCls}
+          placeholder="UUID de Callbell"
+        />
+      </div>
+      <div>
+        <label htmlFor={`${idBase}-img`} className={labelCls}>
+          Link de imagen <span className="font-normal text-slate-400">· opcional</span>
+        </label>
+        <input
+          id={`${idBase}-img`}
+          value={image}
+          onChange={(e) => onImage(e.target.value)}
+          className={inputCls}
+          placeholder="https://…  (vacío = solo texto)"
+        />
+        {hasImage ? <StagePreview url={image.trim()} /> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Vista previa del header de imagen; si el link no carga, muestra un aviso. */
+function StagePreview({ url }: { url: string }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <p className="mt-2 text-[11px] text-amber-600">
+        No se pudo cargar la imagen. Revisa que el link sea público y directo.
+      </p>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt="Vista previa de la imagen de la plantilla"
+      loading="lazy"
+      onError={() => setBroken(true)}
+      className="mt-2 max-h-28 w-full rounded-md border border-slate-200 bg-white object-contain"
+    />
   );
 }
