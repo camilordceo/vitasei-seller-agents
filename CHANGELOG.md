@@ -24,7 +24,9 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 - **Hotmart · plantillas editables en el dashboard + flujo de cursos** (`docs/17`, `ADR-0040`,
   migración `0019`): (1) la plantilla de Callbell y el **texto del mensaje** del carrito abandonado
   ahora se administran en **`/dashboard/hotmart`** (tabla `hotmart_templates`, global o por
-  marca/producto, con `{{nombre}}`/`{{producto}}`) — antes estaban en env + hardcodeados; la env
+  marca/producto, con `{{nombre}}`/`{{producto}}`) — antes estaban en env + hardcodeados. Las **variables** que se mandan a Callbell **se derivan de esos
+  tokens del texto** (en orden): una plantilla de **solo texto** (sin `{{…}}`) se envía **sin
+  parámetros** y no falla por "parámetros de más". La env
   `HOTMART_ABANDONED_CART_TEMPLATE_UUID` queda como **fallback**. (2) **Rastro** `conversations.hotmart_flow`
   que se activa al enviar la plantilla (conversaciones **nuevas y existentes**), visible como badge
   "Hotmart · Cursos" en el detalle. (3) Cuando el cliente responde, se **anexa `Es flujo hotmart` al
@@ -32,7 +34,7 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   orden) para que el agente ejecute el flujo de cursos. Resiliente a la ventana de migración (cae al
   fallback por env; nunca rompe respuestas). Requiere aplicar `0019_hotmart_templates.sql` en Supabase
   y describir el flujo de cursos en el prompt del agente. Lógica pura testeada (`pickHotmartTemplate`,
-  `renderHotmartMessage`, `appendHotmartMarker`).
+  `renderHotmartMessage`, `extractTemplateValues`, `appendHotmartMarker`).
   (`supabase/migrations/0019_hotmart_templates.sql`, `lib/hotmart/templates.ts`, `lib/hotmart/flow.ts`,
   `lib/hotmart/processEvent.ts`, `lib/agent/processMessage.ts`, `lib/dashboard/queries.ts`,
   `app/dashboard/actions.ts`, `app/dashboard/hotmart/*`, `app/dashboard/layout.tsx`,

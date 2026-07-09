@@ -118,8 +118,10 @@ function TemplateFields({
         />
         <p className="mt-1 text-xs text-slate-400">
           Usa <code className="rounded bg-slate-100 px-1">{"{{nombre}}"}</code> y{" "}
-          <code className="rounded bg-slate-100 px-1">{"{{producto}}"}</code>; se reemplazan por los
-          datos del comprador. El envío real usa la plantilla aprobada en Callbell.
+          <code className="rounded bg-slate-100 px-1">{"{{producto}}"}</code>{" "}
+          <strong>solo si tu plantilla aprobada en Callbell tiene esas variables</strong> (en ese
+          orden). Si la plantilla es de <strong>solo texto</strong>, no pongas variables — se manda
+          sin parámetros. El envío real usa la plantilla aprobada en Callbell.
         </p>
       </div>
     </div>

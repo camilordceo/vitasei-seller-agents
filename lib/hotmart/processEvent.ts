@@ -9,6 +9,7 @@ import { extractCartData, isCartAbandonmentEvent } from "./types";
 import {
   resolveHotmartTemplate,
   renderHotmartMessage,
+  extractTemplateValues,
   DEFAULT_HOTMART_EVENT,
 } from "./templates";
 import { env } from "@/lib/env";
@@ -163,6 +164,13 @@ export async function processHotmartCartAbandonment(
     name: data.buyerName,
     product: data.productName,
   });
+  // Variables de la plantilla: se derivan de los tokens {{nombre}}/{{producto}} del
+  // texto configurado en el dashboard. Plantilla de SOLO TEXTO → sin variables (no
+  // falla por "parámetros de más"). Sin plantilla del dashboard (fallback por env,
+  // legado), se mantienen los 2 valores de antes. Ver ADR-0040.
+  const templateValues = tpl
+    ? extractTemplateValues(tpl.message_text, { name: data.buyerName, product: data.productName })
+    : [data.buyerName || "Hola", data.productName || "tu producto"];
 
   if (!templateUuid) {
     await supabase
@@ -187,6 +195,7 @@ export async function processHotmartCartAbandonment(
     data,
     templateUuid,
     messageText,
+    templateValues,
   );
 
   // 9) Actualizar el evento con el resultado del envío
@@ -356,14 +365,10 @@ async function sendHotmartTemplate(
   templateUuid: string,
   /** Texto de la plantilla del dashboard, ya interpolado ({{nombre}}/{{producto}}). */
   messageText: string,
+  /** Valores de las variables de la plantilla (derivados del texto; [] = solo texto). */
+  templateValues: string[],
 ): Promise<SendTemplateResult> {
   try {
-    // Variables de la plantilla: {{1}} = nombre, {{2}} = producto
-    const templateValues = [
-      data.buyerName || "Hola",
-      data.productName || "tu producto",
-    ];
-
     // Texto que se muestra/guarda en el hilo: el de la plantilla del dashboard (ya
     // interpolado) o, si está vacío, una nota con el producto (comportamiento previo).
     const storedText =

@@ -123,6 +123,13 @@ La plantilla de Callbell y el texto del mensaje se administran en
   cuenta de Callbell de ese agente.
 - Si no hay ninguna plantilla configurada, se usa la env como fallback.
 
+**Variables (parámetros) de la plantilla:** los `template_values` que se mandan a
+Callbell **se derivan de los tokens `{{nombre}}`/`{{producto}}` del texto**, en el
+orden en que aparecen. Deben coincidir con las variables `{{1}}`, `{{2}}`… de la
+plantilla **aprobada** en Callbell. Si tu plantilla es de **solo texto** (sin
+variables), **no pongas tokens** en el texto: se envía **sin parámetros** (así no
+falla con el típico error de "parámetros" cuando se mandan variables de más).
+
 ---
 
 ## 5. Plantilla de WhatsApp (Callbell)

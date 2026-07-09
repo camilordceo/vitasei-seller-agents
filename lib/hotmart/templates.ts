@@ -69,6 +69,33 @@ export function renderHotmartMessage(
 }
 
 /**
+ * Deriva los `template_values` que se mandan a Callbell a partir de los tokens
+ * `{{nombre}}`/`{{producto}}` que aparezcan EN ORDEN en el texto de la plantilla.
+ * Pura. La cantidad y el orden deben coincidir con las variables `{{1}}`,`{{2}}`…
+ * de la plantilla APROBADA en Callbell:
+ *
+ * - Plantilla de SOLO TEXTO (texto sin tokens) → `[]` → no se manda `template_values`
+ *   (así una plantilla sin variables no falla por "parámetros de más").
+ * - `{{nombre}}` → nombre del comprador; `{{producto}}` → nombre del producto.
+ */
+export function extractTemplateValues(
+  messageText: string | null | undefined,
+  vars: { name: string | null; product: string | null },
+): string[] {
+  if (!messageText) return [];
+  const name = (vars.name ?? "").trim();
+  const product = (vars.product ?? "").trim();
+  const values: string[] = [];
+  const re = /\{\{?\s*(nombre|name|producto|product)\s*\}?\}/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(messageText)) !== null) {
+    const token = m[1].toLowerCase();
+    values.push(token === "nombre" || token === "name" ? name : product);
+  }
+  return values;
+}
+
+/**
  * Resuelve la plantilla de Hotmart para (agente, evento, producto) desde la base.
  * Resiliente: si la tabla no existe todavía (42P01, falta la migración 0019),
  * devuelve null y el llamador cae al fallback por env. Cualquier otro error se

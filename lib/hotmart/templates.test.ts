@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   pickHotmartTemplate,
   renderHotmartMessage,
+  extractTemplateValues,
   type HotmartTemplateRow,
 } from "./templates";
 
@@ -104,5 +105,41 @@ describe("renderHotmartMessage", () => {
   it("devuelve cadena vacía si no hay texto", () => {
     expect(renderHotmartMessage(null, { name: "Ana", product: "X" })).toBe("");
     expect(renderHotmartMessage("", { name: "Ana", product: "X" })).toBe("");
+  });
+});
+
+describe("extractTemplateValues", () => {
+  const vars = { name: "roberto", product: "Curso de Yoga" };
+
+  it("plantilla de SOLO TEXTO (sin tokens) → sin variables", () => {
+    expect(extractTemplateValues("Hola, dejaste algo pendiente. ¿Te ayudo?", vars)).toEqual([]);
+  });
+
+  it("texto vacío o null → sin variables", () => {
+    expect(extractTemplateValues("", vars)).toEqual([]);
+    expect(extractTemplateValues(null, vars)).toEqual([]);
+  });
+
+  it("un solo {{nombre}} → una variable", () => {
+    expect(extractTemplateValues("¡Hola {{nombre}}!", vars)).toEqual(["roberto"]);
+  });
+
+  it("{{nombre}} y {{producto}} → dos variables en ese orden", () => {
+    expect(
+      extractTemplateValues("Hola {{nombre}}, dejaste {{producto}} pendiente", vars),
+    ).toEqual(["roberto", "Curso de Yoga"]);
+  });
+
+  it("respeta el orden del texto (producto antes que nombre)", () => {
+    expect(extractTemplateValues("{{producto}} para ti, {{nombre}}", vars)).toEqual([
+      "Curso de Yoga",
+      "roberto",
+    ]);
+  });
+
+  it("resuelve a vacío si falta el dato pero mantiene la posición", () => {
+    expect(
+      extractTemplateValues("{{nombre}} {{producto}}", { name: null, product: "X" }),
+    ).toEqual(["", "X"]);
   });
 });
