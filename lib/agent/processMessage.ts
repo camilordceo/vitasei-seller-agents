@@ -29,6 +29,7 @@ import {
   buildSaleNotification,
   buildTranscript,
   computeOrderTotal,
+  hasOrderData,
   isPurchaseConfirmation,
   normalizeOrderItem,
   resolveFulfillmentMethod,
@@ -794,33 +795,29 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     }
   }
 
-  // RED DE SEGURIDAD (ADR-0031): a veces el modelo CIERRA la venta (confirma el
-  // pedido, agradece la compra) pero olvida `#orden-lista` y solo emite
-  // `#compra-contra-entrega`/`#addi` → la orden nunca se creaba ni se avisaba.
-  // Si el texto que ve el cliente es un cierre confirmado Y el método ya está
-  // decidido en la conversación, inferimos la orden. Estricto a propósito para
-  // no disparar al arrancar la recolección de datos. NO fuerza handoff (menor
-  // radio de impacto si el heurístico se equivoca): solo crea la orden + avisa.
-  let inferredClose = false;
-  if (!parsed.tags.ordenLista && !parsed.tags.humano && isPurchaseConfirmation(parsed.cleanText)) {
-    const { data: convMethodRow } = await supabase
-      .from("conversations")
-      .select("fulfillment_method")
-      .eq("id", conversationId)
-      .single();
-    const m = convMethodRow?.fulfillment_method ?? "undecided";
-    inferredClose = m === "cod" || m === "addi";
-    if (inferredClose) {
-      await supabase.from("events_log").insert({
-        conversation_id: conversationId,
-        type: "order_inferred",
-        payload: { method: m, reason: "confirmation-without-orden-lista" } as unknown as Json,
-      });
-    }
-  }
+  // RED DE SEGURIDAD (ADR-0031 → mejorada en ADR-0039): a veces el modelo CIERRA
+  // la venta pero olvida `#orden-lista` y solo emite `#compra-contra-entrega`/`#addi`.
+  // Antes la orden solo se inferían con una frase de confirmación MUY estrecha, así
+  // que muchos cierres se perdían (no se creaba orden ni se avisaba). Ahora se
+  // infiere el cierre cuando el método está decidido Y hay señal: se acaba de elegir
+  // el método (#compra-contra-entrega/#addi) O el texto confirma. El gate de "hay
+  // datos reales" (abajo, tras la extracción) evita crear órdenes vacías al elegir
+  // método antes de recolectar datos. NO fuerza handoff (menor radio si falla).
+  const { data: convMethodRow } = await supabase
+    .from("conversations")
+    .select("fulfillment_method")
+    .eq("id", conversationId)
+    .single();
+  const convMethod = convMethodRow?.fulfillment_method ?? "undecided";
+  const methodDecided = convMethod === "cod" || convMethod === "addi";
+  const inferClose =
+    !parsed.tags.ordenLista &&
+    !parsed.tags.humano &&
+    methodDecided &&
+    (parsed.tags.cod || parsed.tags.addi || isPurchaseConfirmation(parsed.cleanText));
 
-  // Cerrar orden: explícito (`#orden-lista`) o inferido (cierre sin el tag).
-  const shouldCreateOrder = parsed.tags.ordenLista || inferredClose;
+  // Intentar cerrar orden: explícito (`#orden-lista`) o inferido.
+  const shouldCreateOrder = parsed.tags.ordenLista || inferClose;
 
   // Extraer la orden (completion aparte) y crearla. Idempotente: si la
   // conversación ya tiene orden, la reutilizamos (no duplicamos ni re-avisamos).
@@ -847,93 +844,97 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     const transcript = buildTranscript((msgs ?? []) as TranscriptMessage[]);
     const { draft, usage: extractUsage } = await extractOrder(openai, transcript, agent.model);
 
-    const { data: convRow } = await supabase
-      .from("conversations")
-      .select("fulfillment_method")
-      .eq("id", conversationId)
-      .single();
-    const method = resolveFulfillmentMethod(
-      convRow?.fulfillment_method ?? "undecided",
-      draft.fulfillment_method,
-    );
-    const total = draft.total ?? computeOrderTotal(draft.items);
-
-    const { data: order, error: ordErr } = await supabase
-      .from("orders")
-      .insert({
+    // Gate de datos: una orden INFERIDA (sin `#orden-lista`) solo se crea si la
+    // extracción trae datos reales (ítems o algún dato de envío) — así elegir el
+    // método antes de dar datos NO crea una orden vacía. `#orden-lista` (explícito)
+    // ignora el gate. Ver ADR-0039.
+    if (inferClose && !hasOrderData(draft)) {
+      await supabase.from("events_log").insert({
         conversation_id: conversationId,
-        contact_id: contactId,
-        status: "pending_handoff",
-        fulfillment_method: method,
-        shipping_name: draft.shipping.name,
-        shipping_address: draft.shipping.address,
-        shipping_city: draft.shipping.city,
-        shipping_phone: draft.shipping.phone,
-        notes: draft.notes,
-        total,
-      })
-      .select("id")
-      .single();
-    if (ordErr) throw new Error(`create-order insert: ${ordErr.message}`);
-    orderId = order.id;
-
-    if (draft.items.length > 0) {
-      const rows = draft.items.map((it) => {
-        const n = normalizeOrderItem(it);
-        return {
-          order_id: order.id,
-          sku: n.sku,
-          name: n.name,
-          qty: n.qty,
-          unit_price: n.unit_price,
-        };
+        type: "order_inferred_skipped",
+        payload: { method: convMethod, reason: "method-without-data" } as unknown as Json,
       });
-      const { error: itErr } = await supabase.from("order_items").insert(rows);
-      if (itErr) throw new Error(`create-order items: ${itErr.message}`);
-    }
+    } else {
+      const method = resolveFulfillmentMethod(convMethod, draft.fulfillment_method);
+      const total = draft.total ?? computeOrderTotal(draft.items);
 
-    await supabase.from("events_log").insert({
-      conversation_id: conversationId,
-      type: "order_created",
-      payload: {
+      const { data: order, error: ordErr } = await supabase
+        .from("orders")
+        .insert({
+          conversation_id: conversationId,
+          contact_id: contactId,
+          status: "pending_handoff",
+          fulfillment_method: method,
+          shipping_name: draft.shipping.name,
+          shipping_address: draft.shipping.address,
+          shipping_city: draft.shipping.city,
+          shipping_phone: draft.shipping.phone,
+          notes: draft.notes,
+          total,
+        })
+        .select("id")
+        .single();
+      if (ordErr) throw new Error(`create-order insert: ${ordErr.message}`);
+      orderId = order.id;
+
+      if (draft.items.length > 0) {
+        const rows = draft.items.map((it) => {
+          const n = normalizeOrderItem(it);
+          return {
+            order_id: order.id,
+            sku: n.sku,
+            name: n.name,
+            qty: n.qty,
+            unit_price: n.unit_price,
+          };
+        });
+        const { error: itErr } = await supabase.from("order_items").insert(rows);
+        if (itErr) throw new Error(`create-order items: ${itErr.message}`);
+      }
+
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "order_created",
+        payload: {
+          orderId: order.id,
+          method,
+          items: draft.items.length,
+          total,
+          inferred: inferClose, // creada por la red de seguridad (sin #orden-lista)
+          usage: extractUsage, // tokens de la extracción → costo real del dashboard
+        } as unknown as Json,
+      });
+
+      // Compró → cancela seguimientos (1h/8h) y reactivaciones (7/15d) pendientes.
+      // No queremos "¿sigues ahí?" tras una venta. Best-effort: un fallo aquí NUNCA
+      // rompe el flujo del pedido (y el worker igual cancela por la guarda de compra).
+      try {
+        await cancelScheduledRetargets(supabase, conversationId, "converted");
+      } catch (e) {
+        console.error(
+          "[generateAndSend] cancel retargets failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+      try {
+        await cancelScheduledReactivations(supabase, conversationId, "converted");
+      } catch (e) {
+        console.error(
+          "[generateAndSend] cancel reactivations failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+
+      // Aviso al dueño: nueva venta con cliente + resumen de la orden. Best-effort:
+      // un fallo aquí NUNCA rompe el flujo del pedido (se loguea y sigue).
+      await notifyOwnerOfSale(supabase, creds, conversationId, {
+        clientPhone: phone,
         orderId: order.id,
         method,
-        items: draft.items.length,
         total,
-        inferred: inferredClose && !parsed.tags.ordenLista, // creada por la red de seguridad
-        usage: extractUsage, // tokens de la extracción → costo real del dashboard
-      } as unknown as Json,
-    });
-
-    // Compró → cancela seguimientos (1h/8h) y reactivaciones (7/15d) pendientes.
-    // No queremos "¿sigues ahí?" tras una venta. Best-effort: un fallo aquí NUNCA
-    // rompe el flujo del pedido (y el worker igual cancela por la guarda de compra).
-    try {
-      await cancelScheduledRetargets(supabase, conversationId, "converted");
-    } catch (e) {
-      console.error(
-        "[generateAndSend] cancel retargets failed:",
-        e instanceof Error ? e.message : String(e),
-      );
+        draft,
+      });
     }
-    try {
-      await cancelScheduledReactivations(supabase, conversationId, "converted");
-    } catch (e) {
-      console.error(
-        "[generateAndSend] cancel reactivations failed:",
-        e instanceof Error ? e.message : String(e),
-      );
-    }
-
-    // Aviso al dueño: nueva venta con cliente + resumen de la orden. Best-effort:
-    // un fallo aquí NUNCA rompe el flujo del pedido (se loguea y sigue).
-    await notifyOwnerOfSale(supabase, creds, conversationId, {
-      clientPhone: phone,
-      orderId: order.id,
-      method,
-      total,
-      draft,
-    });
   }
 
   // Texto del agente. En handoff va con team_uuid + bot_end (reasigna + apaga bot).

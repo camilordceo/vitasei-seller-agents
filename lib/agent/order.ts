@@ -114,17 +114,32 @@ function normalizeForMatch(text: string): string {
 /**
  * ¿El texto que ve el cliente es un CIERRE de compra confirmado? Red de seguridad
  * para cuando el modelo cierra la venta pero olvida emitir `#orden-lista` (emite
- * solo `#compra-contra-entrega`/`#addi`). Se usa junto con "método ya decidido"
- * para inferir la orden. Frases DELIBERADAMENTE estrictas (solo aparecen en el
- * cierre real, no al arrancar la recolección de datos). Ver ADR-0031.
+ * solo `#compra-contra-entrega`/`#addi`). Se usa junto con "método ya decidido" y
+ * "hay datos reales" para inferir la orden — el gate de datos permite ampliar las
+ * frases sin crear órdenes vacías. Ver ADR-0031 y ADR-0039.
  */
 export function isPurchaseConfirmation(cleanText: string): boolean {
   const t = normalizeForMatch(cleanText);
   return (
-    /\bqued[oa]\s+confirmad[oa]\b/.test(t) || // "queda/quedó confirmado/a"
-    /\b(pedido|orden|compra)\s+(esta\s+)?confirmad[oa]\b/.test(t) || // "pedido (está) confirmado"
-    /\bconfirmad[oa]\s+(tu|el|la)\s+(pedido|orden|compra)\b/.test(t) || // "confirmada tu compra"
-    /\bgracias\s+por\s+tu\s+(compra|pedido)\b/.test(t) // "gracias por tu compra/pedido"
+    /\bqued[oa]\s+(confirmad|registrad|list)[oa]\b/.test(t) || // "queda confirmado/registrado/listo"
+    /\b(pedido|orden|compra)\s+(esta\s+|ya\s+)?(confirmad|registrad|list)[oa]\b/.test(t) || // "pedido (ya) confirmado/listo"
+    /\b(confirmad|registrad|list)[oa]\s+(tu|el|la)\s+(pedido|orden|compra)\b/.test(t) || // "confirmada tu compra"
+    /\bconfirm(o|amos)\s+(tu|el|la)\s+(pedido|orden|compra)\b/.test(t) || // "confirmo/confirmamos tu pedido"
+    /\bgracias\s+por\s+tu\s+(compra|pedido|orden)\b/.test(t) // "gracias por tu compra/pedido/orden"
+  );
+}
+
+/**
+ * ¿La extracción encontró datos REALES de orden (ítems o algún dato de envío)?
+ * Gate para NO crear una orden vacía cuando el cliente solo eligió método
+ * (#compra-contra-entrega/#addi) antes de dar sus datos. `#orden-lista` (explícito)
+ * ignora este gate. Ver ADR-0039.
+ */
+export function hasOrderData(draft: OrderDraft): boolean {
+  const s = draft.shipping;
+  return (
+    draft.items.length > 0 ||
+    Boolean(s.name?.trim() || s.address?.trim() || s.city?.trim() || s.phone?.trim())
   );
 }
 

@@ -121,6 +121,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `app/dashboard/orders/NewOrderButton.tsx`).
 
 ### Fixed
+- **Cierres de venta que no creaban la orden ni avisaban** (ADR-0039): la red de seguridad
+  (ADR-0031) solo inferían la orden si el texto del bot matcheaba una lista **muy estrecha** de
+  frases; un cierre real con `#compra-contra-entrega` cuyo texto no calzaba se perdía (sin orden, sin
+  aviso). Ahora se infiere el cierre cuando el **método está decidido** y **se acaba de elegir**
+  (`#compra-contra-entrega`/`#addi`) o el texto confirma, **gateado por datos reales**
+  (`hasOrderData`: ítems o algún dato de envío) para no crear órdenes vacías al elegir método antes de
+  dar datos. Se amplían también las frases de `isPurchaseConfirmation`. Nuevo evento
+  `order_inferred_skipped`. (`lib/agent/order.ts`, `lib/agent/processMessage.ts`,
+  `lib/agent/order.test.ts`).
 - **Borrar un contacto/conversación fallaba si tenía un evento de Hotmart** (`ERROR 23503:
   violates foreign key constraint "hotmart_events_contact_id_fkey"`): la migración `0013` creó
   `hotmart_events` con FKs a `contacts`/`conversations` **sin** `on delete cascade`, a diferencia

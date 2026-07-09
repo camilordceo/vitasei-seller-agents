@@ -3,12 +3,21 @@ import {
   buildSaleNotification,
   buildTranscript,
   computeOrderTotal,
+  hasOrderData,
   isPurchaseConfirmation,
   normalizeOrderItem,
   normalizeQty,
   resolveFulfillmentMethod,
 } from "./order";
 import type { OrderDraft } from "@/lib/openai/extractOrder";
+
+const EMPTY_DRAFT: OrderDraft = {
+  items: [],
+  shipping: { name: null, address: null, city: null, phone: null },
+  fulfillment_method: null,
+  notes: null,
+  total: null,
+};
 
 describe("buildTranscript", () => {
   it("etiqueta Cliente/Asesor y omite vacíos", () => {
@@ -90,6 +99,36 @@ describe("isPurchaseConfirmation", () => {
     expect(isPurchaseConfirmation("¿Confirmas que quieres 2 unidades?")).toBe(false);
     expect(isPurchaseConfirmation("Claro, con gusto te ayudo. ¿Algo más?")).toBe(false);
     expect(isPurchaseConfirmation("")).toBe(false);
+  });
+
+  it("acepta más cierres reales (registrado / listo / confirmo tu pedido)", () => {
+    expect(isPurchaseConfirmation("Tu pedido queda registrado")).toBe(true);
+    expect(isPurchaseConfirmation("Tu pedido está listo, lo despachamos hoy")).toBe(true);
+    expect(isPurchaseConfirmation("Confirmo tu pedido, ¡gracias!")).toBe(true);
+  });
+});
+
+describe("hasOrderData", () => {
+  it("false cuando no hay ítems ni datos de envío", () => {
+    expect(hasOrderData(EMPTY_DRAFT)).toBe(false);
+  });
+
+  it("true cuando hay al menos un ítem", () => {
+    expect(
+      hasOrderData({
+        ...EMPTY_DRAFT,
+        items: [{ sku: "#ID1", name: null, qty: 1, unit_price: null }],
+      }),
+    ).toBe(true);
+  });
+
+  it("true cuando hay algún dato de envío (nombre o dirección)", () => {
+    expect(hasOrderData({ ...EMPTY_DRAFT, shipping: { ...EMPTY_DRAFT.shipping, name: "Ana" } })).toBe(
+      true,
+    );
+    expect(
+      hasOrderData({ ...EMPTY_DRAFT, shipping: { ...EMPTY_DRAFT.shipping, address: "Cra 1 #2-3" } }),
+    ).toBe(true);
   });
 });
 
