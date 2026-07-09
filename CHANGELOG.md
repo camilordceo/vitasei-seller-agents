@@ -21,6 +21,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Conversaciones · paginación ("más antiguas / más recientes")**: la lista de
+  `/dashboard/conversations` ahora se pagina (50 por página) con controles **‹ Más recientes** /
+  **Más antiguas ›** e indicador de **página**, para poder ver **conversaciones pasadas** más allá de
+  las más recientes (antes se cortaba en las 100 últimas, sin forma de seguir). Paginación por
+  `offset` (nuevo campo en `ConversationFilters`) con `range()` exacto para los filtros de BD
+  (fecha/estado) y desempate estable por `id`; se pide una fila de más (`PAGE_SIZE + 1`) para saber
+  si hay siguiente sin un count aparte. Preserva los filtros al pasar de página y los resetea a la
+  página 1 al cambiar un filtro. El filtro "con/sin pedido" (que se resuelve en JS) sigue el mismo
+  criterio de volumen v1. Sin migración. (`lib/dashboard/queries.ts` `getRecentConversations`,
+  `app/dashboard/conversations/page.tsx`).
 - **Conversación · panel "¿Por qué (no) respondió?"** (diagnóstico): la vista de detalle de una
   conversación ahora muestra el **rastro de decisiones del bot** (`events_log`) traducido a lenguaje
   humano, para entender por qué un mensaje **no obtuvo respuesta**: fuera de horario

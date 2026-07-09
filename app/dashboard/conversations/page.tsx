@@ -5,7 +5,10 @@ import type { ConversationStatus } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { range?: string; order?: string; status?: string };
+type SearchParams = { range?: string; order?: string; status?: string; page?: string };
+
+/** Conversaciones por página (para el "siguiente" / "más antiguas"). */
+const PAGE_SIZE = 50;
 
 /** Ventanas de fecha (por actividad reciente, `updated_at`). */
 const RANGE_DAYS: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90 };
@@ -82,12 +85,20 @@ export default async function ConversationsPage({
       ? (searchParams.status as ConversationStatus)
       : undefined;
 
-  const convos = await getRecentConversations({
-    limit: 100,
+  const pageNum = Math.max(1, Math.floor(Number(searchParams.page)) || 1);
+
+  // Pedimos UNA de más (PAGE_SIZE + 1) para saber si hay página siguiente sin un
+  // count aparte: si vuelven más de PAGE_SIZE, hay "más antiguas".
+  const fetched = await getRecentConversations({
+    limit: PAGE_SIZE + 1,
+    offset: (pageNum - 1) * PAGE_SIZE,
     sinceDays: rangeKey ? RANGE_DAYS[rangeKey] : undefined,
     hasOrder: orderKey === "with" ? true : orderKey === "without" ? false : undefined,
     status: statusKey,
   });
+  const hasNext = fetched.length > PAGE_SIZE;
+  const convos = fetched.slice(0, PAGE_SIZE);
+  const hasPrev = pageNum > 1;
 
   // Construye un href preservando los demás filtros; "all" limpia esa dimensión.
   const current = { range: rangeKey, order: orderKey, status: statusKey };
@@ -97,6 +108,17 @@ export default async function ConversationsPage({
     if (next.range) qs.set("range", next.range);
     if (next.order) qs.set("order", next.order);
     if (next.status) qs.set("status", next.status);
+    const s = qs.toString();
+    return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
+  }
+
+  // Href de paginación: preserva los filtros actuales y fija la página (1 = sin ?page).
+  function hrefWithPage(target: number): string {
+    const qs = new URLSearchParams();
+    if (rangeKey) qs.set("range", rangeKey);
+    if (orderKey) qs.set("order", orderKey);
+    if (statusKey) qs.set("status", statusKey);
+    if (target > 1) qs.set("page", String(target));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
@@ -144,7 +166,42 @@ export default async function ConversationsPage({
         ) : null}
       </div>
 
-      <ConversationList rows={convos} filtered={anyFilter} />
+      {convos.length === 0 && hasPrev ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+          <p className="text-sm text-slate-500">No hay más conversaciones en esta página.</p>
+          <Link
+            href={hrefWithPage(pageNum - 1)}
+            className="mt-2 inline-block text-sm text-slate-600 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          >
+            ‹ Volver a la página anterior
+          </Link>
+        </div>
+      ) : (
+        <ConversationList rows={convos} filtered={anyFilter} />
+      )}
+
+      {hasPrev || hasNext ? (
+        <nav
+          className="flex items-center justify-between gap-2"
+          aria-label="Paginación de conversaciones"
+        >
+          {hasPrev ? (
+            <Link href={hrefWithPage(pageNum - 1)} className={idleCls}>
+              ‹ Más recientes
+            </Link>
+          ) : (
+            <span aria-hidden="true" />
+          )}
+          <span className="text-xs font-medium text-slate-400">Página {pageNum}</span>
+          {hasNext ? (
+            <Link href={hrefWithPage(pageNum + 1)} className={idleCls}>
+              Más antiguas ›
+            </Link>
+          ) : (
+            <span aria-hidden="true" />
+          )}
+        </nav>
+      ) : null}
     </div>
   );
 }

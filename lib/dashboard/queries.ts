@@ -240,6 +240,8 @@ export interface ConversationRow {
 
 export interface ConversationFilters {
   limit?: number;
+  /** Desplazamiento para paginar (0-based, default 0). Con `hasOrder` se corta tras filtrar en JS. */
+  offset?: number;
   /** Filtra por estado de la conversación. */
   status?: ConversationStatus;
   /** true = solo con pedido · false = solo sin pedido · undefined = todas. */
@@ -252,21 +254,31 @@ export async function getRecentConversations(
   opts: ConversationFilters = {},
 ): Promise<ConversationRow[]> {
   const limit = opts.limit ?? 100;
+  const offset = opts.offset ?? 0;
   const supabase = createServiceClient();
 
   let q = supabase
     .from("conversations")
     .select("id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at")
-    .order("updated_at", { ascending: false });
+    .order("updated_at", { ascending: false })
+    // Desempate estable por `id`: sin esto, dos conversaciones con el mismo
+    // `updated_at` podrían reordenarse entre páginas (saltos/duplicados al paginar).
+    .order("id", { ascending: false });
   if (opts.status) q = q.eq("status", opts.status);
   if (opts.sinceDays != null) {
     const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
     q = q.gte("updated_at", since);
   }
-  // El filtro "con/sin pedido" se resuelve en JS (requiere cruzar con `orders`),
-  // así que traemos un margen mayor para no quedarnos cortos tras filtrar.
-  // Volumen v1 bajo → aceptable; si crece, mover a una vista/RPC en Postgres.
-  q = q.limit(opts.hasOrder == null ? limit : Math.max(limit * 5, 200));
+  if (opts.hasOrder == null) {
+    // Fecha/estado son filtros de BD → paginación EXACTA con range(offset..offset+limit-1).
+    q = q.range(offset, offset + limit - 1);
+  } else {
+    // "con/sin pedido" se resuelve en JS (cruza con `orders`): traemos desde el
+    // inicio lo suficiente para cubrir la página pedida (con margen) y cortamos
+    // [offset, offset+limit) abajo. Volumen v1 bajo → aceptable; si crece, mover a
+    // una vista/RPC. Tope 1000 (límite de PostgREST); no se alcanza con volumen v1.
+    q = q.limit(Math.min(Math.max((offset + limit) * 5, 200), 1000));
+  }
 
   const { data: convos, error } = await q;
   if (error) throw new Error(`getRecentConversations: ${error.message}`);
@@ -355,7 +367,9 @@ export async function getRecentConversations(
   if (opts.hasOrder === true) mapped = mapped.filter((r) => r.hasOrder);
   else if (opts.hasOrder === false) mapped = mapped.filter((r) => !r.hasOrder);
 
-  return mapped.slice(0, limit);
+  // Sin hasOrder ya vino paginado por range(); con hasOrder recortamos la ventana
+  // [offset, offset+limit) tras el filtro en JS.
+  return opts.hasOrder == null ? mapped : mapped.slice(offset, offset + limit);
 }
 
 // --- Retargets (seguimientos automáticos, ver docs/10) ---------------------
