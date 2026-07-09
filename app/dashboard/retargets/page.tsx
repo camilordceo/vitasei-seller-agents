@@ -1,5 +1,6 @@
 import {
   getAgentsReactivationConfig,
+  getAgentsRetargetConfig,
   getRecentReactivations,
   getRecentRetargets,
   getReactivationStats,
@@ -12,16 +13,18 @@ import {
   RetargetStatsBar,
 } from "../ui";
 import { ReactivationSettings } from "./ReactivationSettings";
+import { RetargetSettings } from "./RetargetSettings";
 
 export const dynamic = "force-dynamic";
 
 export default async function RetargetsPage() {
-  const [stats, rows, agentsReact, reactStats, reactRows] = await Promise.all([
+  const [stats, rows, agentsReact, reactStats, reactRows, agentsRetarget] = await Promise.all([
     getRetargetStats(),
     getRecentRetargets(100),
     getAgentsReactivationConfig(),
     getReactivationStats(),
     getRecentReactivations(100),
+    getAgentsRetargetConfig(),
   ]);
 
   return (
@@ -53,6 +56,7 @@ export default async function RetargetsPage() {
           <span className="text-sm text-slate-400">{rows.length}</span>
         </div>
 
+        <RetargetSettings agents={agentsRetarget} />
         <RetargetList rows={rows} />
         <RetargetStatsBar stats={stats} />
       </section>

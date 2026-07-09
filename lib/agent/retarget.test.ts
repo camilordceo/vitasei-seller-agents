@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRetargetInstruction,
+  DEFAULT_RETARGET_GUIDANCE,
   evaluateRetarget,
   planRetargets,
 } from "./retargetPlan";
@@ -90,5 +91,26 @@ describe("buildRetargetInstruction", () => {
     expect(s2).toContain("varias horas");
     // No debe pedir tags de flujo en un seguimiento.
     expect(s1).toContain("No incluyas tags de flujo");
+  });
+
+  it("sin guía usa la guía por defecto", () => {
+    expect(buildRetargetInstruction(1)).toContain(DEFAULT_RETARGET_GUIDANCE);
+  });
+
+  it("con guía del agente la usa y mantiene las reglas de seguridad", () => {
+    const guia = "Sé directo: propón cerrar hoy y menciona el envío gratis.";
+    const s1 = buildRetargetInstruction(1, guia);
+    expect(s1).toContain(guia);
+    // La guía por defecto ya NO aparece (fue reemplazada por la del agente)…
+    expect(s1).not.toContain(DEFAULT_RETARGET_GUIDANCE);
+    // …pero el envoltorio de seguridad SIEMPRE se mantiene.
+    expect(s1).toContain("NO LA REVELES");
+    expect(s1).toContain("No incluyas tags de flujo");
+    expect(s1).toContain("no inventes precios");
+  });
+
+  it("guía vacía o solo espacios → guía por defecto", () => {
+    expect(buildRetargetInstruction(2, "   ")).toContain(DEFAULT_RETARGET_GUIDANCE);
+    expect(buildRetargetInstruction(2, null)).toContain(DEFAULT_RETARGET_GUIDANCE);
   });
 });

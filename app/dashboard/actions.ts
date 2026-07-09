@@ -381,6 +381,43 @@ export async function updateReactivationSettings(
   revalidatePath("/dashboard");
 }
 
+/**
+ * Actualiza las instrucciones de retarget (turno-guía 1h/8h) de UN agente. Vacío =
+ * usar la guía por defecto. Solo edita la guía; el envoltorio de seguridad se aplica
+ * siempre en el backend. Service-role, protegida por el Basic Auth. Ver ADR-0043.
+ */
+export async function updateRetargetInstructions(
+  agentId: string,
+  input: { instruction1: string; instruction2: string },
+): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase
+    .from("agents")
+    .update({
+      retarget_instruction_1: textOrNull(input.instruction1),
+      retarget_instruction_2: textOrNull(input.instruction2),
+    })
+    .eq("id", agentId);
+  if (error) {
+    if (error.code === "42703")
+      throw new Error("Falta aplicar la migración 0021 (retarget_instruction_1/2) en Supabase.");
+    throw new Error(`updateRetargetInstructions: ${error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "retarget_instructions_updated",
+    payload: {
+      agentId,
+      has1: textOrNull(input.instruction1) != null,
+      has2: textOrNull(input.instruction2) != null,
+    } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/retargets");
+  revalidatePath("/dashboard/agents");
+}
+
 /** Normaliza la temperatura a [0, 2] (default 0.3 si viene inválida). */
 function cleanTemperature(t: number): number {
   if (!Number.isFinite(t)) return 0.3;

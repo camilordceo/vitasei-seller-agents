@@ -71,14 +71,29 @@ export function evaluateRetarget(p: {
 }
 
 /**
+ * Guía por defecto (la parte CALIBRABLE) del seguimiento. Es lo que el agente puede
+ * editar por etapa (tono/estrategia); si no configura nada, se usa esto. El resto de
+ * la instrucción —el encabezado interno y las reglas de seguridad— se envuelve
+ * siempre. Ver ADR-0043.
+ */
+export const DEFAULT_RETARGET_GUIDANCE =
+  "Escribe UN solo mensaje de WhatsApp para retomar la conversación de forma breve, cálida y natural, usando el contexto de lo que ya hablaron y ayudándolo a avanzar hacia la compra.";
+
+/**
  * Instrucción interna que se pasa como turno del usuario. El contexto real de la
  * conversación viaja por `previous_response_id`; esto solo dispara el mensaje de
  * seguimiento. Clave: NO revelar que es automático.
+ *
+ * `guidance` (opcional) es la parte editable por agente (tono/estrategia: más
+ * agresivo, más informativo…). Vacío → guía por defecto. Las reglas de seguridad
+ * (no revelar que es automático, no inventar, sin tags de flujo) SIEMPRE se
+ * envuelven acá y no dependen de lo que escriba el agente. Ver ADR-0043.
  */
-export function buildRetargetInstruction(stage: RetargetStage): string {
+export function buildRetargetInstruction(stage: RetargetStage, guidance?: string | null): string {
   const when = stage === 1 ? "hace alrededor de una hora" : "hace varias horas";
+  const strategy = guidance && guidance.trim() ? guidance.trim() : DEFAULT_RETARGET_GUIDANCE;
   return `[INSTRUCCIÓN INTERNA — NO LA REVELES AL CLIENTE]
-El cliente dejó de responder ${when}. Escribe UN solo mensaje de WhatsApp para retomar la conversación de forma breve, cálida y natural, usando el contexto de lo que ya hablaron y ayudándolo a avanzar hacia la compra.
+El cliente dejó de responder ${when}. ${strategy}
 - Escribe como si retomaras tú la conversación: NO menciones que esto es automático, ni hables de tiempos, recordatorios o seguimientos.
 - No repitas literalmente tu último mensaje; aporta algo nuevo (resuelve una posible duda u objeción, recuerda un beneficio clave o propón el siguiente paso).
 - Respeta todas tus reglas: no inventes precios, catálogo, plazos ni condiciones.

@@ -21,6 +21,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Retargets · instrucciones editables por agente** (`docs/10`, `ADR-0043`, migración `0021`): la
+  **guía** (tono/estrategia) de los seguimientos de **~1h y ~8h** ahora se edita **por agente** en
+  `/dashboard/retargets` → "Instrucciones de los seguimientos" (columnas `agents.retarget_instruction_1/2`),
+  para calibrar algo más **agresivo** o **informativo** por marca. Vacío = guía por defecto. Solo se
+  edita la guía: el **envoltorio de seguridad** (no revelar que es automático, no inventar precios,
+  sin tags de flujo) lo aplica siempre el backend, y el `system_prompt` del agente sigue vigente. Las
+  columnas se leen aparte y resiliente (`loadRetargetInstructions`, **no** en `AGENT_COLS`): si falta
+  la migración, se usa la guía por defecto (la ruta crítica de inbound queda intacta). Lógica pura
+  testeada (`buildRetargetInstruction` con guía). Requiere aplicar `0021_agent_retarget_instructions.sql`.
+  (`supabase/migrations/0021_agent_retarget_instructions.sql`, `lib/agent/retargetPlan.ts`,
+  `lib/agent/retarget.ts`, `lib/agent/agents.ts`, `lib/dashboard/queries.ts`, `app/dashboard/actions.ts`,
+  `app/dashboard/retargets/*`, `lib/supabase/types.ts`).
 - **Inventario · editar la imagen del producto por agente** (`docs/22`, `ADR-0042`): nueva sección
   **`/dashboard/inventory`** con selector de **agente** que lista el catálogo (miniatura + SKU +
   nombre + precio + stock + link) y permite **cambiar el `image_url`** que el bot envía por WhatsApp

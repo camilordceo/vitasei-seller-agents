@@ -166,3 +166,32 @@ export async function findHotmartAgentId(supabase: DB): Promise<string | null> {
   if (error) return null; // columna ausente o error → sin marca (usa fallback)
   return data?.id ?? null;
 }
+
+export interface AgentRetargetInstructions {
+  /** Guía del seguimiento de ~1h (null = usar la guía por defecto). */
+  stage1: string | null;
+  /** Guía del seguimiento de ~8h (null = usar la guía por defecto). */
+  stage2: string | null;
+}
+
+/**
+ * Instrucciones de retarget POR AGENTE (turno-guía editable de 1h/8h). Consulta
+ * APARTE (no está en `AGENT_COLS`) y resiliente a que falten las columnas (42703,
+ * migración 0021 sin aplicar): devuelve nulls → el backend usa la guía por defecto.
+ * Ver ADR-0043.
+ */
+export async function loadRetargetInstructions(
+  supabase: DB,
+  agentId: string,
+): Promise<AgentRetargetInstructions> {
+  const { data, error } = await supabase
+    .from("agents")
+    .select("retarget_instruction_1, retarget_instruction_2")
+    .eq("id", agentId)
+    .maybeSingle();
+  if (error || !data) return { stage1: null, stage2: null };
+  return {
+    stage1: data.retarget_instruction_1 ?? null,
+    stage2: data.retarget_instruction_2 ?? null,
+  };
+}

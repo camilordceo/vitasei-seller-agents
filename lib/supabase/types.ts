@@ -326,6 +326,8 @@ export interface Database {
           reactivation_template_7d: string | null;
           reactivation_template_15d: string | null;
           hotmart_enabled: boolean;
+          retarget_instruction_1: string | null;
+          retarget_instruction_2: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -350,6 +352,8 @@ export interface Database {
           reactivation_template_7d?: string | null;
           reactivation_template_15d?: string | null;
           hotmart_enabled?: boolean;
+          retarget_instruction_1?: string | null;
+          retarget_instruction_2?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -374,6 +378,8 @@ export interface Database {
           reactivation_template_7d?: string | null;
           reactivation_template_15d?: string | null;
           hotmart_enabled?: boolean;
+          retarget_instruction_1?: string | null;
+          retarget_instruction_2?: string | null;
           created_at?: string;
           updated_at?: string;
         };

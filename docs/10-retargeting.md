@@ -55,6 +55,21 @@ Se pasa como el turno del usuario; el contexto real viaja por
 - Puede volver a mostrar un producto con su `#ID` exacto (gate anti-alucinación).
 - No usar tags de flujo (es solo un seguimiento).
 
+### Editable por agente (ADR-0043)
+
+La **guía** (tono/estrategia) de cada etapa se edita **por agente** en
+`/dashboard/retargets` → "Instrucciones de los seguimientos" (columnas
+`agents.retarget_instruction_1` = 1h y `retarget_instruction_2` = 8h; migración
+0021). Sirve para calibrar algo más **agresivo** (cerrar hoy, oferta) o más
+**informativo** (dudas, beneficios) por marca. Vacío = guía por defecto
+(`DEFAULT_RETARGET_GUIDANCE`).
+
+Solo se edita **la guía**: el envoltorio de seguridad (encabezado interno, "no
+reveles que es automático", "no inventes", "sin tags de flujo") lo pone SIEMPRE el
+backend en `buildRetargetInstruction`, y el `system_prompt` del agente sigue
+aplicando. Las columnas se leen aparte y resiliente (`loadRetargetInstructions`, no
+en `AGENT_COLS`): si falta la migración, se usa la guía por defecto.
+
 ## Config (env)
 
 | Variable | Default | Qué hace |

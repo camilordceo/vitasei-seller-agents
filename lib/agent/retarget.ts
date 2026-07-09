@@ -9,6 +9,7 @@ import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
 import {
   loadAgentForConversation,
+  loadRetargetInstructions,
   agentCallbellCreds,
   agentVectorStoreId,
   type Agent,
@@ -297,10 +298,16 @@ async function sendRetargetMessage(
   const { row, agent, previousResponseId, lastInboundAt, now } = ctx;
   const creds = agentCallbellCreds(agent);
 
+  // Guía editable por agente de esta etapa (1h/8h). Resiliente: si falta la columna
+  // o no está configurada, `buildRetargetInstruction` usa la guía por defecto. El
+  // envoltorio con las reglas de seguridad se aplica siempre. Ver ADR-0043.
+  const instructions = await loadRetargetInstructions(supabase, agent.id);
+  const guidance = row.stage === 1 ? instructions.stage1 : instructions.stage2;
+
   const gen = await generateReply(openai, {
     model: agent.model,
     systemPrompt: agent.system_prompt,
-    input: buildRetargetInstruction(row.stage as RetargetStage),
+    input: buildRetargetInstruction(row.stage as RetargetStage, guidance),
     vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
     maxNumResults: env.FILE_SEARCH_MAX_RESULTS,

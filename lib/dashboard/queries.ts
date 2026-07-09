@@ -957,6 +957,55 @@ export async function getAgentsReactivationConfig(): Promise<AgentReactivationCo
   }));
 }
 
+export interface AgentRetargetConfig {
+  agentId: string;
+  name: string;
+  brand: string | null;
+  /** Guía del seguimiento de ~1h (null = guía por defecto). */
+  instruction1: string | null;
+  /** Guía del seguimiento de ~8h (null = guía por defecto). */
+  instruction2: string | null;
+}
+
+/**
+ * Instrucciones de retarget (1h/8h) por agente, para el editor del dashboard.
+ * Resiliente: si faltan las columnas (42703, migración 0021 sin aplicar) devuelve
+ * los agentes con instrucciones null (usarán la guía por defecto). Ver ADR-0043.
+ */
+export async function getAgentsRetargetConfig(): Promise<AgentRetargetConfig[]> {
+  const supabase = createServiceClient();
+  const full = await supabase
+    .from("agents")
+    .select("id, name, brand, retarget_instruction_1, retarget_instruction_2, created_at")
+    .order("created_at", { ascending: true });
+
+  if (full.error) {
+    if (full.error.code === "42703") {
+      const basic = await supabase
+        .from("agents")
+        .select("id, name, brand, created_at")
+        .order("created_at", { ascending: true });
+      if (basic.error) throw new Error(`getAgentsRetargetConfig: ${basic.error.message}`);
+      return (basic.data ?? []).map((a) => ({
+        agentId: a.id,
+        name: a.name,
+        brand: a.brand,
+        instruction1: null,
+        instruction2: null,
+      }));
+    }
+    throw new Error(`getAgentsRetargetConfig: ${full.error.message}`);
+  }
+
+  return (full.data ?? []).map((a) => ({
+    agentId: a.id,
+    name: a.name,
+    brand: a.brand,
+    instruction1: a.retarget_instruction_1,
+    instruction2: a.retarget_instruction_2,
+  }));
+}
+
 export interface ReactivationStats {
   scheduled: number;
   processing: number;
