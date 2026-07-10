@@ -238,6 +238,15 @@ export interface ConversationRow {
   labels: ConversationLabelLite[];
 }
 
+/**
+ * Clave de orden/actividad de la lista:
+ *  - "inbound"  → por el ÚLTIMO mensaje del cliente (`last_inbound_at`).
+ *  - "outbound" → por la ÚLTIMA respuesta del bot/agente (`last_outbound_at`).
+ * Según el caso conviene ver una u otra (p. ej. "quién escribió hace poco" vs
+ * "a quién le respondimos de últimas"). Ver ADR-0045.
+ */
+export type ConversationOrderBy = "inbound" | "outbound";
+
 export interface ConversationFilters {
   limit?: number;
   /** Desplazamiento para paginar (0-based, default 0). Con `hasOrder` se corta tras filtrar en JS. */
@@ -246,41 +255,83 @@ export interface ConversationFilters {
   status?: ConversationStatus;
   /** true = solo con pedido · false = solo sin pedido · undefined = todas. */
   hasOrder?: boolean;
-  /** Ventana de actividad reciente en días (por `updated_at`). undefined = sin límite. */
+  /** Ventana de actividad reciente en días (por la clave de orden). undefined = sin límite. */
   sinceDays?: number;
+  /** Clave de orden: "inbound" (último del cliente, default) | "outbound" (última respuesta). */
+  orderBy?: ConversationOrderBy;
 }
+
+/** Fila cruda de `conversations` para la lista (last_outbound_at opcional: migración 0023). */
+type ConvoListRow = {
+  id: string;
+  contact_id: string;
+  status: ConversationStatus;
+  fulfillment_method: FulfillmentMethod;
+  ai_paused: boolean;
+  last_inbound_at: string | null;
+  last_outbound_at?: string | null;
+  updated_at: string;
+};
 
 export async function getRecentConversations(
   opts: ConversationFilters = {},
 ): Promise<ConversationRow[]> {
   const limit = opts.limit ?? 100;
   const offset = opts.offset ?? 0;
+  const orderBy: ConversationOrderBy = opts.orderBy === "outbound" ? "outbound" : "inbound";
   const supabase = createServiceClient();
 
-  let q = supabase
-    .from("conversations")
-    .select("id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at")
-    .order("updated_at", { ascending: false })
-    // Desempate estable por `id`: sin esto, dos conversaciones con el mismo
-    // `updated_at` podrían reordenarse entre páginas (saltos/duplicados al paginar).
-    .order("id", { ascending: false });
-  if (opts.status) q = q.eq("status", opts.status);
-  if (opts.sinceDays != null) {
-    const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
-    q = q.gte("updated_at", since);
-  }
-  if (opts.hasOrder == null) {
-    // Fecha/estado son filtros de BD → paginación EXACTA con range(offset..offset+limit-1).
-    q = q.range(offset, offset + limit - 1);
-  } else {
-    // "con/sin pedido" se resuelve en JS (cruza con `orders`): traemos desde el
-    // inicio lo suficiente para cubrir la página pedida (con margen) y cortamos
-    // [offset, offset+limit) abajo. Volumen v1 bajo → aceptable; si crece, mover a
-    // una vista/RPC. Tope 1000 (límite de PostgREST); no se alcanza con volumen v1.
-    q = q.limit(Math.min(Math.max((offset + limit) * 5, 200), 1000));
+  /**
+   * Corre la consulta de conversaciones. `hasOutboundCol` = false reintenta sin
+   * `last_outbound_at` (resiliencia a que falte la migración 0023): en ese caso
+   * SIEMPRE se ordena por `last_inbound_at`, así la página no se cae entre el
+   * deploy y la migración.
+   *
+   * Se ordena por la ACTIVIDAD REAL (last_inbound_at / last_outbound_at), que la
+   * app/trigger fijan explícitamente, y NO por `updated_at` (depende del trigger
+   * `set_updated_at` y puede quedar "pegado" al recrear el esquema, hundiendo
+   * conversaciones recién activas). `updated_at` e `id` quedan solo como desempate.
+   */
+  async function runConvoQuery(hasOutboundCol: boolean) {
+    const useOutbound = hasOutboundCol && orderBy === "outbound";
+    const sortCol = useOutbound ? "last_outbound_at" : "last_inbound_at";
+    const cols = hasOutboundCol
+      ? "id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, last_outbound_at, updated_at"
+      : "id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at";
+
+    let q = supabase
+      .from("conversations")
+      .select(cols)
+      // NULLS LAST: conversaciones sin actividad en esa dirección quedan al final.
+      .order(sortCol, { ascending: false, nullsFirst: false })
+      // Desempates estables (sin esto, dos con el mismo timestamp podrían
+      // reordenarse entre páginas → saltos/duplicados al paginar).
+      .order("updated_at", { ascending: false })
+      .order("id", { ascending: false });
+    if (opts.status) q = q.eq("status", opts.status);
+    if (opts.sinceDays != null) {
+      const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
+      // Ventana por la MISMA clave de orden (coherente con la lista).
+      q = q.gte(sortCol, since);
+    }
+    if (opts.hasOrder == null) {
+      // Fecha/estado son filtros de BD → paginación EXACTA con range(offset..offset+limit-1).
+      q = q.range(offset, offset + limit - 1);
+    } else {
+      // "con/sin pedido" se resuelve en JS (cruza con `orders`): traemos desde el
+      // inicio lo suficiente para cubrir la página pedida (con margen) y cortamos
+      // [offset, offset+limit) abajo. Volumen v1 bajo → aceptable; si crece, mover a
+      // una vista/RPC. Tope 1000 (límite de PostgREST); no se alcanza con volumen v1.
+      q = q.limit(Math.min(Math.max((offset + limit) * 5, 200), 1000));
+    }
+
+    const res = await q;
+    return { data: res.data as unknown as ConvoListRow[] | null, error: res.error };
   }
 
-  const { data: convos, error } = await q;
+  let { data: convos, error } = await runConvoQuery(true);
+  // 42703 = columna inexistente (migración 0023 sin aplicar) → reintenta sin ella.
+  if (error && error.code === "42703") ({ data: convos, error } = await runConvoQuery(false));
   if (error) throw new Error(`getRecentConversations: ${error.message}`);
 
   const rows = convos ?? [];
@@ -349,6 +400,12 @@ export async function getRecentConversations(
     const c = contactById.get(r.contact_id);
     const lm = lastMsgByConvo.get(r.id);
     const orderStatus = orderByConvo.get(r.id) ?? null;
+    // La hora mostrada sigue la clave de orden: por "outbound" muestra la última
+    // respuesta; por "inbound", el último mensaje del cliente (con fallbacks).
+    const lastActivity =
+      orderBy === "outbound"
+        ? r.last_outbound_at ?? r.last_inbound_at ?? r.updated_at
+        : r.last_inbound_at ?? r.updated_at;
     return {
       id: r.id,
       contactName: c?.name ?? null,
@@ -356,7 +413,7 @@ export async function getRecentConversations(
       status: r.status,
       method: r.fulfillment_method,
       aiPaused: r.ai_paused,
-      lastActivity: r.last_inbound_at ?? r.updated_at,
+      lastActivity,
       lastMessage: lm ? (lm.type === "text" ? lm.content : `[${lm.type}]`) : null,
       hasOrder: orderStatus != null,
       orderStatus,

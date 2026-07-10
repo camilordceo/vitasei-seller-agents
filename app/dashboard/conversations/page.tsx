@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { getRecentConversations } from "@/lib/dashboard/queries";
+import { getRecentConversations, type ConversationOrderBy } from "@/lib/dashboard/queries";
 import { ConversationList } from "../ui";
 import type { ConversationStatus } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { range?: string; order?: string; status?: string; page?: string };
+type SearchParams = { range?: string; order?: string; status?: string; sort?: string; page?: string };
 
 /** Conversaciones por página (para el "siguiente" / "más antiguas"). */
 const PAGE_SIZE = 50;
@@ -31,6 +31,12 @@ const STATUS_FILTERS: Array<{ value: string; label: string }> = [
   { value: "active", label: "Activas" },
   { value: "handed_off", label: "Con logística" },
   { value: "closed", label: "Cerradas" },
+];
+
+// Orden por actividad: por el último mensaje del cliente o por la última respuesta.
+const SORT_FILTERS: Array<{ value: string; label: string }> = [
+  { value: "inbound", label: "Último del cliente" },
+  { value: "outbound", label: "Última respuesta" },
 ];
 
 const VALID_STATUS = new Set<string>(["active", "handed_off", "closed"]);
@@ -84,6 +90,9 @@ export default async function ConversationsPage({
     searchParams.status && VALID_STATUS.has(searchParams.status)
       ? (searchParams.status as ConversationStatus)
       : undefined;
+  // Default "inbound" (último del cliente). Solo "outbound" cambia la clave.
+  const sortKey: ConversationOrderBy =
+    searchParams.sort === "outbound" ? "outbound" : "inbound";
 
   const pageNum = Math.max(1, Math.floor(Number(searchParams.page)) || 1);
 
@@ -95,19 +104,26 @@ export default async function ConversationsPage({
     sinceDays: rangeKey ? RANGE_DAYS[rangeKey] : undefined,
     hasOrder: orderKey === "with" ? true : orderKey === "without" ? false : undefined,
     status: statusKey,
+    orderBy: sortKey,
   });
   const hasNext = fetched.length > PAGE_SIZE;
   const convos = fetched.slice(0, PAGE_SIZE);
   const hasPrev = pageNum > 1;
 
-  // Construye un href preservando los demás filtros; "all" limpia esa dimensión.
-  const current = { range: rangeKey, order: orderKey, status: statusKey };
+  // Solo el orden NO-default ("outbound") se guarda en la URL (inbound = limpio).
+  const sortParam = sortKey === "outbound" ? "outbound" : undefined;
+
+  // Construye un href preservando los demás filtros; "all" (o "inbound" en sort)
+  // limpia esa dimensión. Cambiar cualquier filtro/orden vuelve a la página 1.
+  const current = { range: rangeKey, order: orderKey, status: statusKey, sort: sortParam };
   function hrefWith(key: keyof typeof current, value: string): string {
-    const next = { ...current, [key]: value === "all" ? undefined : value };
+    const clears = value === "all" || (key === "sort" && value === "inbound");
+    const next = { ...current, [key]: clears ? undefined : value };
     const qs = new URLSearchParams();
     if (next.range) qs.set("range", next.range);
     if (next.order) qs.set("order", next.order);
     if (next.status) qs.set("status", next.status);
+    if (next.sort) qs.set("sort", next.sort);
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
@@ -118,12 +134,13 @@ export default async function ConversationsPage({
     if (rangeKey) qs.set("range", rangeKey);
     if (orderKey) qs.set("order", orderKey);
     if (statusKey) qs.set("status", statusKey);
+    if (sortParam) qs.set("sort", sortParam);
     if (target > 1) qs.set("page", String(target));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
 
-  const anyFilter = Boolean(rangeKey || orderKey || statusKey);
+  const anyFilter = Boolean(rangeKey || orderKey || statusKey || sortParam);
 
   return (
     <div className="space-y-4">
@@ -153,6 +170,12 @@ export default async function ConversationsPage({
           filters={STATUS_FILTERS}
           active={statusKey ?? "all"}
           makeHref={(v) => hrefWith("status", v)}
+        />
+        <FilterRow
+          label="Orden"
+          filters={SORT_FILTERS}
+          active={sortKey}
+          makeHref={(v) => hrefWith("sort", v)}
         />
         {anyFilter ? (
           <div className="pt-1">

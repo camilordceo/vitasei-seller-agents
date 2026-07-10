@@ -12,6 +12,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Fixed
+- **Conversaciones · vuelven a aparecer las recientes** (orden por actividad real, ADR-0045): la
+  lista de `/dashboard/conversations` (y las 8 recientes de la home) ordenaba por `updated_at`, que
+  **no lo fija la aplicación** sino el trigger de BD `set_updated_at`. Cuando ese trigger queda
+  desalineado (p. ej. al recrear el esquema), una conversación de un **cliente recurrente** —que la
+  ingesta reutiliza entre días— conserva el `updated_at` de su creación y **no sube** aunque el
+  cliente acabe de escribir, así que las conversaciones activas de hoy no aparecían (los reportes
+  seguían bien porque cuentan por mensajes inbound, no por `updated_at`). Ahora la lista ordena por
+  **actividad real** (`last_inbound_at`/`last_outbound_at`, que la app/trigger escriben
+  explícitamente, sin depender de `set_updated_at`), con `updated_at` e `id` solo como desempate; el
+  filtro de "Fecha" (7/30/90 días) sigue la misma clave. (`lib/dashboard/queries.ts`
+  `getRecentConversations`).
+
 ### Changed
 - **Videos por palabra clave · caption pegado al video** (`docs/20`): el caption ahora viaja en el
   **mismo mensaje** que el video (`content.text`) en vez de mandarse como un texto aparte. Antes el
@@ -21,6 +34,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/callbell/sender.ts`, `lib/agent/videos.ts`).
 
 ### Added
+- **Conversaciones · ordenar por "Último del cliente" / "Última respuesta"** (ADR-0045): la lista de
+  `/dashboard/conversations` trae un toggle **Orden** (`?sort=inbound|outbound`, default
+  `inbound`) para verla por el último mensaje del **cliente** (a quién atender) o por la **última
+  respuesta** nuestra (seguimiento / a quién le escribimos de últimas). La hora mostrada y el filtro
+  de fecha siguen la clave elegida. Requiere la **migración `0023`** (columna
+  `conversations.last_outbound_at` + backfill + índice + trigger `trg_messages_bump_last_outbound`
+  sobre `messages`, que la mantiene en TODOS los caminos de envío sin tocar el código). Resiliente:
+  si falta la 0023 (42703), la lista sigue funcionando ordenando por `last_inbound_at`.
+  (`supabase/migrations/0023_conversation_last_outbound.sql`, `lib/dashboard/queries.ts`,
+  `app/dashboard/conversations/page.tsx`, `lib/supabase/types.ts`).
 - **Conversaciones · paginación ("más antiguas / más recientes")**: la lista de
   `/dashboard/conversations` ahora se pagina (50 por página) con controles **‹ Más recientes** /
   **Más antiguas ›** e indicador de **página**, para poder ver **conversaciones pasadas** más allá de
