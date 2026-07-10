@@ -13,6 +13,17 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Fixed
+- **Órdenes/Reportes · aparecen las órdenes recién creadas por el agente** (lecturas en vivo, ADR-0046):
+  una orden creada por el webhook se veía en su **detalle** (`/dashboard/orders/<id>`) pero **no** en la
+  **lista** ni en **Reportes** (contaban "5 en total" sin ella, "Pendiente de handoff: 0", "Addi: 0", y no
+  salía en el gráfico). Causa: en **Next 14** los `fetch` GET se **cachean por defecto** (Data Cache) y
+  `supabase-js` lee vía `fetch`; las consultas de **URL estable** (lista/agregados de órdenes) se servían
+  de una foto vieja, mientras las de **URL rodante** (mensajes inbound `created_at>=ahora-30d`) se veían
+  frescas — por eso el reporte mostraba la actividad de **hoy** pero contaba las órdenes viejas. El detalle
+  (`id=eq.<uuid>`, URL única) siempre iba fresco. `force-dynamic` no desactiva de forma fiable ese cache
+  por-fetch; solo se corregía de rebote al **editar** una orden (`saveOrder` hace `revalidatePath`). Ahora
+  el **service client** fuerza `cache: "no-store"` en todo `fetch`, así el dashboard (y el webhook) leen
+  siempre en vivo. (`lib/supabase/server.ts`).
 - **Conversaciones · vuelven a aparecer las recientes** (orden por actividad real, ADR-0045): la
   lista de `/dashboard/conversations` (y las 8 recientes de la home) ordenaba por `updated_at`, que
   **no lo fija la aplicación** sino el trigger de BD `set_updated_at`. Cuando ese trigger queda
