@@ -14,6 +14,8 @@ export interface VideoRule {
   videoUrl: string;
   /** Texto opcional que se envía (como mensaje aparte) junto con el video. */
   caption?: string | null;
+  /** Mercado/marca dueño del video. null = global (todas las marcas). */
+  agentId?: string | null;
 }
 
 // Centinela (área de uso privado) para proteger la ñ/Ñ durante la normalización:
@@ -37,6 +39,36 @@ export function normalizeForMatch(s: string): string {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Precedencia MERCADO > GLOBAL: por cada palabra clave deja **una sola** regla, la
+ * del agente de la conversación si existe; si no, la global (`agentId` null). Sin
+ * esto, un video global "magnesio" y el "magnesio" de Colombia calzarían los dos y
+ * el cliente recibiría DOS videos (el de otro país incluido). Ver ADR-0050.
+ *
+ * La keyword se compara normalizada (igual que el match), así que "Colágeno" y
+ * "colageno" son la MISMA palabra aunque el índice único de la BD las deje coexistir.
+ * Descarta reglas con keyword vacía.
+ */
+export function resolveRulesForAgent(rules: VideoRule[], agentId: string): VideoRule[] {
+  const byKeyword = new Map<string, VideoRule>();
+
+  for (const rule of rules) {
+    const kw = normalizeForMatch(rule.keyword ?? "").trim();
+    if (!kw) continue;
+
+    const current = byKeyword.get(kw);
+    if (!current) {
+      byKeyword.set(kw, rule);
+      continue;
+    }
+    // Solo el del agente destrona a lo que ya haya (global u otra marca: el backend
+    // nunca debería cargar reglas de otro agente, pero si llegan, no ganan).
+    if (rule.agentId === agentId && current.agentId !== agentId) byKeyword.set(kw, rule);
+  }
+
+  return [...byKeyword.values()];
 }
 
 /**

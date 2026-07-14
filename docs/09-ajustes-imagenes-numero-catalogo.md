@@ -96,7 +96,7 @@ La tabla **`products`** (migración `0001`) ya soporta esto **sin cambios de sch
 | `name` | `Titulo` | |
 | `description` | `Descripcion` | Alimenta el documento del vector store |
 | `price` | `Precio` | COP, entero (p. ej. `245900`) |
-| `image_url` | `Imagenes` (fallback `ImageURL`, `Imagen`) | Se re-hospeda en el bucket `product-images`; si falla, se conserva la URL original |
+| `image_url` | `Imagenes` (fallback `ImageURL`, `Imagen`) | **Se guarda el link tal cual** (ADR-0049; ver doc 23). *Obsoleto: antes se re-hospedaba en `product-images`.* |
 | `metadata` (jsonb) | `Categoria`, `Link_producto`, `Empresa`, `Estado` | |
 | `vector_store_file_id` | — | Lo setea el pipeline al subir el documento a OpenAI |
 
@@ -110,7 +110,8 @@ No se reimplementa nada: `scripts/import-catalog-csv.mjs` parsea el CSV, mapea l
 hace **POST a `/api/catalog/load`**, que ya:
 1. valida (SKU único/presente, name, price ≥ 0),
 2. sube el documento de cada producto al **vector store** (`file_search`),
-3. re-hospeda la imagen en **`product-images`** y setea `image_url`,
+3. setea `image_url` con **el link que trae el archivo** (ADR-0049 — *antes lo re-hospedaba en
+   `product-images`, lo que cruzaba fotos entre productos*),
 4. hace **upsert por `sku`** en `products`,
 5. registra el import en `catalog_imports`.
 

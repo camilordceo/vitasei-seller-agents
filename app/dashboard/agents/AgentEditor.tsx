@@ -1,11 +1,12 @@
 "use client";
 
-import { type FormEvent, useState, useTransition } from "react";
+import { type FormEvent, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { saveAgent, createAgent, loadAgentCatalog } from "../actions";
 import {
   normalizeCatalogJson,
+  resolveImageSource,
   validateCatalog,
   type CatalogProductInput,
 } from "@/lib/openai/catalog";
@@ -25,7 +26,7 @@ const inputCls =
 const monoCls = `${inputCls} font-mono`;
 const labelCls = "mb-1 block text-xs font-medium text-slate-600";
 
-type CatalogMode = "create" | "existing";
+type CatalogMode = "create" | "add" | "existing";
 
 export interface AgentEditorInitial {
   name: string;
@@ -50,9 +51,11 @@ export interface AgentEditorInitial {
  * Editor de un agente (marca/número): config de IA + credenciales de Callbell + catálogo.
  * Sirve para CREAR (sin `agentId`) o EDITAR. La API key de Callbell es write-only.
  *
- * Catálogo — dos flujos (ver ADR-0028):
- *  - "Crear vector store nuevo": se autogenera el store del agente y se suben los productos
+ * Catálogo — tres flujos (ver ADR-0028, ADR-0048):
+ *  - "Crear vector store nuevo": se autogenera el store del agente y se cargan los productos
  *    del JSON a OpenAI (`file_search`) y a Supabase.
+ *  - "Agregar / actualizar productos": mantiene el store actual y hace merge (no borra lo
+ *    anterior); ideal para agregar uno o pocos productos. Solo al editar un agente con store.
  *  - "Ya tengo vector store": se pega el `vs_...` y el JSON se carga SOLO a Supabase.
  */
 export function AgentEditor({
@@ -103,10 +106,10 @@ export function AgentEditor({
     schedule: buildSchedule(),
   });
 
-  // Catálogo
-  const [catalogMode, setCatalogMode] = useState<CatalogMode>(
-    !agentId || !initial.vectorStoreId ? "create" : "existing",
-  );
+  // Catálogo. Al editar un agente que YA tiene store, el default es "add" (agregar/
+  // actualizar sin borrar). Sin store todavía → "create".
+  const hasStore = Boolean(agentId && initial.vectorStoreId);
+  const [catalogMode, setCatalogMode] = useState<CatalogMode>(hasStore ? "add" : "create");
   const [catalogProducts, setCatalogProducts] = useState<CatalogProductInput[] | null>(null);
   const [catalogFilename, setCatalogFilename] = useState<string | null>(null);
   const [catalogInfo, setCatalogInfo] = useState<string | null>(null);
@@ -128,6 +131,29 @@ export function AgentEditor({
     setCatalogInfo(null);
     setCatalogError(null);
   };
+
+  /**
+   * Preview de las imágenes del JSON. El link que se ve acá es EXACTAMENTE el que queda en
+   * `products.image_url` y el que Callbell le manda al cliente: no se re-hospeda nada
+   * (ADR-0049). Así una foto equivocada se detecta antes de guardar, no en el chat.
+   */
+  const imagePreview = useMemo(() => {
+    if (!catalogProducts) return null;
+    const rows = catalogProducts.map((p) => {
+      const src = resolveImageSource(p);
+      return {
+        sku: p.sku,
+        name: p.name,
+        url: src.kind === "url" ? src.url : null,
+        base64: src.kind === "base64",
+      };
+    });
+    return {
+      rows,
+      withImage: rows.filter((r) => r.url || r.base64).length,
+      withoutImage: rows.filter((r) => !r.url && !r.base64).length,
+    };
+  }, [catalogProducts]);
 
   const onCatalogFile = async (file: File | null) => {
     dirty();
@@ -427,6 +453,7 @@ export function AgentEditor({
         <legend className="px-1 text-sm font-semibold text-slate-700">Catálogo (productos)</legend>
 
         <div className="flex flex-wrap gap-2">
+          {hasStore && modeBtn("add", "Agregar / actualizar productos")}
           {modeBtn("create", "Crear vector store nuevo")}
           {modeBtn("existing", "Ya tengo vector store")}
         </div>
@@ -451,6 +478,12 @@ export function AgentEditor({
               entran <strong>solo a Supabase</strong> (no se re-suben al store).
             </p>
           </div>
+        ) : catalogMode === "add" ? (
+          <p className="text-xs text-slate-500">
+            Sube un JSON con los productos a <strong>agregar o actualizar</strong> (aunque sea uno).
+            Se hace <strong>merge</strong> por SKU sobre tu catálogo actual: <strong>no se borra lo
+            demás</strong> y se mantiene tu vector store.
+          </p>
         ) : (
           <p className="text-xs text-slate-500">
             Se creará un vector store nuevo para esta marca y se conectará a la IA automáticamente.
@@ -461,7 +494,11 @@ export function AgentEditor({
         <div>
           <label htmlFor="catalog" className={labelCls}>
             JSON de productos{" "}
-            {catalogMode === "create" ? "(para crear el store y cargar productos)" : "(opcional)"}
+            {catalogMode === "create"
+              ? "(para crear el store y cargar productos)"
+              : catalogMode === "add"
+                ? "(productos a agregar/actualizar)"
+                : "(opcional)"}
           </label>
           <input
             id="catalog"
@@ -478,6 +515,74 @@ export function AgentEditor({
             Formatos: export tipo Bubble (ID/Titulo/…) o canónico (sku/name/…). El precio usa{" "}
             <code>PrecioConDescuento</code>.
           </p>
+
+          {/* Imágenes del JSON: el link que se ve acá es el que se guarda y el que se manda. */}
+          {imagePreview ? (
+            <div className="mt-3 rounded-md border border-slate-200 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+                <p className="text-xs font-semibold text-slate-700">
+                  Imágenes del archivo{" "}
+                  <span className="font-normal text-slate-500">
+                    (se manda este link, no se re-suben a Supabase)
+                  </span>
+                </p>
+                <p className="text-xs text-slate-600">
+                  <span className="font-medium text-emerald-700">
+                    {imagePreview.withImage} con imagen
+                  </span>
+                  {imagePreview.withoutImage > 0 ? (
+                    <span className="text-amber-700"> · {imagePreview.withoutImage} sin imagen</span>
+                  ) : null}
+                </p>
+              </div>
+              <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+                {imagePreview.rows.map((r) => (
+                  <li key={r.sku} className="flex items-center gap-3 px-3 py-2">
+                    {r.url ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- link externo arbitrario del catálogo
+                      <img
+                        src={r.url}
+                        alt=""
+                        loading="lazy"
+                        className="h-11 w-11 flex-none rounded border border-slate-200 bg-slate-50 object-cover"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-11 w-11 flex-none items-center justify-center rounded border text-[10px] font-medium ${
+                          r.base64
+                            ? "border-slate-200 bg-slate-50 text-slate-500"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {r.base64 ? "b64" : "sin"}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-slate-800">{r.name}</p>
+                      <p className="truncate font-mono text-[11px] text-slate-500">{r.sku}</p>
+                      {r.url ? (
+                        <a
+                          href={r.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block truncate text-[11px] text-slate-500 underline underline-offset-2 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                        >
+                          {r.url}
+                        </a>
+                      ) : (
+                        <p className="text-[11px] text-amber-700">
+                          {r.base64
+                            ? "imagen en base64 (se hospeda en Supabase: no trae link)"
+                            : "sin imagen en el JSON — el bot responde solo texto"}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       </fieldset>
 
@@ -659,7 +764,15 @@ export function AgentEditor({
         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
           <p className="font-medium">Catálogo cargado ✓</p>
           <ul className="mt-1 space-y-0.5 text-xs">
-            <li>{result.rowsImported} productos en Supabase</li>
+            <li>{result.rowsImported} productos cargados/actualizados</li>
+            <li>
+              {result.products.filter((p) => p.imageUrl).length} imágenes guardadas con el link
+              del JSON (se pueden corregir en{" "}
+              <Link href="/dashboard/inventory" className="underline underline-offset-2">
+                Inventario
+              </Link>
+              )
+            </li>
             {result.vectorStoreId ? (
               <li className="font-mono break-all">vector store: {result.vectorStoreId}</li>
             ) : null}

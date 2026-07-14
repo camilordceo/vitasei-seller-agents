@@ -35,11 +35,12 @@ export interface UploadedFile {
 }
 
 /**
- * Sube el documento de un producto al File API, lo agrega al vector store y
- * espera (poll) a que el procesamiento quede `completed`/`failed`.
- * Devuelve el `file_id` para guardarlo en `products.vector_store_file_id`.
+ * Sube el documento del catálogo (UN markdown con todos los productos) al File
+ * API, lo agrega al vector store y espera (poll) a que quede `completed`/`failed`.
+ * Devuelve el `file_id` que se guarda en `products.vector_store_file_id` (el mismo
+ * para todas las filas del agente). Ver ADR-0048.
  */
-export async function uploadProductDocument(
+export async function uploadCatalogDocument(
   openai: OpenAI,
   vectorStoreId: string,
   filename: string,
@@ -50,4 +51,24 @@ export async function uploadProductDocument(
   });
   const vsFile = await openai.vectorStores.files.uploadAndPoll(vectorStoreId, file);
   return { fileId: vsFile.id, status: vsFile.status };
+}
+
+/**
+ * Borra archivos del vector store (best-effort, uno por uno). Se usa para purgar
+ * los documentos anteriores de un agente tras subir el catálogo nuevo (evita
+ * huérfanos que el esquema "archivo por producto" dejaba acumular). Nunca lanza:
+ * un id ya inexistente no debe romper la carga. Ver ADR-0048.
+ */
+export async function deleteVectorStoreFiles(
+  openai: OpenAI,
+  vectorStoreId: string,
+  fileIds: string[],
+): Promise<void> {
+  for (const id of fileIds) {
+    try {
+      await openai.vectorStores.files.del(vectorStoreId, id);
+    } catch {
+      // huérfano / ya borrado / de otro store: no rompe la carga.
+    }
+  }
 }

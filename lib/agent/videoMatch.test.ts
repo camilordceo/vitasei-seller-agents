@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { matchVideos, normalizeForMatch, type VideoRule } from "./videoMatch";
+import {
+  matchVideos,
+  normalizeForMatch,
+  resolveRulesForAgent,
+  type VideoRule,
+} from "./videoMatch";
 
 const rules: VideoRule[] = [
   { id: "1", keyword: "magnesio", videoUrl: "https://cdn/magnesio.mp4" },
@@ -60,5 +65,53 @@ describe("matchVideos", () => {
     const m = matchVideos("Prueba el colageno", withCaption);
     expect(m).toHaveLength(1);
     expect(m[0].caption).toBe("Mira los beneficios del colágeno");
+  });
+});
+
+describe("resolveRulesForAgent (mercado > global, ADR-0050)", () => {
+  const CO = "agent-co";
+  const global: VideoRule = {
+    id: "g",
+    agentId: null,
+    keyword: "magnesio",
+    videoUrl: "https://cdn/magnesio-global.mp4",
+  };
+  const colombia: VideoRule = {
+    id: "co",
+    agentId: CO,
+    keyword: "magnesio",
+    videoUrl: "https://cdn/magnesio-co.mp4",
+  };
+
+  it("el video del agente le gana al global para la misma palabra", () => {
+    expect(resolveRulesForAgent([global, colombia], CO).map((r) => r.id)).toEqual(["co"]);
+    // Y no depende del orden en que vengan de la BD.
+    expect(resolveRulesForAgent([colombia, global], CO).map((r) => r.id)).toEqual(["co"]);
+  });
+
+  it("un agente sin video propio para esa palabra usa el global", () => {
+    expect(resolveRulesForAgent([global], "agent-mx").map((r) => r.id)).toEqual(["g"]);
+  });
+
+  it("la precedencia ignora acentos y mayúsculas de la palabra", () => {
+    const globalColageno: VideoRule = { id: "g2", agentId: null, keyword: "Colágeno", videoUrl: "u" };
+    const coColageno: VideoRule = { id: "co2", agentId: CO, keyword: "colageno", videoUrl: "u2" };
+    expect(resolveRulesForAgent([globalColageno, coColageno], CO).map((r) => r.id)).toEqual(["co2"]);
+  });
+
+  it("conserva las palabras que solo existen en global (colágeno) junto a las del agente", () => {
+    const globalColageno: VideoRule = { id: "g2", agentId: null, keyword: "colágeno", videoUrl: "u" };
+    const ids = resolveRulesForAgent([global, colombia, globalColageno], CO).map((r) => r.id);
+    expect(ids.sort()).toEqual(["co", "g2"]);
+  });
+
+  it("descarta reglas con keyword vacía", () => {
+    expect(resolveRulesForAgent([{ id: "x", keyword: "  ", videoUrl: "u" }], CO)).toEqual([]);
+  });
+
+  it("tras resolver, el texto con la palabra dispara UN solo video (el del mercado)", () => {
+    const resolved = resolveRulesForAgent([global, colombia], CO);
+    const m = matchVideos("Te recomiendo el magnesio para dormir", resolved);
+    expect(m.map((r) => r.videoUrl)).toEqual(["https://cdn/magnesio-co.mp4"]);
   });
 });

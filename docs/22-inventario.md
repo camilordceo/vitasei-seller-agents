@@ -29,5 +29,9 @@ re-importar el catálogo.
 
 - El catálogo se **carga** desde `Agentes → (agente) → Cargar catálogo` (eso sí
   sube al vector store). El inventario es solo para **corregir imágenes**.
+- Desde **ADR-0049** la carga también guarda `image_url` como **el link crudo del JSON**
+  (ya no re-hospeda en Storage), igual que hace esta pantalla: las dos vías escriben lo
+  mismo. Si un producto viene **sin** imagen en el JSON, la re-carga **no borra** la que se
+  corrigió acá. Ver `docs/23-imagen-de-producto-desde-el-json.md`.
 - Editar precio/nombre/descripción (que sí requeriría re-sync del vector store)
   queda fuera de v1 — es una decisión aparte (ADR-0042, "a futuro").

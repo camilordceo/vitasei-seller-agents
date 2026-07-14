@@ -26,9 +26,11 @@ export interface AgentEditInput {
 export interface AgentCatalogInput {
   /**
    * `create` = crear/usar el vector store del agente y subir los docs;
+   * `add` = agregar/actualizar productos MANTENIENDO el vector store actual (merge:
+   *   no borra lo que ya había en el catálogo);
    * `existing` = solo cargar a Supabase (el store ya existe en OpenAI).
    */
-  mode: "create" | "existing";
+  mode: "create" | "add" | "existing";
   products: CatalogProductInput[];
   filename?: string | null;
 }

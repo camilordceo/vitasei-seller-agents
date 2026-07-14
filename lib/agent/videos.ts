@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendVideo, type CallbellCreds } from "@/lib/callbell/sender";
-import { matchVideos, type VideoRule } from "./videoMatch";
+import { matchVideos, resolveRulesForAgent, type VideoRule } from "./videoMatch";
 import type { Database, Json } from "@/lib/supabase/types";
 
 type DB = SupabaseClient<Database>;
@@ -12,13 +12,18 @@ type DB = SupabaseClient<Database>;
  * respuesta. Best-effort: NADA de esto rompe el flujo de la respuesta.
  */
 
-/** Carga los videos habilitados del agente + los globales (agent_id null). */
+/**
+ * Videos que aplican a ESTE agente: los suyos (mismo mercado/país) + los globales
+ * (`agent_id` null), con **precedencia del mercado sobre el global** por palabra
+ * (`resolveRulesForAgent`, ADR-0050). Los videos de OTRO agente nunca se cargan: el
+ * de magnesio de Colombia no se envía en México ni en EE.UU.
+ */
 export async function loadKeywordVideos(supabase: DB, agentId: string): Promise<VideoRule[]> {
   const filter = `agent_id.eq.${agentId},agent_id.is.null`;
 
   const withCaption = await supabase
     .from("videos")
-    .select("id, keyword, video_url, caption")
+    .select("id, agent_id, keyword, video_url, caption")
     .eq("enabled", true)
     .or(filter);
 
@@ -29,28 +34,32 @@ export async function loadKeywordVideos(supabase: DB, agentId: string): Promise<
   if (withCaption.error && withCaption.error.code === "42703") {
     const noCaption = await supabase
       .from("videos")
-      .select("id, keyword, video_url")
+      .select("id, agent_id, keyword, video_url")
       .eq("enabled", true)
       .or(filter);
     if (noCaption.error) {
       if (noCaption.error.code === "42P01") return [];
       throw new Error(`loadKeywordVideos: ${noCaption.error.message}`);
     }
-    return (noCaption.data ?? []).map((v) => ({
+    const rules = (noCaption.data ?? []).map((v) => ({
       id: v.id,
+      agentId: v.agent_id,
       keyword: v.keyword,
       videoUrl: v.video_url,
       caption: null,
     }));
+    return resolveRulesForAgent(rules, agentId);
   }
   if (withCaption.error) throw new Error(`loadKeywordVideos: ${withCaption.error.message}`);
 
-  return (withCaption.data ?? []).map((v) => ({
+  const rules = (withCaption.data ?? []).map((v) => ({
     id: v.id,
+    agentId: v.agent_id,
     keyword: v.keyword,
     videoUrl: v.video_url,
     caption: v.caption,
   }));
+  return resolveRulesForAgent(rules, agentId);
 }
 
 /**

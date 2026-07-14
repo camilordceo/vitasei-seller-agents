@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCatalogDocument,
   buildProductDocument,
   extensionForContentType,
   imageStoragePath,
@@ -7,6 +8,7 @@ import {
   parseCOP,
   parseImageData,
   productToRow,
+  resolveImageSource,
   validateCatalog,
   type CatalogLoadRequest,
   type NormalizedProduct,
@@ -187,6 +189,30 @@ describe("buildProductDocument", () => {
   });
 });
 
+describe("buildCatalogDocument", () => {
+  it("junta todos los productos en un solo documento con sus SKUs", () => {
+    const doc = buildCatalogDocument([
+      product({ sku: "VITA-001", name: "Colágeno" }),
+      product({ sku: "VITA-002", name: "Magnesio" }),
+    ]);
+    expect(doc).toContain("# Colágeno");
+    expect(doc).toContain("SKU (#ID): VITA-001");
+    expect(doc).toContain("# Magnesio");
+    expect(doc).toContain("SKU (#ID): VITA-002");
+    // Separador entre productos (una regla markdown).
+    expect(doc).toContain("\n---\n");
+  });
+
+  it("un solo producto no lleva separador", () => {
+    const doc = buildCatalogDocument([product()]);
+    expect(doc).not.toContain("\n---\n");
+  });
+
+  it("catálogo vacío → documento vacío", () => {
+    expect(buildCatalogDocument([])).toBe("");
+  });
+});
+
 describe("productToRow", () => {
   it("mapea a la fila de products sin campos de imagen/vector", () => {
     const row = productToRow(product(), "agent-1");
@@ -209,6 +235,40 @@ describe("imágenes", () => {
   it("imageStoragePath es determinística y segura para rutas", () => {
     expect(imageStoragePath("VITA-001", "image/png")).toBe("catalog/vita-001.png");
     expect(imageStoragePath("a b/c", null)).toBe("catalog/a-b-c.jpg");
+  });
+
+  it("imageStoragePath separa por agente y por contenido (sin objetos compartidos)", () => {
+    // Mismo SKU en dos marcas → rutas distintas (la migración 0010 permite repetir SKU).
+    const a = imageStoragePath("VITA-001", "image/png", { agentId: "ag-a", digest: "abc123" });
+    const b = imageStoragePath("VITA-001", "image/png", { agentId: "ag-b", digest: "abc123" });
+    expect(a).toBe("catalog/ag-a/vita-001-abc123.png");
+    expect(b).toBe("catalog/ag-b/vita-001-abc123.png");
+    expect(a).not.toBe(b);
+
+    // Mismo SKU, contenido nuevo → URL nueva (el CDN no puede servir la foto vieja).
+    expect(imageStoragePath("VITA-001", "image/png", { agentId: "ag-a", digest: "def456" })).not.toBe(a);
+  });
+
+  it("resolveImageSource: el link del JSON manda y NO se re-hospeda (ADR-0049)", () => {
+    // Caso normal del export Bubble: URL http(s) → se usa tal cual, sin tocar Storage.
+    expect(resolveImageSource({ image_url: "https://cdn.tienda.com/a.jpg?v=1" })).toEqual({
+      kind: "url",
+      url: "https://cdn.tienda.com/a.jpg?v=1",
+    });
+    // La URL gana sobre el base64 si vienen las dos.
+    expect(
+      resolveImageSource({ image_url: "https://cdn.tienda.com/a.jpg", image_base64: "AAAA" }),
+    ).toEqual({ kind: "url", url: "https://cdn.tienda.com/a.jpg" });
+    // Sin link: el base64 es el único caso que sigue hospedándose en Supabase.
+    expect(resolveImageSource({ image_base64: "AAAA", image_content_type: "image/png" })).toEqual({
+      kind: "base64",
+      data: "AAAA",
+      contentType: "image/png",
+    });
+    // Ni link http ni base64 → sin imagen (no se inventa nada).
+    expect(resolveImageSource({})).toEqual({ kind: "none" });
+    expect(resolveImageSource({ image_url: "  " })).toEqual({ kind: "none" });
+    expect(resolveImageSource({ image_url: "ftp://x/a.jpg" })).toEqual({ kind: "none" });
   });
 
   it("parseImageData separa el prefijo data-URL", () => {

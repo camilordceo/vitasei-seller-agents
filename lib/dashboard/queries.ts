@@ -978,6 +978,8 @@ export async function getProductConversion(): Promise<ProductConversionRow[]> {
 
 export interface VideoRow {
   id: string;
+  /** Mercado/marca dueño del video. null = global (todas las marcas). */
+  agentId: string | null;
   keyword: string;
   videoUrl: string;
   caption: string | null;
@@ -991,18 +993,18 @@ export async function getVideos(): Promise<VideoRow[]> {
 
   const withCaption = await supabase
     .from("videos")
-    .select("id, keyword, video_url, caption, enabled, created_at")
+    .select("id, agent_id, keyword, video_url, caption, enabled, created_at")
     .order("created_at", { ascending: false });
 
   // Resiliencia a la ventana de migración:
   //  - 42P01 (tabla inexistente, falta 0016) → sección vacía.
   //  - 42703 (columna caption inexistente, falta 0017) → reintenta sin caption.
-  // Ver ADR-0038.
+  // Ver ADR-0038. `agent_id` existe desde 0016 (misma migración de la tabla).
   if (withCaption.error && withCaption.error.code === "42P01") return [];
   if (withCaption.error && withCaption.error.code === "42703") {
     const noCaption = await supabase
       .from("videos")
-      .select("id, keyword, video_url, enabled, created_at")
+      .select("id, agent_id, keyword, video_url, enabled, created_at")
       .order("created_at", { ascending: false });
     if (noCaption.error) {
       if (noCaption.error.code === "42P01") return [];
@@ -1010,6 +1012,7 @@ export async function getVideos(): Promise<VideoRow[]> {
     }
     return (noCaption.data ?? []).map((v) => ({
       id: v.id,
+      agentId: v.agent_id,
       keyword: v.keyword,
       videoUrl: v.video_url,
       caption: null,
@@ -1021,6 +1024,7 @@ export async function getVideos(): Promise<VideoRow[]> {
 
   return (withCaption.data ?? []).map((v) => ({
     id: v.id,
+    agentId: v.agent_id,
     keyword: v.keyword,
     videoUrl: v.video_url,
     caption: v.caption,

@@ -2,11 +2,16 @@
 
 Envía un video automáticamente cuando la **respuesta del bot** menciona una palabra configurada
 (ej. "magnesio" → video de magnesio). Configurable desde el dashboard, sin tocar código. Ver
-**ADR-0038**.
+**ADR-0038** y **ADR-0050** (videos por mercado/país).
 
 ## Qué hace
 - Sección **`/dashboard/videos`**: el equipo agrega pares **palabra → URL de video** (con un
-  **caption** opcional), y puede **editarlos**, activarlos/desactivarlos o eliminarlos.
+  **caption** opcional) y su **mercado**, y puede **editarlos**, activarlos/desactivarlos o
+  eliminarlos.
+- **Mercado (país)**: cada video se asigna a un **agente** (que ya tiene su `country`) o se deja
+  **Global**. El video de magnesio de **Colombia** sale **solo** en las conversaciones de ese
+  agente; México y EE.UU. pueden tener el suyo para la misma palabra. En el `<select>` los agentes
+  vienen **agrupados por país**.
 - En el **backend**, después de que el bot envía su respuesta normal, si el texto menciona una de
   esas palabras, se envía el video correspondiente por Callbell — **una sola vez por conversación**.
 - **Caption** (ej. "Mira acá los beneficios del colágeno"): va **pegado al video en el MISMO
@@ -18,10 +23,16 @@ Envía un video automáticamente cuando la **respuesta del bot** menciona una pa
 ## Cómo funciona (backend)
 1. Tras enviar la respuesta (rama normal, no handoff) en `generateAndSend`, se llama a
    `sendKeywordVideos` con el texto que vio el cliente (`parsed.cleanText`).
-2. Se cargan los videos habilitados del agente + los globales (`agent_id null`).
-3. `matchVideos` (puro, testeado) empareja **case- y acento-insensible**, por **palabra completa**,
+2. Se cargan los videos habilitados del agente + los globales (`agent_id null`). Los de **otro**
+   agente nunca se cargan.
+3. **Precedencia mercado > global** (`resolveRulesForAgent`, puro y testeado — ADR-0050): por cada
+   palabra queda **una sola** regla, la del agente si existe; si no, la global. Sin esto, un video
+   global "magnesio" y el "magnesio" de Colombia calzarían los dos y el cliente recibiría **dos**
+   videos (el de otro país incluido). Regionalizar un video global = crear el del mercado; el
+   global sigue sirviendo a los países que no tengan uno propio.
+4. `matchVideos` (puro, testeado) empareja **case- y acento-insensible**, por **palabra completa**,
    preservando la ñ (año ≠ ano).
-4. Por cada match: el video se manda **la primera vez que la palabra aparece** y **no** en las
+5. Por cada match: el video se manda **la primera vez que la palabra aparece** y **no** en las
    respuestas siguientes que la mencionen — cada video sale **una sola vez por conversación**. El
    marcador de "ya se envió" es por **id de video** en `events_log` (`keyword_video_sent`), así que
    sobrevive a que se edite la URL del video. Al enviar se guarda el `messages` (type `video`) + el
@@ -41,9 +52,11 @@ Doc: <https://docs.callbell.eu/api/reference/messages_api/post_send_messages/>.
 
 ## Datos (migraciones 0016 + 0017)
 Tabla `videos`: `keyword`, `video_url`, `caption` (opcional), `enabled`, `agent_id` (NULL = global).
-Índice único por `(lower(keyword), agent_id)`. **Requiere aplicar `0016_videos.sql` y
-`0017_videos_caption.sql` en Supabase.** Las consultas son resilientes a la ventana de migración:
-si falta la tabla (42P01) o la columna `caption` (42703), degradan sin romper.
+Índice único por `(lower(keyword), agent_id)` → la MISMA palabra puede existir en global y en cada
+mercado (eso es lo que permite un "magnesio" distinto por país; la precedencia decide cuál sale).
+**Requiere aplicar `0016_videos.sql` y `0017_videos_caption.sql` en Supabase.** Multi-país **no
+necesita migración nueva**: `agent_id` viene desde 0016. Las consultas son resilientes a la ventana
+de migración: si falta la tabla (42P01) o la columna `caption` (42703), degradan sin romper.
 
 ## Archivos
 - `supabase/migrations/0016_videos.sql`, `lib/supabase/types.ts` (tabla `videos`).

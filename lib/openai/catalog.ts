@@ -23,9 +23,9 @@ export interface CatalogProductInput {
   currency?: string | null;
   in_stock?: boolean | null;
   metadata?: Record<string, unknown> | null;
-  /** Imagen ya hospedada o remota a re-hospedar en `product-images`. */
+  /** Link público de la imagen. Se guarda TAL CUAL en `products.image_url` (ADR-0049). */
   image_url?: string | null;
-  /** Imagen en base64 (alternativa a `image_url`). */
+  /** Imagen en base64 (alternativa a `image_url`): sin link, se hospeda en Storage. */
   image_base64?: string | null;
   /** MIME de la imagen base64 (default image/jpeg). */
   image_content_type?: string | null;
@@ -310,6 +310,18 @@ export function buildProductDocument(p: NormalizedProduct): string {
   return lines.join("\n").trimEnd() + "\n";
 }
 
+/**
+ * Genera UN documento markdown con TODO el catálogo: cada producto en su propia
+ * sección (`buildProductDocument`, con el SKU prominente), separadas por una regla
+ * `---`. Un solo archivo para el vector store en vez de uno por SKU → una sola
+ * subida (sin timeout) y sin archivos huérfanos. `file_search` trocea el documento;
+ * mantener cada sección corta con el SKU arriba preserva el retrieval por producto.
+ * Ver ADR-0048.
+ */
+export function buildCatalogDocument(products: NormalizedProduct[]): string {
+  return products.map((p) => buildProductDocument(p)).join("\n---\n\n");
+}
+
 function formatPrice(price: number): string {
   // Sin decimales para COP; los miles ayudan a la legibilidad del retrieval.
   return new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 }).format(price);
@@ -351,10 +363,58 @@ export function extensionForContentType(contentType: string | null | undefined):
   return CONTENT_TYPE_EXT[ct] ?? "jpg";
 }
 
-/** Ruta de almacenamiento determinística para la imagen de un SKU. */
-export function imageStoragePath(sku: string, contentType: string | null | undefined): string {
+/** ¿Es una URL http(s) utilizable como link de imagen? */
+export function isHttpUrl(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
+}
+
+/**
+ * De dónde sale la imagen de un producto (decisión pura, sin I/O). Ver ADR-0049:
+ *  - `url`: el JSON ya trae un link público → **se usa tal cual**, no se re-hospeda.
+ *  - `base64`: no hay link; hay que hospedarla en Storage para poder enviarla.
+ *  - `none`: sin imagen (o con un `image_url` que no es http).
+ *
+ * La URL gana sobre el base64: si el producto trae las dos, el link es el que el
+ * operador ve en el dashboard y el que Callbell descarga.
+ */
+export type ImageSource =
+  | { kind: "url"; url: string }
+  | { kind: "base64"; data: string; contentType: string | null }
+  | { kind: "none" };
+
+/** Acepta tanto el producto crudo del JSON como el normalizado (mismos campos de imagen). */
+type ProductImageFields = Pick<
+  CatalogProductInput,
+  "image_url" | "image_base64" | "image_content_type"
+>;
+
+export function resolveImageSource(p: ProductImageFields): ImageSource {
+  if (isHttpUrl(p.image_url)) return { kind: "url", url: p.image_url.trim() };
+  if (p.image_base64) {
+    return { kind: "base64", data: p.image_base64, contentType: p.image_content_type ?? null };
+  }
+  return { kind: "none" };
+}
+
+/**
+ * Ruta de almacenamiento para la imagen de un SKU. Solo la usa el camino **base64**
+ * (el único que sigue hospedando en Storage; ADR-0049).
+ *
+ * `agentId` y `digest` son opcionales y ambos existen para evitar que dos productos
+ * compartan objeto: el SKU es único **por agente** (migración 0010) y el slug colapsa
+ * SKUs distintos (`VITA 001` y `VITA-001` → el mismo slug). Con el digest del contenido,
+ * además, una imagen nueva estrena URL en vez de sobreescribir la anterior — así ni el
+ * CDN ni WhatsApp pueden servir la foto vieja.
+ */
+export function imageStoragePath(
+  sku: string,
+  contentType: string | null | undefined,
+  opts: { agentId?: string | null; digest?: string | null } = {},
+): string {
   const safe = sku.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `catalog/${safe}.${extensionForContentType(contentType)}`;
+  const prefix = opts.agentId ? `catalog/${opts.agentId}` : "catalog";
+  const suffix = opts.digest ? `-${opts.digest}` : "";
+  return `${prefix}/${safe}${suffix}.${extensionForContentType(contentType)}`;
 }
 
 /**

@@ -13,6 +13,94 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Fixed
+- **Catálogo · la imagen del producto es el link del JSON (se acabó el cruce de fotos entre
+  productos)** (ADR-0049, `docs/23-imagen-de-producto-desde-el-json.md`): la carga de inventario
+  **descargaba** cada imagen y la **re-subía** al bucket `product-images`, guardando en
+  `products.image_url` la URL del bucket. La ruta salía **solo del SKU**
+  (`catalog/<slug(sku)>.<ext>`, con `upsert: true`) y ahí estaba el bug grave que veía el cliente
+  final: **(1)** la ruta **no incluye `agent_id`**, pero la migración `0010` permite explícitamente
+  el mismo SKU en dos marcas (`unique (agent_id, sku)`) → la marca B **sobreescribía** la foto de la
+  marca A y ambas terminaban apuntando al **mismo objeto**; **(2)** el slug colapsa SKUs distintos
+  (`VITA-001`, `vita-001`, `VITA 001`, `VITA/001` → el mismo archivo) y `validateCatalog` solo
+  detecta duplicados **exactos**, así que pasaban la validación y se pisaban en Storage; **(3)** la
+  URL pública **nunca cambiaba** entre cargas y la subida no fijaba `cacheControl`, así que el CDN de
+  Supabase (~1h) y WhatsApp/Callbell —que **descargan el link ellos mismos**— seguían sirviendo la
+  **foto vieja** después de corregirla. Ahora, si el JSON trae una URL `http(s)`, **se guarda tal
+  cual, sin descargarla ni re-subirla** (cero I/O, cero Storage): el link que trae el archivo es el
+  que se guarda y el que se manda por WhatsApp. Coherente con `/dashboard/inventory` (ADR-0042), que
+  ya editaba `image_url` con el link crudo — el importador era el único que re-hospedaba.
+  (`lib/openai/catalog.ts` `resolveImageSource`/`isHttpUrl`, `lib/supabase/storage.ts`
+  `resolveProductImage` —reemplaza a `uploadProductImage`—, `lib/openai/catalogLoader.ts`).
+  **Los productos ya cargados siguen apuntando al bucket hasta que se re-cargue el JSON del agente**
+  (el upsert por `(agent_id, sku)` reescribe `image_url`).
+- **Catálogo · re-cargar el JSON ya no borra una imagen corregida a mano**: si un producto viene
+  **sin** imagen en el archivo, el upsert **omite** `image_url` en vez de mandar `null` — antes, una
+  re-carga dejaba en blanco la foto que se había arreglado desde `/dashboard/inventory`. Para quitar
+  una imagen se vacía desde ahí. (`lib/openai/catalogLoader.ts`).
+- **Catálogo · base64 sin colisiones** (único caso que sigue usando Storage: no trae link, hay que
+  hospedarlo): la ruta pasa a ser **por agente y con digest del contenido**
+  (`catalog/<agent_id>/<sku>-<sha256[0..12]>.<ext>`) → ni dos marcas ni dos SKUs que slugifican igual
+  comparten objeto, y una imagen nueva **estrena URL** (el CDN no puede servir la anterior).
+  (`lib/openai/catalog.ts` `imageStoragePath`, `lib/supabase/storage.ts`).
+
+### Changed
+- **Catálogo · se sube como UN solo documento al vector store** (ADR-0048, reemplaza la
+  decisión #2 de ADR-0009): antes la carga subía **un archivo `.md` por producto** a OpenAI, en
+  serie, esperando el procesamiento de cada uno (`uploadAndPoll`). Con un catálogo completo eso se
+  pasaba del límite de ejecución del *server action* del dashboard (que no tiene el `maxDuration=300`
+  de la route `/api/catalog/load`): la función moría a mitad y el cliente recibía `undefined` →
+  **"Cannot read properties of undefined (reading 'ok')"** al crear una IA nueva con catálogo. Ahora
+  `buildCatalogDocument` arma **un** markdown con todos los productos (cada uno bajo su `# nombre` con
+  el `SKU (#ID)` prominente) y se sube **una sola vez** → sin timeout. Además se **purgan** los
+  archivos anteriores del agente (deuda de huérfanos de ADR-0009). El gate del `#ID` (valida contra
+  `products`) y las imágenes **no cambian**. (`lib/openai/catalog.ts` `buildCatalogDocument`,
+  `lib/openai/vectorStore.ts` `uploadCatalogDocument`/`deleteVectorStoreFiles`,
+  `lib/openai/catalogLoader.ts`).
+- **Catálogo · agregar un producto sin borrar los demás (merge)** (ADR-0048): el documento único
+  del vector store ahora se **reconstruye desde TODO el catálogo del agente en la BD**, no solo desde
+  los productos del request. Así cargar un subconjunto —incluso **un** producto— agrega/actualiza ese
+  SKU y **conserva** el resto en el store (antes, con el documento único, subir uno solo dejaba al
+  vector store con únicamente ese producto). Nuevo modo en el editor de agente **"Agregar / actualizar
+  productos"** que mantiene el vector store y hace merge (default al editar un agente con store).
+  (`lib/openai/catalogLoader.ts` `loadAgentCatalogForDoc`, `app/dashboard/agents/AgentEditor.tsx`,
+  `loadAgentCatalog` en `app/dashboard/actions.ts`).
+
+### Added
+- **Agentes · preview de las imágenes al cargar el JSON de productos** (ADR-0049): al elegir el
+  archivo, y **antes de guardar**, el editor muestra por producto la **miniatura + SKU + título + el
+  link**, con el conteo de cuántos vienen **con/sin imagen**. Lo que se ve ahí es exactamente lo que
+  queda en `products.image_url` y lo que Callbell le manda al cliente → una foto equivocada se
+  detecta en el dashboard, no en el chat del cliente. El resultado de la carga informa cuántas
+  imágenes se guardaron y enlaza a Inventario para corregirlas.
+  (`app/dashboard/agents/AgentEditor.tsx`).
+- **Videos · un video por palabra y por país (mercado), configurable por agente** (ADR-0050,
+  completa ADR-0038 / migración 0016 — **no requiere migración nueva**): al abrir líneas en varios
+  países (magnesio, colágeno) el mismo video no sirve para todos (idioma, precios, envíos). La tabla
+  `videos` ya tenía `agent_id`, pero el dashboard **siempre los creaba globales** (mismos videos en
+  Colombia, México y EE.UU.).
+  - **Dashboard**: el alta y la edición piden el **Mercado / país** en un selector con los agentes
+    **agrupados por país** (`CO` → "Colombia") más la opción *Global*; la lista muestra el badge del
+    mercado y hay **filtro por mercado**. (`app/dashboard/videos/*`, `createVideo`/`updateVideo` en
+    `app/dashboard/actions.ts`, `getVideos`/`VideoRow` en `lib/dashboard/queries.ts`).
+  - **Backend · precedencia mercado > global** (`resolveRulesForAgent` en `lib/agent/videoMatch.ts`,
+    aplicado en `loadKeywordVideos`): antes, un video **global** "magnesio" y el "magnesio" de
+    **Colombia** calzaban los **dos** y el cliente recibía **dos** videos (el de otro país incluido).
+    Ahora por cada palabra sale **una sola** regla: la del agente de la conversación si existe, si no
+    la global (match normalizado, así "Colágeno" y "colageno" son la misma palabra). Los videos de
+    **otro** agente nunca se cargan. Regionalizar un video global = crear el del mercado, sin borrar
+    el global (sigue sirviendo a los países que no tengan uno propio).
+- **Conversación · la IA responde por el nombre y con el género del cliente** (ADR-0047):
+  el nombre que Callbell trae en cada webhook (`payload.contact.name`, guardado en
+  `contacts.name` desde el primer mensaje) ahora se **antepone** al texto del turno que ve la
+  IA como un bloque de contexto interno (mismo patrón que `Es flujo hotmart`), **no** al mensaje
+  que se guarda: el hilo del panel y la extracción de la orden quedan limpios. Con eso el agente
+  saluda/trata al cliente por su nombre de pila y **deduce el género** del propio nombre (neutro
+  si es ambiguo), sin columna nueva, sin librería y **sin una llamada extra** (sigue siendo 1×
+  Responses por turno). Best-effort: si falla la lectura del nombre, se genera sin el contexto.
+  Cubre la respuesta automática y el reintento manual. (`lib/agent/contactContext.ts`,
+  `lib/agent/processMessage.ts` `generateAndSend`).
+
+### Fixed
 - **Órdenes/Reportes · aparecen las órdenes recién creadas por el agente** (lecturas en vivo, ADR-0046):
   una orden creada por el webhook se veía en su **detalle** (`/dashboard/orders/<id>`) pero **no** en la
   **lista** ni en **Reportes** (contaban "5 en total" sin ella, "Pendiente de handoff: 0", "Addi: 0", y no

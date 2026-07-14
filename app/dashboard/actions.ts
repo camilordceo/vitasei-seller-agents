@@ -529,11 +529,14 @@ export async function createAgent(input: AgentEditInput): Promise<string> {
 }
 
 /**
- * Carga el catálogo de productos de un agente desde el dashboard, en dos flujos:
- *  - `create`: crea el vector store del agente (si no tiene), sube cada producto como
- *    documento a OpenAI (`file_search`) y hace upsert en `products`; guarda el `vector_store_id`.
+ * Carga el catálogo de productos de un agente desde el dashboard, en tres flujos:
+ *  - `create`: crea el vector store del agente (si no tiene), reconstruye el documento
+ *    del catálogo y hace upsert en `products`; guarda el `vector_store_id`.
+ *  - `add`: MANTIENE el vector store actual y agrega/actualiza los productos del JSON
+ *    (merge: el documento se reconstruye desde TODO el catálogo en la BD, así no se
+ *    pierde lo anterior). Ideal para agregar uno o pocos productos. Ver ADR-0048.
  *  - `existing`: el agente ya tiene un `vector_store_id`; los productos se cargan SOLO a
- *    `products` (Supabase) sin re-subir documentos al store.
+ *    `products` (Supabase) sin tocar el store.
  *
  * Reusa `runCatalogImport` (idempotente por `(agent_id, sku)`). Corre server-side con
  * service-role, protegida por el Basic Auth del dashboard. Devuelve el resultado para
@@ -543,7 +546,8 @@ export async function loadAgentCatalog(
   agentId: string,
   input: AgentCatalogInput,
 ): Promise<CatalogImportResult> {
-  const vectorStoreMode = input.mode === "create" ? "create" : "supabase-only";
+  const vectorStoreMode =
+    input.mode === "create" ? "create" : input.mode === "add" ? "sync" : "supabase-only";
 
   const result = await runCatalogImport(
     { agentId, products: input.products, filename: input.filename ?? null },
@@ -797,82 +801,97 @@ export async function deleteLabel(labelId: string): Promise<void> {
 
 /**
  * Crea una regla de video: cuando la respuesta del bot menciona `keyword`, envía
- * `videoUrl`. Se crea GLOBAL (agent_id null → aplica a todas las marcas). Valida
- * que la palabra no esté vacía y que la URL sea http(s). Corre server-side con
- * service-role, protegida por el Basic Auth del dashboard.
+ * `videoUrl`. `agentId` fija el MERCADO/marca (null = global → aplica a todas). El
+ * backend carga los del agente de la conversación + los globales, así los videos de
+ * Colombia no salen en México/EE.UU. y viceversa. Valida palabra no vacía y URL
+ * http(s). Server-side con service-role, protegida por el Basic Auth del dashboard.
  */
 export async function createVideo(
   keyword: string,
   videoUrl: string,
   caption?: string,
+  agentId?: string | null,
 ): Promise<string> {
   const kw = keyword.trim();
   const url = videoUrl.trim();
   if (!kw) throw new Error("La palabra clave no puede estar vacía.");
   if (!/^https?:\/\/\S+/i.test(url))
     throw new Error("La URL del video debe empezar por http:// o https://");
+  const agent_id = agentId && agentId.trim() ? agentId.trim() : null;
 
   const supabase = createServiceClient();
   let res = await supabase
     .from("videos")
-    .insert({ keyword: kw, video_url: url, caption: textOrNull(caption ?? "") })
+    .insert({ keyword: kw, video_url: url, caption: textOrNull(caption ?? ""), agent_id })
     .select("id")
     .single();
   // Ventana de migración: si aún no existe la columna caption (0017), guarda sin ella.
   if (res.error?.code === "42703") {
     res = await supabase
       .from("videos")
-      .insert({ keyword: kw, video_url: url })
+      .insert({ keyword: kw, video_url: url, agent_id })
       .select("id")
       .single();
   }
   const { data, error } = res;
   if (error) {
-    // El índice único (palabra por marca) da 23505 si ya existe esa palabra.
+    // El índice único (palabra por marca) da 23505 si ya existe esa palabra en el mercado.
     if (error.code === "23505")
-      throw new Error(`Ya existe un video para la palabra "${kw}".`);
+      throw new Error(
+        agent_id
+          ? `Ya existe un video para "${kw}" en ese mercado.`
+          : `Ya existe un video global para "${kw}".`,
+      );
     throw new Error(`createVideo: ${error.message}`);
   }
 
   await supabase.from("events_log").insert({
     conversation_id: null,
     type: "video_created",
-    payload: { keyword: kw } as unknown as Json,
+    payload: { keyword: kw, agentId: agent_id } as unknown as Json,
   });
   revalidatePath("/dashboard/videos");
   return data.id;
 }
 
-/** Edita una regla de video (palabra, URL y/o caption) y guarda. */
+/** Edita una regla de video (palabra, URL, caption y/o mercado) y guarda. */
 export async function updateVideo(
   id: string,
-  input: { keyword: string; videoUrl: string; caption?: string },
+  input: { keyword: string; videoUrl: string; caption?: string; agentId?: string | null },
 ): Promise<void> {
   const kw = input.keyword.trim();
   const url = input.videoUrl.trim();
   if (!kw) throw new Error("La palabra clave no puede estar vacía.");
   if (!/^https?:\/\/\S+/i.test(url))
     throw new Error("La URL del video debe empezar por http:// o https://");
+  const agent_id = input.agentId && input.agentId.trim() ? input.agentId.trim() : null;
 
   const supabase = createServiceClient();
   let { error } = await supabase
     .from("videos")
-    .update({ keyword: kw, video_url: url, caption: textOrNull(input.caption ?? "") })
+    .update({ keyword: kw, video_url: url, caption: textOrNull(input.caption ?? ""), agent_id })
     .eq("id", id);
   // Ventana de migración: si aún no existe la columna caption (0017), guarda sin ella.
   if (error?.code === "42703") {
-    ({ error } = await supabase.from("videos").update({ keyword: kw, video_url: url }).eq("id", id));
+    ({ error } = await supabase
+      .from("videos")
+      .update({ keyword: kw, video_url: url, agent_id })
+      .eq("id", id));
   }
   if (error) {
     if (error.code === "23505")
-      throw new Error(`Ya existe un video para la palabra "${kw}".`);
+      throw new Error(
+        agent_id
+          ? `Ya existe un video para "${kw}" en ese mercado.`
+          : `Ya existe un video global para "${kw}".`,
+      );
     throw new Error(`updateVideo: ${error.message}`);
   }
 
   await supabase.from("events_log").insert({
     conversation_id: null,
     type: "video_updated",
-    payload: { videoId: id, keyword: kw } as unknown as Json,
+    payload: { videoId: id, keyword: kw, agentId: agent_id } as unknown as Json,
   });
   revalidatePath("/dashboard/videos");
 }

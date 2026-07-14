@@ -9,6 +9,7 @@ import { audioCostUsd } from "@/lib/openai/pricing";
 import type { OrderDraft } from "@/lib/openai/extractOrder";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
+import { prependContactContext } from "@/lib/agent/contactContext";
 import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
 import { toDataUrl } from "@/lib/callbell/media";
 import { fetchMedia } from "@/lib/callbell/mediaFetch";
@@ -682,13 +683,33 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // Credenciales de Callbell de ESTE agente (API key + canal; fallback a env).
   const creds = agentCallbellCreds(agent);
 
+  // Contexto del contacto: su nombre (de Callbell, en `contacts.name`) se antepone
+  // al texto del turno para que la IA lo salude/trate por su nombre y adecúe el
+  // género. Best-effort: si la lectura falla, se genera sin el contexto (nunca
+  // rompe la respuesta). NO se guarda en `messages`: el hilo del panel queda limpio.
+  // `input` (crudo) se conserva para `detectProductCategory`. Ver ADR-0047.
+  let inputForModel = input;
+  try {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("name")
+      .eq("id", contactId)
+      .maybeSingle();
+    inputForModel = prependContactContext(input, contact?.name ?? null);
+  } catch (e) {
+    console.error(
+      "[generateAndSend] load contact name failed:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
   // GENERAR: una sola llamada a Responses (file_search hosted). El vector store
   // sale del agente o, si no, de OPENAI_VECTOR_STORE_ID. Las imágenes del cliente
   // entran como visión en esta MISMA llamada (input_image). Ver docs/15 y docs/16.
   const gen = await generateReply(openai, {
     model: agent.model,
     systemPrompt: agent.system_prompt,
-    input,
+    input: inputForModel,
     imageDataUrls,
     vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,

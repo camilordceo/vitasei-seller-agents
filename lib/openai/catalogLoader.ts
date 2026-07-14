@@ -2,13 +2,18 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { createOpenAIClient } from "./client";
-import { getOrCreateVectorStore, uploadProductDocument } from "./vectorStore";
-import { uploadProductImage } from "@/lib/supabase/storage";
 import {
-  buildProductDocument,
+  getOrCreateVectorStore,
+  uploadCatalogDocument,
+  deleteVectorStoreFiles,
+} from "./vectorStore";
+import { resolveProductImage } from "@/lib/supabase/storage";
+import {
+  buildCatalogDocument,
   productToRow,
   validateCatalog,
   type CatalogLoadRequest,
+  type NormalizedProduct,
 } from "./catalog";
 import { loadAgent, loadSeedAgent, agentVectorStoreId } from "@/lib/agent/agents";
 import type { Database } from "@/lib/supabase/types";
@@ -106,42 +111,88 @@ export async function runCatalogImport(
       vectorStoreId = await getOrCreateVectorStore(openai, agentVectorStoreId(agent));
     }
 
+    // 2') Recolectar los archivos ANTERIORES de este agente (del esquema viejo
+    //     "uno por producto" o el único previo) para purgarlos tras subir el nuevo.
+    //     Se omite en supabase-only (no tocamos el store). Ver ADR-0048.
+    let staleFileIds: string[] = [];
+    if (syncsDocs) {
+      const { data: prevRows } = await supabase
+        .from("products")
+        .select("vector_store_file_id")
+        .eq("agent_id", agent.id)
+        .not("vector_store_file_id", "is", null);
+      staleFileIds = [
+        ...new Set(
+          (prevRows ?? [])
+            .map((r) => r.vector_store_file_id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+      ];
+    }
+
+    // 2'') Upsert de los productos del request (imagen + fila). NO se sube nada a
+    //      OpenAI por producto: el `vector_store_file_id` se fija abajo, en bloque,
+    //      con el id del ÚNICO documento del catálogo.
+    //      La imagen es el LINK DEL JSON tal cual (ADR-0049): sin descarga ni re-subida.
     const done: CatalogImportResult["products"] = [];
-
     for (const p of products) {
-      // 2a) Documento → vector store (espera `completed`). Se omite en supabase-only.
-      let fileId: string | null = null;
-      if (syncsDocs) {
-        const doc = buildProductDocument(p);
-        const up = await uploadProductDocument(openai, vectorStoreId, `${p.sku}.md`, doc);
-        fileId = up.fileId;
-        if (up.status !== "completed") {
-          warnings.push(`vector store file ${p.sku}: status=${up.status}`);
-        }
-      }
-
-      // 2b) Imagen → storage (best-effort, en todos los modos).
-      const img = await uploadProductImage(supabase, p);
+      const img = await resolveProductImage(supabase, p, agent.id);
       if (img.warning) warnings.push(img.warning);
 
-      // 2c) Upsert por (agente, SKU): catálogo por marca (gate: el SKU del texto == el de products).
-      // En supabase-only NO incluimos `vector_store_file_id` para no pisar el existente.
-      const row = {
-        ...productToRow(p, agent.id),
-        image_url: img.imageUrl,
-        ...(fileId ? { vector_store_file_id: fileId } : {}),
-      };
+      // Upsert por (agente, SKU): catálogo por marca (gate: el SKU del texto == el de products).
+      // Si el producto NO trae imagen, se omite `image_url` del payload en vez de mandar
+      // null: así una re-carga del JSON no borra la foto que alguien corrigió a mano en
+      // /dashboard/inventory (para quitarla, se vacía desde ahí). Con imagen, el link del
+      // JSON manda y pisa lo que hubiera.
       const { error } = await supabase
         .from("products")
-        .upsert(row, { onConflict: "agent_id,sku" });
+        .upsert(
+          {
+            ...productToRow(p, agent.id),
+            ...(img.imageUrl ? { image_url: img.imageUrl } : {}),
+          },
+          { onConflict: "agent_id,sku" },
+        );
       if (error) throw new Error(`upsert products ${p.sku}: ${error.message}`);
 
-      done.push({ sku: p.sku, vectorStoreFileId: fileId ?? "", imageUrl: img.imageUrl });
+      done.push({ sku: p.sku, vectorStoreFileId: "", imageUrl: img.imageUrl });
+    }
+
+    // 2''') Catálogo → UN solo documento en el vector store, reconstruido desde TODO
+    //       el catálogo del agente en la BD (no solo los productos de ESTE request).
+    //       Así "agregar/actualizar N productos" es un MERGE: nunca se pierde del store
+    //       lo que ya existía. Se omite en supabase-only. Ver ADR-0048.
+    let catalogFileId: string | null = null;
+    if (syncsDocs) {
+      const all = await loadAgentCatalogForDoc(supabase, agent.id);
+      const doc = buildCatalogDocument(all);
+      const up = await uploadCatalogDocument(openai, vectorStoreId, catalogFilename(agent), doc);
+      catalogFileId = up.fileId;
+      if (up.status !== "completed") {
+        warnings.push(`vector store (catálogo): status=${up.status}`);
+      }
+      // El archivo único del catálogo se referencia en TODAS las filas del agente
+      // (una sola update: los productos ya existentes también apuntan al nuevo doc).
+      const { error: updErr } = await supabase
+        .from("products")
+        .update({ vector_store_file_id: catalogFileId })
+        .eq("agent_id", agent.id);
+      if (updErr) throw new Error(`update vector_store_file_id: ${updErr.message}`);
+      for (const d of done) d.vectorStoreFileId = catalogFileId;
     }
 
     // 3) Persistir el vector_store_id en el agente (salvo supabase-only: ya lo tenía).
     if (mode !== "supabase-only") {
       await persistVectorStoreId(supabase, agent.id, vectorStoreId);
+    }
+
+    // 3') Purga best-effort de los archivos viejos, ya reemplazados por el único
+    //     nuevo. Nunca rompe la carga (el catálogo ya quedó subido y en products).
+    if (syncsDocs && catalogFileId) {
+      const toDelete = staleFileIds.filter((id) => id !== catalogFileId);
+      if (toDelete.length > 0) {
+        await deleteVectorStoreFiles(openai, vectorStoreId, toDelete);
+      }
     }
 
     await supabase
@@ -174,6 +225,56 @@ export async function runCatalogImport(
 function vectorStoreName(agent: { brand: string | null; name: string }): string {
   const base = (agent.brand ?? agent.name ?? "").trim() || "catálogo";
   return `${base} — catálogo`;
+}
+
+/**
+ * Lee TODO el catálogo del agente desde `products` y lo mapea a `NormalizedProduct[]`
+ * para reconstruir el documento único del vector store. Pagina (páginas de 1000)
+ * para no toparse con el límite de filas de Supabase y NO perder productos en
+ * catálogos grandes. Ver ADR-0048.
+ */
+async function loadAgentCatalogForDoc(supabase: DB, agentId: string): Promise<NormalizedProduct[]> {
+  const out: NormalizedProduct[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("products")
+      .select("sku, name, description, price, currency, in_stock, metadata, image_url")
+      .eq("agent_id", agentId)
+      .order("created_at", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`load-agent-catalog: ${error.message}`);
+    const rows = data ?? [];
+    for (const r of rows) {
+      out.push({
+        sku: r.sku,
+        name: r.name,
+        description: r.description ?? null,
+        price: r.price ?? null,
+        currency: r.currency ?? "COP",
+        in_stock: r.in_stock ?? true,
+        metadata:
+          r.metadata && typeof r.metadata === "object" && !Array.isArray(r.metadata)
+            ? (r.metadata as Record<string, unknown>)
+            : {},
+        image_url: r.image_url ?? null,
+        image_base64: null,
+        image_content_type: null,
+      });
+    }
+    if (rows.length < pageSize) break;
+  }
+  return out;
+}
+
+/** Nombre (cosmético) del archivo único del catálogo en el vector store. */
+function catalogFilename(agent: { brand: string | null; name: string }): string {
+  const slug =
+    (agent.brand ?? agent.name ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "catalogo";
+  return `${slug}-catalogo.md`;
 }
 
 function emptyResult(
