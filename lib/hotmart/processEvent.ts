@@ -12,6 +12,7 @@ import {
   extractTemplateValues,
   DEFAULT_HOTMART_EVENT,
 } from "./templates";
+import { HOTMART_RECOVERY_TAG } from "./context";
 import { env } from "@/lib/env";
 
 type DB = SupabaseClient<Database>;
@@ -171,6 +172,25 @@ export async function processHotmartCartAbandonment(
   const templateValues = tpl
     ? extractTemplateValues(tpl.message_text, { name: data.buyerName, product: data.productName })
     : [data.buyerName || "Hola", data.productName || "tu producto"];
+
+  // Rastro de QUÉ plantilla ganó para ESTE curso. Con varios cursos en Hotmart es la
+  // forma de ver, desde el dashboard, si el `product.id` del webhook casó con una
+  // plantilla propia de ese curso o si cayó en la genérica / el fallback por env (que
+  // mandaría el mensaje de otro curso). Ver ADR-0051.
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "hotmart_template_resolved",
+    payload: {
+      productId: data.productId,
+      productName: data.productName,
+      templateId: tpl?.id ?? null,
+      templateName: tpl?.name ?? null,
+      // true = plantilla propia de ESTE curso; false = genérica (aplica a todos).
+      matchedProduct: tpl != null && tpl.product_id === data.productId,
+      // true = no había plantilla en el dashboard; se usó HOTMART_ABANDONED_CART_TEMPLATE_UUID.
+      fallbackEnv: tpl == null,
+    } as unknown as Json,
+  });
 
   if (!templateUuid) {
     await supabase
@@ -391,14 +411,17 @@ async function sendHotmartTemplate(
       metadata: { conversation_id: conversationId, source: "hotmart" },
     });
 
-    // Guardar el mensaje outbound
+    // Guardar el mensaje outbound. El tag `hotmart-recovery` no es decorativo: es la
+    // señal que `loadHotmartReplyContext` usa para saber que esta plantilla se envió
+    // FUERA de la cadena de Responses y hay que dársela a la IA como contexto cuando
+    // el cliente responda. Ver ADR-0051.
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       direction: "outbound",
       role: "assistant",
       type: "text",
       content: storedText,
-      tags: ["hotmart-recovery"] as unknown as Json,
+      tags: [HOTMART_RECOVERY_TAG] as unknown as Json,
       callbell_message_uuid: sent.uuid,
     });
 

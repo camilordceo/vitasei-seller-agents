@@ -13,6 +13,23 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Fixed
+- **Hotmart · la plantilla que se envía queda como contexto de la respuesta (la IA ya sabe qué
+  curso ofreció)** (ADR-0051, `lib/hotmart/context.ts`): el mensaje de carrito abandonado se
+  manda desde el webhook, **fuera** de la cadena de Responses. Quedaba en `messages` (se veía en
+  el panel), pero **la IA nunca lo veía**: cuando el cliente contestaba ("¿cuánto vale?"), el
+  modelo recibía esa frase suelta, sin saber qué curso le habían ofrecido ni qué le habían dicho,
+  y arrancaba de cero. Con **varios cursos** en Hotmart el daño escala: ni siquiera podía saber
+  cuál vender. Ahora, antes de generar, se **antepone al turno** un bloque con el curso (id +
+  nombre de Hotmart) y el **texto exacto** de la plantilla enviada, y se le pide al modelo no
+  repetirla y continuar desde ahí. Se inyecta **una sola vez**: la compuerta es el tag
+  `hotmart-recovery` del último outbound — si la IA ya respondió, el bloque viajó en el `input` y
+  quedó dentro de la cadena, así que deja de inyectarse (no se duplica ni gasta tokens de más).
+  Mismo patrón que `prependContactContext` (ADR-0047): va en el `input` que ve la IA, **no** en
+  `messages` (el hilo del panel y la extracción de la orden quedan limpios). Si lo guardado es el
+  respaldo sin texto (envío legado por env), se **re-resuelve la plantilla por producto** — la
+  misma búsqueda del webhook (`data.product.id` → `hotmart_templates.product_id`) — para que el
+  contexto sea la plantilla real de ESE curso. Best-effort: un fallo nunca tumba la respuesta.
+  **Sin migración.**
 - **Catálogo · la imagen del producto es el link del JSON (se acabó el cruce de fotos entre
   productos)** (ADR-0049, `docs/23-imagen-de-producto-desde-el-json.md`): la carga de inventario
   **descargaba** cada imagen y la **re-subía** al bucket `product-images`, guardando en
@@ -66,6 +83,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `loadAgentCatalog` en `app/dashboard/actions.ts`).
 
 ### Added
+- **Hotmart · rastro de qué plantilla ganó para cada curso** (ADR-0051): el webhook registra el
+  evento `hotmart_template_resolved` con `productId`, `templateId`, `matchedProduct` y
+  `fallbackEnv`. Con varios cursos en Hotmart es la forma de ver, desde el dashboard, si el
+  `product.id` del webhook **casó con la plantilla propia de ese curso** o si cayó en la genérica
+  / el fallback por env (que le mandaría al cliente el mensaje de **otro** curso).
+  (`lib/hotmart/processEvent.ts`).
 - **Agentes · preview de las imágenes al cargar el JSON de productos** (ADR-0049): al elegir el
   archivo, y **antes de guardar**, el editor muestra por producto la **miniatura + SKU + título + el
   link**, con el conteo de cuántos vienen **con/sin imagen**. Lo que se ve ahí es exactamente lo que

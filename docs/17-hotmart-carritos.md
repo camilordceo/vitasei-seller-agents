@@ -146,6 +146,23 @@ plantilla **aprobada** en Callbell. Si tu plantilla es de **solo texto** (sin
 variables), **no pongas tokens** en el texto: se envía **sin parámetros** (así no
 falla con el típico error de "parámetros" cuando se mandan variables de más).
 
+### Varios cursos: una plantilla por curso
+
+Para mover **varios cursos** de Hotmart, crea en `/dashboard/hotmart` **una plantilla
+por curso** y pon en **ID de producto Hotmart** el `id` que Hotmart manda en
+`data.product.id` (el mismo que aparece en la sección **Eventos** del dashboard y en
+`hotmart_events.product_id`). El webhook busca ese id y envía **esa** plantilla; su
+texto es además el contexto con el que la IA continúa la conversación (ADR-0051).
+
+Prioridad (gana la más específica): **agente+curso > agente > global+curso > global**.
+Deja **una plantilla genérica** (sin ID de producto) como red de seguridad: sin ella,
+un curso nuevo cae en el fallback por env y el cliente recibiría el mensaje de **otro**
+curso.
+
+**Cómo verificar cuál se envió:** cada evento registra `hotmart_template_resolved` con
+`productId`, `templateId`, `matchedProduct` (¿casó con la plantilla propia de ese
+curso?) y `fallbackEnv` (¿no había plantilla en el dashboard?).
+
 ---
 
 ## 5. Plantilla de WhatsApp (Callbell)
@@ -218,6 +235,37 @@ Cuando el cliente responde, el flujo normal del webhook de Callbell se activa:
 1. El inbound llega a `/api/webhooks/callbell`.
 2. Se asocia a la conversación existente.
 3. El agente de IA responde con contexto del carrito abandonado.
+
+### La plantilla enviada es contexto de la respuesta (ADR-0051)
+
+La plantilla se manda desde el webhook de Hotmart, **fuera** de la cadena de
+Responses (`conversations.openai_previous_response_id`). Queda en `messages` —se ve
+en el panel—, pero **la IA no la vio**: sin esto, cuando el cliente contestaba
+("¿cuánto vale?"), el modelo recibía esa frase suelta, sin saber **qué curso** le
+habían ofrecido ni **qué le habían dicho**, y arrancaba de cero. Con varios cursos
+en Hotmart, ni siquiera podía saber cuál vender.
+
+`lib/hotmart/context.ts` (`loadHotmartReplyContext`) **antepone al turno del cliente**
+un bloque de contexto interno con:
+
+- el **curso**: nombre + `product.id` de Hotmart (del `hotmart_events` más reciente);
+- el **texto exacto** de la plantilla que se le envió;
+- la instrucción de **no repetirla** y continuar la conversación desde ahí.
+
+Va en el `input` que ve la IA, **no** en `messages` (mismo patrón que el marcador de
+flujo y que el nombre del contacto, ADR-0047): el hilo del panel y la extracción de
+la orden quedan limpios.
+
+**Se inyecta una sola vez.** La compuerta es el tag `hotmart-recovery` del **último
+outbound**: si la IA ya respondió, el bloque viajó dentro del `input` y quedó
+encadenado en Responses → deja de inyectarse (no se duplica ni gasta tokens de más).
+Si el cliente abandona **otro** carrito, el nuevo evento manda y el contexto pasa a
+ser el del curso nuevo.
+
+Si lo guardado en `messages` es el respaldo sin texto (`[Plantilla Hotmart: …]`, envío
+legado por env), se **re-resuelve la plantilla por producto** —la misma búsqueda del
+webhook, `data.product.id` → `hotmart_templates.product_id`— para que el contexto sea
+la plantilla real de ESE curso. Es best-effort: un fallo aquí nunca tumba la respuesta.
 
 ### Marca `Es flujo hotmart` (ADR-0040)
 

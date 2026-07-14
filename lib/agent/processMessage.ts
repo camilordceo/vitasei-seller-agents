@@ -38,6 +38,7 @@ import {
 } from "@/lib/agent/order";
 import { buildCallRequestNotification } from "@/lib/agent/callRequest";
 import { appendHotmartMarker } from "@/lib/hotmart/flow";
+import { loadHotmartReplyContext, prependHotmartContext } from "@/lib/hotmart/context";
 import { env } from "@/lib/env";
 import type { Database, Json, MessageType } from "@/lib/supabase/types";
 
@@ -699,6 +700,33 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   } catch (e) {
     console.error(
       "[generateAndSend] load contact name failed:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  // Contexto de Hotmart: la plantilla de carrito abandonado se envía desde el webhook,
+  // FUERA de la cadena de Responses, así que la IA nunca la vio. Si el último outbound
+  // sigue siendo esa plantilla (aún no hemos respondido), se antepone al turno el curso
+  // + el texto EXACTO que se le envió, para que el modelo continúe desde ahí en vez de
+  // arrancar de cero. Va en el `input`, así que a partir de esta llamada queda dentro de
+  // la cadena y no se reinyecta. Best-effort: un fallo aquí NUNCA tumba la respuesta.
+  // NO se guarda en `messages` (el hilo del panel queda limpio). Ver ADR-0051.
+  try {
+    const hotmartContext = await loadHotmartReplyContext(supabase, {
+      conversationId,
+      agentId: agent.id,
+    });
+    if (hotmartContext) {
+      inputForModel = prependHotmartContext(inputForModel, hotmartContext);
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "hotmart_context_injected",
+        payload: { chars: hotmartContext.length } as unknown as Json,
+      });
+    }
+  } catch (e) {
+    console.error(
+      "[generateAndSend] hotmart context failed:",
       e instanceof Error ? e.message : String(e),
     );
   }
