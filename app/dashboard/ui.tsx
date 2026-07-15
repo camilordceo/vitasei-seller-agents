@@ -357,8 +357,17 @@ export function RetargetStatusPill({ status }: { status: RetargetStatus }) {
   );
 }
 
-export function StagePill({ stage }: { stage: number }) {
-  const label = stage === 1 ? "1ª · ~1h" : stage === 2 ? "2ª · ~8h" : `Etapa ${stage}`;
+/** "90" → "1.5h", "60" → "1h", "30" → "30m". Vacío si no hay dato. */
+function formatDelayShort(min?: number | null): string {
+  if (min == null || !Number.isFinite(min)) return "";
+  if (min < 60) return `${Math.round(min)}m`;
+  const h = min / 60;
+  return Number.isInteger(h) ? `${h}h` : `${h.toFixed(1)}h`;
+}
+
+export function StagePill({ stage, delayMinutes }: { stage: number; delayMinutes?: number | null }) {
+  const delay = formatDelayShort(delayMinutes);
+  const label = delay ? `${stage}ª · ~${delay}` : `${stage}ª etapa`;
   return (
     <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20">
       {label}
@@ -426,7 +435,7 @@ export function RetargetList({ rows }: { rows: RetargetRow[] }) {
                   {r.contactName || r.phone || "Sin contacto"}
                 </span>
                 <RetargetStatusPill status={r.status} />
-                <StagePill stage={r.stage} />
+                <StagePill stage={r.stage} delayMinutes={r.delayMinutes} />
               </div>
               <p className="mt-0.5 truncate text-sm text-slate-500">{retargetDetail(r)}</p>
             </div>

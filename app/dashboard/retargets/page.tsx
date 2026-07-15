@@ -50,7 +50,8 @@ export default async function RetargetsPage() {
           <div>
             <h2 className="text-lg font-semibold tracking-tight">Retargets</h2>
             <p className="text-sm text-slate-500">
-              Seguimientos automáticos ~1h y ~8h después de que el cliente deja de responder.
+              Seguimientos automáticos después de que el cliente deja de responder. Cada agente
+              define cuántos y a qué hora (sin config = backstop genérico 1h/8h/23h).
             </p>
           </div>
           <span className="text-sm text-slate-400">{rows.length}</span>

@@ -68,8 +68,11 @@ export const env = {
     return Number.isFinite(n) && n >= 0 ? n : 12000;
   },
 
-  // Retargeting: seguimientos automáticos tras dejar de responder (ver ADR-0017).
-  // Kill switch global (default ON) + delays de las dos etapas (default 1h y 8h).
+  // Retargeting: seguimientos automáticos tras dejar de responder (ver ADR-0017,
+  // ADR-0052). Kill switch global (default ON). Los delays por etapa son el BACKSTOP
+  // genérico (default 1h/8h/23h): se usan solo cuando el agente no configuró sus
+  // propias etapas en el dashboard (`agents.retarget_config`). La 3ª es ~23h (y no
+  // 24h) a propósito: entra en la ventana de 24h de WhatsApp y sí se entrega.
   get RETARGET_ENABLED() {
     const raw = optional("RETARGET_ENABLED");
     // Activo por defecto; solo se apaga con "false"/"0".
@@ -84,6 +87,11 @@ export const env = {
     const raw = optional("RETARGET_STAGE2_MS");
     const n = raw ? Number(raw) : NaN;
     return Number.isFinite(n) && n > 0 ? n : 8 * 60 * 60 * 1000; // 8h
+  },
+  get RETARGET_STAGE3_MS() {
+    const raw = optional("RETARGET_STAGE3_MS");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 23 * 60 * 60 * 1000; // 23h (near-24h, dentro de ventana)
   },
   // Reactivaciones por plantilla (ver ADR-0021). El ON/OFF y los UUIDs de
   // plantilla viven en la DB (`app_settings`, editables desde el dashboard); acá

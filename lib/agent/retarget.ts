@@ -9,7 +9,7 @@ import { applyGate } from "@/lib/agent/gate";
 import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
 import {
   loadAgentForConversation,
-  loadRetargetInstructions,
+  loadRetargetConfig,
   agentCallbellCreds,
   agentVectorStoreId,
   type Agent,
@@ -19,7 +19,7 @@ import {
   buildRetargetInstruction,
   evaluateRetarget,
   planRetargets,
-  type RetargetStage,
+  type RetargetStageConfig,
 } from "@/lib/agent/retargetPlan";
 import { env } from "@/lib/env";
 import type { Database, Json } from "@/lib/supabase/types";
@@ -29,10 +29,30 @@ export {
   buildRetargetInstruction,
   evaluateRetarget,
   planRetargets,
+  parseRetargetConfig,
   type RetargetStage,
+  type RetargetStageConfig,
   type RetargetDecision,
   type StagePlan,
 } from "@/lib/agent/retargetPlan";
+
+/**
+ * Backstop genérico: las etapas por defecto (1h/8h/23h, ajustables por env) que se
+ * usan cuando el agente no configuró sus propias etapas. Ver ADR-0052.
+ */
+function backstopStages(): RetargetStageConfig[] {
+  return [
+    { delayMinutes: Math.round(env.RETARGET_STAGE1_MS / 60_000), guidance: null },
+    { delayMinutes: Math.round(env.RETARGET_STAGE2_MS / 60_000), guidance: null },
+    { delayMinutes: Math.round(env.RETARGET_STAGE3_MS / 60_000), guidance: null },
+  ];
+}
+
+/** Etapas efectivas de un agente: su config o, si está vacía, el backstop. */
+async function effectiveStages(supabase: DB, agentId: string): Promise<RetargetStageConfig[]> {
+  const config = await loadRetargetConfig(supabase, agentId);
+  return config.length > 0 ? config : backstopStages();
+}
 
 /**
  * Retargeting — seguimientos automáticos (ver ADR-0017).
@@ -63,6 +83,8 @@ export interface ScheduleArgs {
   conversationId: string;
   contactId: string;
   phone: string;
+  /** Agente dueño de la conversación (para leer SU config de etapas). */
+  agentId: string;
   /** `last_inbound_at` de la conversación al agendar (ancla anti-obsolescencia). */
   anchorInboundAt: string | null;
   /** epoch ms desde el que se cuentan los delays (normalmente ahora). */
@@ -70,9 +92,11 @@ export interface ScheduleArgs {
 }
 
 /**
- * Cancela los seguimientos vivos previos y agenda los de esta respuesta.
+ * Cancela los seguimientos vivos previos y agenda los de esta respuesta según las
+ * etapas del AGENTE (`agents.retarget_config`) o, si no configuró ninguna, el
+ * backstop genérico por env. Guarda el `delay_minutes` de cada etapa en la fila.
  * Best-effort: el llamador debe envolverlo para que un fallo aquí NUNCA rompa
- * la respuesta al cliente.
+ * la respuesta al cliente. Ver ADR-0052.
  */
 export async function scheduleRetargets(supabase: DB, args: ScheduleArgs): Promise<void> {
   if (!env.RETARGET_ENABLED) return;
@@ -80,12 +104,16 @@ export async function scheduleRetargets(supabase: DB, args: ScheduleArgs): Promi
   // Los previos (de una respuesta anterior a la misma ráfaga) quedan obsoletos.
   await cancelScheduledRetargets(supabase, args.conversationId, "rescheduled");
 
-  const plan = planRetargets(args.fromMs, env.RETARGET_STAGE1_MS, env.RETARGET_STAGE2_MS);
+  const stages = await effectiveStages(supabase, args.agentId);
+  if (stages.length === 0) return; // config vacía y backstop apagado: nada que agendar
+
+  const plan = planRetargets(args.fromMs, stages);
   const rows = plan.map((p) => ({
     conversation_id: args.conversationId,
     contact_id: args.contactId,
     phone: args.phone,
     stage: p.stage,
+    delay_minutes: p.delayMinutes,
     status: "scheduled" as const,
     scheduled_at: p.scheduledAt,
     anchor_inbound_at: args.anchorInboundAt,
@@ -140,7 +168,7 @@ export async function runDueRetargets(opts?: {
 
   const { data: due, error } = await supabase
     .from("retargets")
-    .select("id, conversation_id, contact_id, phone, stage, anchor_inbound_at")
+    .select("id, conversation_id, contact_id, phone, stage, delay_minutes, anchor_inbound_at")
     .eq("status", "scheduled")
     .lte("scheduled_at", nowIso)
     .order("scheduled_at", { ascending: true })
@@ -193,6 +221,7 @@ interface DueRow {
   contact_id: string;
   phone: string;
   stage: number;
+  delay_minutes: number | null;
   anchor_inbound_at: string | null;
 }
 
@@ -298,16 +327,18 @@ async function sendRetargetMessage(
   const { row, agent, previousResponseId, lastInboundAt, now } = ctx;
   const creds = agentCallbellCreds(agent);
 
-  // Guía editable por agente de esta etapa (1h/8h). Resiliente: si falta la columna
-  // o no está configurada, `buildRetargetInstruction` usa la guía por defecto. El
-  // envoltorio con las reglas de seguridad se aplica siempre. Ver ADR-0043.
-  const instructions = await loadRetargetInstructions(supabase, agent.id);
-  const guidance = row.stage === 1 ? instructions.stage1 : instructions.stage2;
+  // Guía editable por agente de ESTA etapa (por índice temporal). Resiliente: si el
+  // agente ya no tiene esa etapa (redujo su config tras agendar) o no puso guía,
+  // `buildRetargetInstruction` usa la guía por defecto. El "hace cuánto" sale del
+  // `delay_minutes` guardado al agendar. El envoltorio de seguridad se aplica
+  // siempre. Ver ADR-0052.
+  const stages = await loadRetargetConfig(supabase, agent.id);
+  const guidance = stages[row.stage - 1]?.guidance ?? null;
 
   const gen = await generateReply(openai, {
     model: agent.model,
     systemPrompt: agent.system_prompt,
-    input: buildRetargetInstruction(row.stage as RetargetStage, guidance),
+    input: buildRetargetInstruction(row.delay_minutes, guidance),
     vectorStoreId: agentVectorStoreId(agent),
     previousResponseId,
     maxNumResults: env.FILE_SEARCH_MAX_RESULTS,

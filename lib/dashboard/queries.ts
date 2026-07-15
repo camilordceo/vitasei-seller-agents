@@ -29,6 +29,7 @@ import type {
 } from "@/lib/supabase/types";
 import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
 import { findHotmartAgentId } from "@/lib/agent/agents";
+import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 
 /**
  * Consultas de solo lectura del dashboard (Sprint 6).
@@ -467,6 +468,8 @@ export interface RetargetRow {
   contactName: string | null;
   phone: string;
   stage: number;
+  /** Delay real de esta etapa en minutos (null en filas legadas). */
+  delayMinutes: number | null;
   status: RetargetStatus;
   scheduledAt: string;
   sentAt: string | null;
@@ -478,7 +481,9 @@ export async function getRecentRetargets(limit = 50): Promise<RetargetRow[]> {
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from("retargets")
-    .select("id, conversation_id, contact_id, phone, stage, status, scheduled_at, sent_at, error")
+    .select(
+      "id, conversation_id, contact_id, phone, stage, delay_minutes, status, scheduled_at, sent_at, error",
+    )
     .order("scheduled_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`getRecentRetargets: ${error.message}`);
@@ -502,6 +507,7 @@ export async function getRecentRetargets(limit = 50): Promise<RetargetRow[]> {
       contactName: c?.name ?? null,
       phone: c?.phone ?? r.phone ?? "",
       stage: r.stage,
+      delayMinutes: r.delay_minutes ?? null,
       status: r.status as RetargetStatus,
       scheduledAt: r.scheduled_at,
       sentAt: r.sent_at,
@@ -1096,26 +1102,30 @@ export async function getAgentsReactivationConfig(): Promise<AgentReactivationCo
   }));
 }
 
+/** Una etapa de seguimiento para el editor (delay en HORAS + guía). */
+export interface AgentRetargetStage {
+  delayHours: number;
+  guidance: string;
+}
+
 export interface AgentRetargetConfig {
   agentId: string;
   name: string;
   brand: string | null;
-  /** Guía del seguimiento de ~1h (null = guía por defecto). */
-  instruction1: string | null;
-  /** Guía del seguimiento de ~8h (null = guía por defecto). */
-  instruction2: string | null;
+  /** Etapas configuradas (vacío = usar el backstop genérico 1h/8h/23h). */
+  stages: AgentRetargetStage[];
 }
 
 /**
- * Instrucciones de retarget (1h/8h) por agente, para el editor del dashboard.
- * Resiliente: si faltan las columnas (42703, migración 0021 sin aplicar) devuelve
- * los agentes con instrucciones null (usarán la guía por defecto). Ver ADR-0043.
+ * Config de retargets por agente (etapas: cuántas y a qué hora + guía) para el
+ * editor del dashboard. Resiliente: si falta la columna (42703, migración 0024 sin
+ * aplicar) devuelve los agentes con `stages: []` (usarán el backstop). Ver ADR-0052.
  */
 export async function getAgentsRetargetConfig(): Promise<AgentRetargetConfig[]> {
   const supabase = createServiceClient();
   const full = await supabase
     .from("agents")
-    .select("id, name, brand, retarget_instruction_1, retarget_instruction_2, created_at")
+    .select("id, name, brand, retarget_config, created_at")
     .order("created_at", { ascending: true });
 
   if (full.error) {
@@ -1129,8 +1139,7 @@ export async function getAgentsRetargetConfig(): Promise<AgentRetargetConfig[]> 
         agentId: a.id,
         name: a.name,
         brand: a.brand,
-        instruction1: null,
-        instruction2: null,
+        stages: [],
       }));
     }
     throw new Error(`getAgentsRetargetConfig: ${full.error.message}`);
@@ -1140,8 +1149,10 @@ export async function getAgentsRetargetConfig(): Promise<AgentRetargetConfig[]> 
     agentId: a.id,
     name: a.name,
     brand: a.brand,
-    instruction1: a.retarget_instruction_1,
-    instruction2: a.retarget_instruction_2,
+    stages: parseRetargetConfig((a as { retarget_config: unknown }).retarget_config).map((s) => ({
+      delayHours: s.delayMinutes / 60,
+      guidance: s.guidance ?? "",
+    })),
   }));
 }
 

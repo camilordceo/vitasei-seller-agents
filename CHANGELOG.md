@@ -12,6 +12,23 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Added
+- **Retargets dinámicos por agente — N etapas, horario y guía configurables + 3ª etapa (~24h)**
+  (ADR-0052; `agents.retarget_config` jsonb, migración `0024`). Antes eran dos seguimientos fijos
+  (1h/8h) con delay global por env. Ahora **cada agente** define en `/dashboard/retargets`
+  **cuántos** seguimientos quiere y **a qué hora** (delay en horas tras dejar de responder), más la
+  **guía** (tono/estrategia) de cada uno: una marca puede querer a la 1h, otra a la 2h; algunas 2
+  etapas, otras 3. Se agrega una **3ª etapa ~24h** (backstop 23h). El editor es dinámico
+  (agregar/quitar etapas, máx. 5), ordena por tiempo y **avisa** cuando una etapa ≥23h puede caer
+  **fuera de la ventana de 24h** de WhatsApp (omitida como `out-of-window`; para recuperar más
+  tarde están las **Reactivaciones** por plantilla). Sin config = **backstop genérico** por env
+  (`RETARGET_STAGE1/2/3_MS` = 1h/8h/23h). El "hace cuánto" del mensaje (`describeElapsed`) y la
+  etiqueta del dashboard salen del `delay_minutes` real guardado en cada fila. Todo resiliente: la
+  config se lee aparte (`loadRetargetConfig`, no en `AGENT_COLS`) y tolera la migración sin aplicar
+  (`42703` → backstop). La migración hace **backfill** de la guía existente (ADR-0043) a etapas
+  1h/8h; las columnas `retarget_instruction_1/2` quedan **deprecadas** (el runtime ya no las lee).
+  Nueva env `RETARGET_STAGE3_MS` (default 23h).
+
 ### Fixed
 - **Hotmart · la plantilla que se envía queda como contexto de la respuesta (la IA ya sabe qué
   curso ofreció)** (ADR-0051, `lib/hotmart/context.ts`): el mensaje de carrito abandonado se

@@ -1156,14 +1156,15 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     });
   } else if (!orderId) {
     // Sin handoff, sin orden capturada y dentro de ventana (si no, ya habríamos
-    // vuelto arriba): agenda los seguimientos 1h/8h anclados al último inbound.
-    // Si ya hay orden (cierre inferido), NO se agenda: la venta está cerrada.
-    // Best-effort: un fallo aquí NO debe afectar la respuesta ya enviada.
+    // vuelto arriba): agenda los seguimientos del agente (config propia o backstop)
+    // anclados al último inbound. Si ya hay orden (cierre inferido), NO se agenda:
+    // la venta está cerrada. Best-effort: un fallo aquí NO debe afectar la respuesta.
     try {
       await scheduleRetargets(supabase, {
         conversationId,
         contactId,
         phone,
+        agentId: agent.id,
         anchorInboundAt: lastInboundAt,
         fromMs: Date.now(),
       });

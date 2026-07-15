@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
+import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { sendText, credsFromEnv } from "@/lib/callbell/sender";
 import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
@@ -407,32 +408,38 @@ export async function updateReactivationSettings(
  * usar la guía por defecto. Solo edita la guía; el envoltorio de seguridad se aplica
  * siempre en el backend. Service-role, protegida por el Basic Auth. Ver ADR-0043.
  */
-export async function updateRetargetInstructions(
+/**
+ * Guarda las etapas de retarget de un agente (cuántas y a qué hora + guía). Recibe
+ * horas desde la UI, las convierte a minutos y las normaliza con `parseRetargetConfig`
+ * (descarta inválidas/duplicadas, ordena, recorta). Lista vacía = usar el backstop
+ * genérico. Ver ADR-0052.
+ */
+export async function updateRetargetConfig(
   agentId: string,
-  input: { instruction1: string; instruction2: string },
+  stages: Array<{ delayHours: number; guidance: string }>,
 ): Promise<void> {
+  const clean = parseRetargetConfig(
+    stages.map((s) => ({
+      delayMinutes: Math.round((Number(s.delayHours) || 0) * 60),
+      guidance: s.guidance,
+    })),
+  );
+
   const supabase = createServiceClient();
   const { error } = await supabase
     .from("agents")
-    .update({
-      retarget_instruction_1: textOrNull(input.instruction1),
-      retarget_instruction_2: textOrNull(input.instruction2),
-    })
+    .update({ retarget_config: (clean.length > 0 ? clean : null) as unknown as Json })
     .eq("id", agentId);
   if (error) {
     if (error.code === "42703")
-      throw new Error("Falta aplicar la migración 0021 (retarget_instruction_1/2) en Supabase.");
-    throw new Error(`updateRetargetInstructions: ${error.message}`);
+      throw new Error("Falta aplicar la migración 0024 (retarget_config) en Supabase.");
+    throw new Error(`updateRetargetConfig: ${error.message}`);
   }
 
   await supabase.from("events_log").insert({
     conversation_id: null,
-    type: "retarget_instructions_updated",
-    payload: {
-      agentId,
-      has1: textOrNull(input.instruction1) != null,
-      has2: textOrNull(input.instruction2) != null,
-    } as unknown as Json,
+    type: "retarget_config_updated",
+    payload: { agentId, stages: clean.length } as unknown as Json,
   });
 
   revalidatePath("/dashboard/retargets");

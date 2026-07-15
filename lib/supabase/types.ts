@@ -333,6 +333,7 @@ export interface Database {
           hotmart_enabled: boolean;
           retarget_instruction_1: string | null;
           retarget_instruction_2: string | null;
+          retarget_config: Json | null;
           created_at: string;
           updated_at: string;
         };
@@ -361,6 +362,7 @@ export interface Database {
           hotmart_enabled?: boolean;
           retarget_instruction_1?: string | null;
           retarget_instruction_2?: string | null;
+          retarget_config?: Json | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -389,6 +391,7 @@ export interface Database {
           hotmart_enabled?: boolean;
           retarget_instruction_1?: string | null;
           retarget_instruction_2?: string | null;
+          retarget_config?: Json | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -461,6 +464,7 @@ export interface Database {
           contact_id: string;
           phone: string;
           stage: number;
+          delay_minutes: number | null;
           status: RetargetStatus;
           scheduled_at: string;
           anchor_inbound_at: string | null;
@@ -475,6 +479,7 @@ export interface Database {
           contact_id: string;
           phone: string;
           stage: number;
+          delay_minutes?: number | null;
           status?: RetargetStatus;
           scheduled_at: string;
           anchor_inbound_at?: string | null;
@@ -489,6 +494,7 @@ export interface Database {
           contact_id?: string;
           phone?: string;
           stage?: number;
+          delay_minutes?: number | null;
           status?: RetargetStatus;
           scheduled_at?: string;
           anchor_inbound_at?: string | null;

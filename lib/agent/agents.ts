@@ -8,6 +8,7 @@ import {
   type CallbellMessagePayload,
 } from "@/lib/callbell/types";
 import type { CallbellCreds } from "@/lib/callbell/sender";
+import { parseRetargetConfig, type RetargetStageConfig } from "@/lib/agent/retargetPlan";
 import type { Database } from "@/lib/supabase/types";
 
 /**
@@ -197,31 +198,21 @@ export async function findHotmartAgentId(supabase: DB): Promise<string | null> {
   return data?.id ?? null;
 }
 
-export interface AgentRetargetInstructions {
-  /** Guía del seguimiento de ~1h (null = usar la guía por defecto). */
-  stage1: string | null;
-  /** Guía del seguimiento de ~8h (null = usar la guía por defecto). */
-  stage2: string | null;
-}
-
 /**
- * Instrucciones de retarget POR AGENTE (turno-guía editable de 1h/8h). Consulta
- * APARTE (no está en `AGENT_COLS`) y resiliente a que falten las columnas (42703,
- * migración 0021 sin aplicar): devuelve nulls → el backend usa la guía por defecto.
- * Ver ADR-0043.
+ * Config de retargets POR AGENTE (cuántas etapas y a qué hora + guía de cada una).
+ * Consulta APARTE (no está en `AGENT_COLS`) y resiliente a que falte la columna
+ * (42703, migración 0024 sin aplicar): devuelve `[]` → el llamador usa el backstop
+ * genérico por env. Ver ADR-0052.
  */
-export async function loadRetargetInstructions(
+export async function loadRetargetConfig(
   supabase: DB,
   agentId: string,
-): Promise<AgentRetargetInstructions> {
+): Promise<RetargetStageConfig[]> {
   const { data, error } = await supabase
     .from("agents")
-    .select("retarget_instruction_1, retarget_instruction_2")
+    .select("retarget_config")
     .eq("id", agentId)
     .maybeSingle();
-  if (error || !data) return { stage1: null, stage2: null };
-  return {
-    stage1: data.retarget_instruction_1 ?? null,
-    stage2: data.retarget_instruction_2 ?? null,
-  };
+  if (error || !data) return [];
+  return parseRetargetConfig((data as { retarget_config: unknown }).retarget_config);
 }
