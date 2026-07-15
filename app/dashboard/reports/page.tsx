@@ -1,4 +1,5 @@
 import {
+  getAgents,
   getAiCostReport,
   getConversionReport,
   getProductConversion,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/dashboard/format";
 import { orderStatusLabel } from "../ui";
 import { CopySummaryButton } from "./CopySummaryButton";
+import { AgentFilter } from "./AgentFilter";
 import type { FulfillmentMethod } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
@@ -51,9 +53,9 @@ function ReportCard({
   );
 }
 
-function buildSummary(r: SalesReport, c: ConversionReport): string {
+function buildSummary(r: SalesReport, c: ConversionReport, scope: string): string {
   return [
-    "Reporte de ventas — Vitasei",
+    `Reporte de ventas — ${scope}`,
     `Ventas confirmadas: ${r.confirmed.count} · ${formatCOP(r.confirmed.revenue)}`,
     `En curso (sin confirmar): ${r.pipeline.count} · ${formatCOP(r.pipeline.revenue)}`,
     `Órdenes generadas: ${r.generated.count} · ${formatCOP(r.generated.revenue)}`,
@@ -74,12 +76,27 @@ const WEEKDAYS: Array<{ i: number; l: string }> = [
   { i: 0, l: "Dom" },
 ];
 
-export default async function ReportsPage() {
+export default async function ReportsPage({
+  searchParams,
+}: {
+  searchParams: { agent?: string };
+}) {
+  const agents = await getAgents();
+  // Agente seleccionado: el del query (?agent=) si existe, o undefined = consolidado.
+  const selected =
+    searchParams.agent && agents.some((a) => a.id === searchParams.agent)
+      ? agents.find((a) => a.id === searchParams.agent)!
+      : null;
+  const agentId = selected?.id;
+  const scope = selected
+    ? `${selected.name}${selected.brand ? ` · ${selected.brand}` : ""}`
+    : "Todos los agentes";
+
   const [r, conv, ai, products] = await Promise.all([
-    getSalesReport(),
-    getConversionReport(),
-    getAiCostReport(),
-    getProductConversion(),
+    getSalesReport(agentId),
+    getConversionReport(agentId),
+    getAiCostReport(agentId),
+    getProductConversion(agentId),
   ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
@@ -98,11 +115,25 @@ export default async function ReportsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Reportes</h1>
           <p className="text-sm text-slate-500">
-            Ventas generadas por el agente. Comparte el resumen con el equipo.
+            {selected ? (
+              <>
+                Ventas y actividad de <span className="font-medium text-slate-700">{scope}</span>.
+                Comparte el resumen con el equipo.
+              </>
+            ) : (
+              <>Ventas generadas por el agente. Comparte el resumen con el equipo.</>
+            )}
           </p>
         </div>
-        <CopySummaryButton summary={buildSummary(r, conv)} />
+        <CopySummaryButton summary={buildSummary(r, conv, scope)} />
       </div>
+
+      {agents.length > 1 && (
+        <AgentFilter
+          agents={agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }))}
+          current={agentId ?? ""}
+        />
+      )}
 
       {/* Titulares */}
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

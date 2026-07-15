@@ -13,6 +13,17 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Reportes filtrables por agente** (ADR-0053; sin migración). La página `/dashboard/reports`
+  agregaba todas las marcas juntas; ahora un selector **"Todos los agentes" / por agente** en la
+  cabecera acota **todos** los cuadros a la vez —ventas (titulares, ventanas, por estado/método,
+  por día, por día de semana y hora), **conversión** (ventanas + gráfico), **costo IA**
+  (texto/imágenes/audio) y **conversión por producto**— navegando por `?agent=<id>` (server
+  re-consulta). El agente activo aparece en el subtítulo y en el **resumen copiable**. Como
+  `orders`/`messages`/`events_log` cuelgan de una conversación y solo `conversations` lleva
+  `agent_id` (migración 0010), cada query (`getSalesReport`, `getConversionReport`,
+  `getAiCostReport`, `getProductConversion`) recibe un `agentId?` opcional y filtra por el `Set`
+  de `conversation_id` del agente (`getAgentConversationIds`, paginado); el consolidado (sin
+  agente) sigue igual y sin costo extra. El selector solo se muestra si hay más de un agente.
 - **Retargets dinámicos por agente — N etapas, horario y guía configurables + 3ª etapa (~24h)**
   (ADR-0052; `agents.retarget_config` jsonb, migración `0024`). Antes eran dos seguimientos fijos
   (1h/8h) con delay global por env. Ahora **cada agente** define en `/dashboard/retargets`
@@ -30,6 +41,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   Nueva env `RETARGET_STAGE3_MS` (default 23h).
 
 ### Fixed
+- **Costo IA ya no topa en 1000 eventos** (parte de ADR-0053): las lecturas de `events_log` en
+  `getAiCostReport` pasan a **paginadas** (`fetchAllRows`). Era la tabla que más crece (un evento
+  por respuesta) y con >1000 filas PostgREST cortaba en seco, **subcontando** el costo real; el
+  corte por agente exige el total completo. El costo IA histórico puede **subir** respecto a lo
+  que se mostraba.
 - **Hotmart · la plantilla que se envía queda como contexto de la respuesta (la IA ya sabe qué
   curso ofreció)** (ADR-0051, `lib/hotmart/context.ts`): el mensaje de carrito abandonado se
   manda desde el webhook, **fuera** de la cadena de Responses. Quedaba en `messages` (se veía en

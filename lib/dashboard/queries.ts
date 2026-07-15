@@ -114,6 +114,23 @@ function readAudio(payload: unknown): { costUsd: number; durationSec: number } {
 // dinámico (retarget con IA) y extracción de la orden. TODOS suman al costo real.
 const TOKEN_EVENT_TYPES = ["reply_generated", "retarget_sent", "order_created"] as const;
 
+/**
+ * Set de `conversation_id` que pertenecen a un agente. Es la clave para acotar los
+ * reportes POR AGENTE: `orders`, `messages` y `events_log` cuelgan de una
+ * conversación, y la conversación es la que lleva `agent_id` (migración 0010).
+ * Paginado (supera el tope de 1000 de PostgREST). Volumen v1 bajo → set en memoria;
+ * si crece mucho, mover el join a la BD (vista/RPC). Ver ADR-0053.
+ */
+async function getAgentConversationIds(agentId: string): Promise<Set<string>> {
+  const supabase = createServiceClient();
+  const rows = await fetchAllRows(
+    (from, to) =>
+      supabase.from("conversations").select("id").eq("agent_id", agentId).range(from, to),
+    "getAgentConversationIds",
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
 export async function getKpis(): Promise<Kpis> {
   const supabase = createServiceClient();
   const [ordersRes, cost] = await Promise.all([
@@ -162,20 +179,45 @@ export interface AiCostReport {
  *    aproximada, pero el TOTAL sigue exacto (imágenes se resta del texto, no se suma aparte).
  *  - **Audio**: transcripción (whisper) con costo real por minuto (`audio_transcribed.costUsd`).
  * Las reactivaciones no entran acá: son plantilla de WhatsApp, costo fijo aparte.
+ *
+ * Con `agentId` acota a los eventos de las conversaciones de ese agente (por
+ * `conversation_id`); los eventos sin conversación no se atribuyen a un agente y
+ * quedan fuera del corte por agente. Las lecturas van paginadas: `events_log` es
+ * la tabla que más crece (un evento por respuesta) y sin esto PostgREST cortaba en
+ * 1000, subcontando el costo real. Ver ADR-0053.
  */
-export async function getAiCostReport(): Promise<AiCostReport> {
+export async function getAiCostReport(agentId?: string): Promise<AiCostReport> {
   const supabase = createServiceClient();
-  const [tokenRes, audioRes] = await Promise.all([
-    supabase.from("events_log").select("payload").in("type", TOKEN_EVENT_TYPES as unknown as string[]),
-    supabase.from("events_log").select("payload").eq("type", "audio_transcribed"),
+  const convoIds = agentId ? await getAgentConversationIds(agentId) : null;
+  const [tokenRows, audioRows] = await Promise.all([
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("events_log")
+          .select("payload, conversation_id")
+          .in("type", TOKEN_EVENT_TYPES as unknown as string[])
+          .range(from, to),
+      "getAiCostReport tokens",
+    ),
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("events_log")
+          .select("payload, conversation_id")
+          .eq("type", "audio_transcribed")
+          .range(from, to),
+      "getAiCostReport audio",
+    ),
   ]);
-  if (tokenRes.error) throw new Error(`getAiCostReport tokens: ${tokenRes.error.message}`);
-  if (audioRes.error) throw new Error(`getAiCostReport audio: ${audioRes.error.message}`);
+
+  // Sin agente: cuenta todo. Con agente: solo los eventos de SUS conversaciones.
+  const belongs = (cid: string | null) => !convoIds || (cid != null && convoIds.has(cid));
 
   let inputTokens = 0;
   let outputTokens = 0;
   let imageCount = 0;
-  for (const row of tokenRes.data ?? []) {
+  for (const row of tokenRows) {
+    if (!belongs(row.conversation_id)) continue;
     const u = readUsage(row.payload);
     inputTokens += u.inputTokens;
     outputTokens += u.outputTokens;
@@ -185,7 +227,8 @@ export async function getAiCostReport(): Promise<AiCostReport> {
   let audioCostUsd = 0;
   let audioSeconds = 0;
   let audioCount = 0;
-  for (const row of audioRes.data ?? []) {
+  for (const row of audioRows) {
+    if (!belongs(row.conversation_id)) continue;
     const a = readAudio(row.payload);
     audioCostUsd += a.costUsd;
     audioSeconds += a.durationSec;
@@ -866,22 +909,31 @@ export async function getCallRequests(opts?: {
 
 // --- Reportes de ventas -----------------------------------------------------
 
-/** Reporte de ventas agregado desde TODAS las órdenes (lógica pura en report.ts). */
-export async function getSalesReport(): Promise<SalesReport> {
+/**
+ * Reporte de ventas agregado desde TODAS las órdenes (lógica pura en report.ts).
+ * Con `agentId` se restringe a las órdenes de las conversaciones de ese agente.
+ */
+export async function getSalesReport(agentId?: string): Promise<SalesReport> {
   const supabase = createServiceClient();
+  const convoIds = agentId ? await getAgentConversationIds(agentId) : null;
   // Paginado: sin esto, PostgREST corta en 1000 filas y el reporte subcuenta.
   const rows = await fetchAllRows(
     (from, to) =>
-      supabase.from("orders").select("status, fulfillment_method, total, created_at").range(from, to),
+      supabase
+        .from("orders")
+        .select("status, fulfillment_method, total, created_at, conversation_id")
+        .range(from, to),
     "getSalesReport",
   );
 
-  const facts: OrderFact[] = rows.map((o) => ({
-    status: o.status,
-    method: o.fulfillment_method,
-    total: o.total,
-    createdAt: o.created_at,
-  }));
+  const facts: OrderFact[] = rows
+    .filter((o) => !convoIds || convoIds.has(o.conversation_id))
+    .map((o) => ({
+      status: o.status,
+      method: o.fulfillment_method,
+      total: o.total,
+      createdAt: o.created_at,
+    }));
   return summarizeOrders(facts);
 }
 
@@ -897,17 +949,21 @@ export async function getSalesReport(): Promise<SalesReport> {
  *    aparecía "hoy" si el cliente volvía a escribir).
  * `total` es histórico. Lógica pura en report.ts. Ver ADR-0037. Paginado.
  */
-export async function getConversionReport(): Promise<ConversionReport> {
+export async function getConversionReport(agentId?: string): Promise<ConversionReport> {
   const supabase = createServiceClient();
   // Las ventanas/gráfico solo miran los últimos 30 días.
   const sinceIso = new Date(Date.now() - 30 * DAY_MS).toISOString();
+  const convoIds = agentId ? await getAgentConversationIds(agentId) : null;
 
   const [convCountRes, orders, inbound] = await Promise.all([
-    // `total` histórico de conversaciones: count exacto (sin traer filas).
-    supabase.from("conversations").select("*", { count: "exact", head: true }),
+    // `total` histórico de conversaciones: count exacto (sin traer filas). Con
+    // agente, solo las suyas — así el denominador cuadra con el numerador filtrado.
+    (agentId
+      ? supabase.from("conversations").select("*", { count: "exact", head: true }).eq("agent_id", agentId)
+      : supabase.from("conversations").select("*", { count: "exact", head: true })),
     // Órdenes (todas) para las transacciones — se filtran canceladas acá. Paginado.
     fetchAllRows(
-      (from, to) => supabase.from("orders").select("status, created_at").range(from, to),
+      (from, to) => supabase.from("orders").select("status, created_at, conversation_id").range(from, to),
       "getConversionReport orders",
     ),
     // Actividad: inbound de los últimos 30 días. Paginado.
@@ -925,14 +981,16 @@ export async function getConversionReport(): Promise<ConversionReport> {
   if (convCountRes.error)
     throw new Error(`getConversionReport conversations: ${convCountRes.error.message}`);
 
-  const activity: ConversationActivityFact[] = inbound.map((m) => ({
-    conversationId: m.conversation_id,
-    createdAt: m.created_at,
-  }));
+  const activity: ConversationActivityFact[] = inbound
+    .filter((m) => !convoIds || convoIds.has(m.conversation_id))
+    .map((m) => ({
+      conversationId: m.conversation_id,
+      createdAt: m.created_at,
+    }));
 
   // Transacciones = órdenes NO canceladas (misma base que "Órdenes generadas").
   const transactions: TransactionFact[] = orders
-    .filter((o) => o.status !== "cancelled")
+    .filter((o) => o.status !== "cancelled" && (!convoIds || convoIds.has(o.conversation_id)))
     .map((o) => ({ createdAt: o.created_at }));
 
   return summarizeConversationActivity(activity, transactions, {
@@ -947,7 +1005,7 @@ export async function getConversionReport(): Promise<ConversionReport> {
  * rinden mejor. Resiliente: si falta la migración 0018 (columna), todo cae en
  * "Sin categoría". Lógica pura en report.ts. Ver docs/21. Paginado.
  */
-export async function getProductConversion(): Promise<ProductConversionRow[]> {
+export async function getProductConversion(agentId?: string): Promise<ProductConversionRow[]> {
   const supabase = createServiceClient();
 
   const orders = await fetchAllRows(
@@ -957,26 +1015,30 @@ export async function getProductConversion(): Promise<ProductConversionRow[]> {
   const converting = new Set<string>();
   for (const o of orders) if (o.status !== "cancelled") converting.add(o.conversation_id);
 
-  // Conversaciones con su categoría. Si falta la columna (0018), se cae al set de
-  // solo `id` (todo "Sin categoría") en vez de romper.
-  let convos: Array<{ id: string; product_category: string | null }>;
+  // Conversaciones con su categoría y agente. Si falta la columna de categoría
+  // (0018), se cae al set con `agent_id` pero sin categoría (todo "Sin categoría")
+  // en vez de romper; `agent_id` existe desde 0010 (columna base).
+  let convos: Array<{ id: string; product_category: string | null; agent_id: string | null }>;
   try {
     convos = await fetchAllRows(
-      (from, to) => supabase.from("conversations").select("id, product_category").range(from, to),
+      (from, to) =>
+        supabase.from("conversations").select("id, product_category, agent_id").range(from, to),
       "getProductConversion conversations",
     );
   } catch {
     const ids = await fetchAllRows(
-      (from, to) => supabase.from("conversations").select("id").range(from, to),
+      (from, to) => supabase.from("conversations").select("id, agent_id").range(from, to),
       "getProductConversion conv ids",
     );
-    convos = ids.map((c) => ({ id: c.id, product_category: null }));
+    convos = ids.map((c) => ({ id: c.id, product_category: null, agent_id: c.agent_id }));
   }
 
-  const facts: ProductConversionFact[] = convos.map((c) => ({
-    productCategory: c.product_category,
-    converted: converting.has(c.id),
-  }));
+  const facts: ProductConversionFact[] = convos
+    .filter((c) => !agentId || c.agent_id === agentId)
+    .map((c) => ({
+      productCategory: c.product_category,
+      converted: converting.has(c.id),
+    }));
   return summarizeProductConversion(facts);
 }
 
