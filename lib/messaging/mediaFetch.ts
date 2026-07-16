@@ -19,6 +19,12 @@ import {
  * un 401 de una URL ajena haría que le enviáramos la API key del proveedor a un
  * tercero. Cada adaptador pasa el patrón de SU host.
  *
+ * OJO — se prueba contra el **hostname**, nunca contra la URL completa. Probarlo
+ * contra la URL es explotable: un patrón como `/callbell/i` lo satisface
+ * `https://atacante.com/x?next=callbell`, y como la URL del adjunto viene del
+ * webhook, bastaría con que el atacante responda 401 para llevarse la API key. Si
+ * la URL no parsea, no se manda credencial.
+ *
  * `value` admite un thunk para poder resolver el secreto SOLO cuando de verdad se
  * usa (en la rama 401/403). Importa: `env.CALLBELL_API_KEY` lanza si la variable
  * falta, así que evaluarlo por adelantado rompería descargas anónimas que hoy
@@ -27,7 +33,18 @@ import {
 export interface MediaAuth {
   header: string;
   value: string | (() => string);
+  /** Se compara contra el HOSTNAME de la URL (no contra la URL entera). */
   hostPattern?: RegExp;
+}
+
+/** ¿La URL apunta a un host al que sí le podemos mandar la credencial? */
+function hostAllowed(url: string, auth: MediaAuth): boolean {
+  if (!auth.hostPattern) return true;
+  try {
+    return auth.hostPattern.test(new URL(url).hostname);
+  } catch {
+    return false; // URL no parseable → no arriesgamos el secreto
+  }
 }
 
 export interface FetchMediaOptions {
@@ -57,8 +74,7 @@ export async function fetchMedia(
     let res = await fetch(url);
 
     const needsAuth = res.status === 401 || res.status === 403;
-    const hostAllowed = !auth?.hostPattern || auth.hostPattern.test(url);
-    if (needsAuth && auth && hostAllowed) {
+    if (needsAuth && auth && hostAllowed(url, auth)) {
       const value = typeof auth.value === "function" ? auth.value() : auth.value;
       res = await fetch(url, { headers: { [auth.header]: value } });
     }

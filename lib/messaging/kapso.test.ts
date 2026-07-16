@@ -73,9 +73,22 @@ describe("KapsoProvider.sendTemplate — variables", () => {
     expect(templateOf(fetchMock).components).toBeUndefined();
   });
 
-  it("`text` vacío no se cuela como variable", async () => {
+  it("`text` VACÍO sigue siendo una variable (contacto sin nombre) — no puede volverse cero parámetros", async () => {
+    // Regresión real: las reactivaciones mandan `text: firstName`, y firstName es ""
+    // para todo contacto del que WhatsApp no nos dio nombre. Si eso se tratara como
+    // "sin variables", la plantilla saldría con 0 parámetros y Meta la rechaza por
+    // conteo → se cae la reactivación de 7/15 días. En Callbell iba como
+    // `content.text: ""` (variable en blanco) y se entregaba.
     const fetchMock = mockFetchOk();
-    await provider().sendTemplate("573001112233", "aviso", { text: "" });
+    await provider().sendTemplate("573001112233", "reactivacion_7d", { text: "" });
+    expect(templateOf(fetchMock).components).toEqual([
+      { type: "body", parameters: [{ type: "text", text: "" }] },
+    ]);
+  });
+
+  it("sin `text` (undefined) sí es plantilla sin variables", async () => {
+    const fetchMock = mockFetchOk();
+    await provider().sendTemplate("573001112233", "aviso", { imageUrl: null });
     expect(templateOf(fetchMock).components).toBeUndefined();
   });
 

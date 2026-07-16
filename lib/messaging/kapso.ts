@@ -81,8 +81,16 @@ export class KapsoProvider implements MessagingProvider {
  * (que hoy factura) por un detalle del otro proveedor:
  *  - `templateValues` definido (incluido `[]`) → se respeta tal cual.
  *  - `templateValues` ausente → se usa `text` como la única variable.
+ *
+ * OJO con el `text` VACÍO: hay que distinguirlo de "no hay text". Las reactivaciones
+ * mandan `text: firstName`, y `firstName` es `""` para todo contacto del que WhatsApp
+ * no nos dio nombre. En Callbell eso era inofensivo (`content.text: ""` → la variable
+ * sale en blanco y el mensaje se entrega); si acá lo tratáramos como "sin variables",
+ * la plantilla saldría con CERO parámetros y Meta la rechaza por no cuadrar el conteo
+ * → se caería la reactivación de 7/15 días de cada contacto sin nombre. Por eso el
+ * chequeo es contra `undefined` y no por "truthy".
  */
 function templateValuesFor(options?: SendTemplateOptions): string[] {
   if (options?.templateValues !== undefined) return options.templateValues;
-  return options?.text ? [options.text] : [];
+  return options?.text !== undefined ? [options.text] : [];
 }

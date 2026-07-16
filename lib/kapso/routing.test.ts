@@ -5,42 +5,40 @@ import { matchAgent, type AgentRoute } from "@/lib/callbell/routing";
 const kapsoAgent = (over: Partial<KapsoAgentRoute & { id: string }> = {}) => ({
   id: "kapso-1",
   kapso_phone_number_id: "123456789012345",
-  whatsapp_number: "573332877350",
   enabled: true,
   provider: "kapso",
   ...over,
 });
 
 describe("matchKapsoAgent", () => {
-  it("enruta por phone_number_id (el identificador que manda Kapso)", () => {
+  it("enruta por phone_number_id (lo único que identifica el número en Kapso)", () => {
     const agents = [kapsoAgent(), kapsoAgent({ id: "kapso-2", kapso_phone_number_id: "999" })];
-    expect(matchKapsoAgent(agents, { phoneNumberId: "999", number: null })?.id).toBe("kapso-2");
-  });
-
-  it("cae al número si el agente aún no tiene pegado su phone_number_id", () => {
-    const agents = [kapsoAgent({ kapso_phone_number_id: null })];
-    expect(matchKapsoAgent(agents, { phoneNumberId: "123", number: "573332877350" })?.id).toBe(
-      "kapso-1",
-    );
+    expect(matchKapsoAgent(agents, { phoneNumberId: "999" })?.id).toBe("kapso-2");
   });
 
   it("ignora los agentes deshabilitados", () => {
-    const agents = [kapsoAgent({ enabled: false })];
-    expect(matchKapsoAgent(agents, { phoneNumberId: "123456789012345", number: null })).toBeNull();
+    expect(matchKapsoAgent([kapsoAgent({ enabled: false })], { phoneNumberId: "123456789012345" }))
+      .toBeNull();
   });
 
   it("devuelve null si no es un número nuestro", () => {
-    expect(matchKapsoAgent([kapsoAgent()], { phoneNumberId: "otro", number: null })).toBeNull();
+    expect(matchKapsoAgent([kapsoAgent()], { phoneNumberId: "otro" })).toBeNull();
   });
 
-  it("NO enruta a un agente de Callbell aunque comparta el número", () => {
+  it("sin phone_number_id no enruta a nadie (no elige un agente al azar)", () => {
+    expect(matchKapsoAgent([kapsoAgent()], { phoneNumberId: null })).toBeNull();
+  });
+
+  it("no confunde un phone_number_id nulo del agente con uno nulo del inbound", () => {
+    expect(matchKapsoAgent([kapsoAgent({ kapso_phone_number_id: null })], { phoneNumberId: "123" }))
+      .toBeNull();
+  });
+
+  it("NO enruta a un agente de Callbell aunque tenga pegado el mismo phone_number_id", () => {
     // El caso real de la prueba en paralelo: la misma marca cargada dos veces, una
-    // por proveedor. Sin el filtro, el respaldo por número contestaría un inbound de
-    // Kapso con las credenciales de Callbell.
+    // por proveedor. Sin el filtro contestaríamos con las credenciales equivocadas.
     const callbellTwin = kapsoAgent({ id: "callbell-1", provider: "callbell" });
-    expect(
-      matchKapsoAgent([callbellTwin], { phoneNumberId: "123456789012345", number: "573332877350" }),
-    ).toBeNull();
+    expect(matchKapsoAgent([callbellTwin], { phoneNumberId: "123456789012345" })).toBeNull();
   });
 });
 

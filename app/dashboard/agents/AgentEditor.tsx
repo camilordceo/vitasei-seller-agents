@@ -340,6 +340,7 @@ export function AgentEditor({
 
   const locked = isPending || createdId !== null;
 
+  // `h-11` = 44px: es el touch target mínimo de las reglas de UI del proyecto.
   const providerBtn = (id: MessagingProviderId, label: string) => (
     <button
       type="button"
@@ -349,7 +350,7 @@ export function AgentEditor({
         dirty();
         setProvider(id);
       }}
-      className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
+      className={`inline-flex h-11 items-center rounded-md border px-4 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
         provider === id
           ? "border-slate-900 bg-slate-900 text-white"
           : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
@@ -625,7 +626,10 @@ export function AgentEditor({
               />
               <p className="mt-1 text-xs text-slate-400">
                 El mismo <code>secret_key</code> con el que registraste el webhook en Kapso. Si se
-                deja vacío se usa el global; sin ninguno, la firma no se valida.
+                deja vacío se usa el global (<code>KAPSO_WEBHOOK_SECRET</code>).{" "}
+                <strong>Es obligatorio</strong>: sin ninguno de los dos, los mensajes entrantes se
+                rechazan (el webhook es público y sin firma cualquiera podría hacer que el bot
+                escriba desde tu número).
               </p>
             </div>
             <p className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">

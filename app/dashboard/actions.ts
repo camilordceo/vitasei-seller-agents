@@ -495,6 +495,21 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
 }
 
 /**
+ * Traduce el 42703 (columna inexistente) de un guardado de agente a algo accionable.
+ *
+ * La LECTURA de agentes sobrevive sin la migración 0026 (`selectAgents` reintenta con
+ * las columnas viejas), así que el inbound nunca se cae. La ESCRITURA no puede hacer lo
+ * mismo: reintentar sin `provider` guardaría el agente **ignorando en silencio** el
+ * proveedor que el operador acaba de elegir, que es peor que fallar. Así que falla, pero
+ * diciendo exactamente qué hacer — mismo criterio que `setHotmartAgent` con la 0020.
+ */
+function missingProviderMigration(error: { code?: string }): string | null {
+  return error.code === "42703"
+    ? "Falta aplicar la migración 0026 (provider + credenciales de Kapso) en Supabase."
+    : null;
+}
+
+/**
  * Edita un agente (marca/número): config de IA + credenciales de Callbell. La API
  * key solo se actualiza si se pega una nueva. Service-role, protegida por el Basic
  * Auth del dashboard. Loguea `agent_saved`. Ver docs/16.
@@ -508,7 +523,7 @@ export async function saveAgent(agentId: string, input: AgentEditInput): Promise
     .from("agents")
     .update(agentPatch(input) as never)
     .eq("id", agentId);
-  if (error) throw new Error(`saveAgent: ${error.message}`);
+  if (error) throw new Error(`saveAgent: ${missingProviderMigration(error) ?? error.message}`);
 
   await supabase.from("events_log").insert({
     conversation_id: null,
@@ -535,7 +550,7 @@ export async function createAgent(input: AgentEditInput): Promise<string> {
     .insert(agentPatch(input) as never)
     .select("id")
     .single();
-  if (error) throw new Error(`createAgent: ${error.message}`);
+  if (error) throw new Error(`createAgent: ${missingProviderMigration(error) ?? error.message}`);
 
   await supabase.from("events_log").insert({
     conversation_id: null,

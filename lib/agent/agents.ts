@@ -116,10 +116,10 @@ export async function resolveAgentForInbound(
 }
 
 /**
- * Resuelve a qué agente de KAPSO pertenece un inbound, por `phone_number_id`
- * (primario) o número destino. Sin fallback por env: Kapso se configura siempre
- * desde el dashboard, así que un inbound sin agente es un número que no es nuestro
- * (o que falta configurar) y el webhook lo registra como `inbox_rejected`.
+ * Resuelve a qué agente de KAPSO pertenece un inbound, por su `phone_number_id`.
+ * Sin fallback por env: Kapso se configura siempre desde el dashboard, así que un
+ * inbound sin agente es un número que no es nuestro (o al que le falta pegar el
+ * Phone Number ID) y el webhook lo registra como `inbox_rejected`.
  */
 export async function resolveKapsoAgentForInbound(
   supabase: DB,

@@ -25,9 +25,14 @@
 --
 -- Idempotente: seguro de correr más de una vez.
 --
--- ORDEN DE DESPLIEGUE: da igual. El código tolera que esta migración no esté
--- aplicada (`selectAgents` reintenta sin estas columnas ante 42703 → `provider`
--- llega undefined → 'callbell' → el comportamiento de hoy). Ver ADR-0056.
+-- ORDEN DE DESPLIEGUE: el deploy puede ir antes, pero apliquémosla igual cuanto antes.
+--   · LECTURA (ruta crítica de inbound): tolera que esta migración no esté aplicada
+--     — `selectAgents` reintenta sin estas columnas ante 42703 → `provider` llega
+--     undefined → 'callbell' → el comportamiento de hoy. Producción NO se cae.
+--   · ESCRITURA (guardar/crear un agente en el dashboard): **requiere** la migración.
+--     No se reintenta sin las columnas a propósito: guardaría el agente ignorando en
+--     silencio el proveedor recién elegido, que es peor que fallar. Sin la migración,
+--     el dashboard responde "Falta aplicar la migración 0026". Ver ADR-0056.
 
 -- 1) Proveedor -------------------------------------------------------------
 -- TEXTO y no enum, mismo criterio que `fulfillment_method` (ADR-0055) y

@@ -124,8 +124,19 @@ igual que nosotros.
 
 Como no se puede saber cuál es sin tráfico real, `verifyKapsoSignature` **acepta las dos**. No
 debilita nada: ambas exigen el secreto. La ruta lee el cuerpo con `await req.text()` (no
-`req.json()`) justo para poder verificar los bytes originales. Sin secreto configurado no se
-bloquea (dev), igual que en Callbell.
+`req.json()`) justo para poder verificar los bytes originales.
+
+> **El secreto es OBLIGATORIO — y acá Kapso se comporta distinto a Callbell.** Sin secreto
+> (ni en el agente ni en `KAPSO_WEBHOOK_SECRET`) el webhook **rechaza** todo. Callbell arrastra
+> el criterio contrario ("sin secreto, no se valida") por historia; en Kapso no había nada que
+> conservar y lo que está en juego es serio: este endpoint escribe en la base, dispara llamadas
+> pagas a OpenAI y **manda WhatsApps reales desde el número del negocio**. Sin firma, cualquiera
+> que conozca la URL podría inventarse un inbound y hacer que el bot le escriba a quien quiera,
+> a nuestra costa. Si los mensajes no llegan, revisa los logs de Vercel: el rechazo dice
+> exactamente cuál de los dos casos es (falta el secreto / la firma no cuadra).
+
+La firma se verifica **antes de la primera escritura**. Un rechazo va a los logs de Vercel y
+**no** a `events_log`: si no, un request sin firmar tendría cómo inflar la tabla.
 
 ## 5. Enviar
 
@@ -236,10 +247,13 @@ que no bloquean el arranque, pero conviene cerrarlos con la primera prueba real:
 
 ## 12. Prueba de humo (checklist)
 
-1. Aplicar la migración `0026` en Supabase.
+1. Aplicar la migración `0026` en Supabase. **Sin esto no se puede guardar ningún agente** (el
+   dashboard lo dice explícitamente); el inbound de Callbell sigue funcionando igual.
 2. Crear el agente en `/dashboard/agents/new` con proveedor **Kapso** + Phone Number ID + API
-   key + secreto, y su prompt/catálogo.
-3. Registrar el webhook del número (§3) apuntando al dominio desplegado.
+   key + **secreto del webhook** (obligatorio: sin él se rechazan los mensajes), y su
+   prompt/catálogo.
+3. Registrar el webhook del número (§3) apuntando al dominio desplegado, con **el mismo
+   `secret_key`** que pegaste en el paso 2.
 4. Escribirle al número → debe aparecer la conversación en `/dashboard/conversations` y el bot
    debe responder (~12s por el debounce).
 5. Mandar una **nota de voz** → el hilo debe mostrar el texto transcrito (sin costo de audio en
@@ -250,8 +264,13 @@ que no bloquean el arranque, pero conviene cerrarlos con la primera prueba real:
 8. **Hotmart**: en `/dashboard/hotmart`, apuntar el selector al agente de Kapso, crear la
    plantilla con su **nombre** y disparar un carrito de prueba (`docs/17` §10).
 9. Revisar `events_log`: `webhook_received`, `reply_generated`, `text_sent`/`image_sent`, y que
-   NO haya `inbox_rejected` (sería un `phone_number_id` mal pegado) ni
-   `webhook_signature_rejected` (secreto distinto al registrado).
+   NO haya `inbox_rejected` (sería un `phone_number_id` mal pegado).
+
+**Si no llega nada**, el orden de sospecha es: (a) logs de Vercel — ahí salen los rechazos por
+firma (secreto ausente o distinto al registrado), que a propósito no se escriben en la base;
+(b) `events_log` con `inbox_rejected` → el Phone Number ID del dashboard no es el del webhook;
+(c) el webhook quedó **auto-pausado** en Kapso (§2) tras una racha de fallos → reactivarlo es
+manual; (d) hay un **workflow con trigger de WhatsApp** en ese número interceptando (§10).
 
 ## Referencias
 

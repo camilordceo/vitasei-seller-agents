@@ -42,6 +42,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
     `JSON.stringify` (su doc dice una cosa y sus ejemplos hacen otra; ambas exigen el secreto), y
     la descarga de media intenta **anónima** y solo reintenta con la key ante 401/403 (no está
     documentado si `media_url` requiere auth). Anotadas en `docs/24` §Pendientes de verificar.
+  - **Firma obligatoria (fail-closed)**, a diferencia de Callbell: sin secreto configurado el
+    webhook **rechaza**. El endpoint es público y escribe en la base, gasta en OpenAI y **manda
+    WhatsApps desde el número del negocio**; sin firma, cualquiera que conozca la URL podría
+    hacer que el bot le escriba a quien quiera. La firma se valida **antes de la primera
+    escritura** y los rechazos van a los logs de Vercel (no a `events_log`, que sería un vector
+    de escritura sin autenticar).
   - **Audio gratis** (ADR-0057): Kapso ya manda la nota de voz **transcrita**; se guarda como el
     `content` en la ingesta y el cerebro **no llama a Whisper** (solo transcribe si está vacío),
     sin ninguna rama "si es Kapso". Whisper queda de respaldo automático.
@@ -115,6 +121,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   Nueva env `RETARGET_STAGE3_MS` (default 23h).
 
 ### Fixed
+- **La credencial de descarga de adjuntos podía filtrarse a un host ajeno** (ADR-0056; afectaba
+  también a **Callbell**, donde el agujero existía desde ADR-0022). `fetchMedia` probaba el
+  patrón de host contra la **URL completa**, así que `/callbell/i` lo satisfacía cualquier URL
+  con "callbell" en el path o el query (`https://atacante.com/x?ref=callbell`). Como la URL del
+  adjunto viene **del webhook**, bastaba con que ese host respondiera 401 para que le
+  mandáramos el bearer de Callbell (o la API key de Kapso). Ahora el patrón se compara contra el
+  **hostname**, y una URL no parseable nunca recibe credencial. El de Callbell se mantiene laxo
+  a propósito (no está confirmado desde qué host sirve sus adjuntos, podría ser un CDN); el de
+  Kapso ancla el dominio. Cubierto con tests.
 - **Costo IA ya no topa en 1000 eventos** (parte de ADR-0053): las lecturas de `events_log` en
   `getAiCostReport` pasan a **paginadas** (`fetchAllRows`). Era la tabla que más crece (un evento
   por respuesta) y con >1000 filas PostgREST cortaba en seco, **subcontando** el costo real; el

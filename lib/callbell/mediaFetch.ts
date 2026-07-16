@@ -14,6 +14,14 @@ import type { FetchedMedia } from "@/lib/messaging/media";
 /**
  * Credencial de Callbell para adjuntos protegidos. El valor es un thunk: `env`
  * lanza si la variable falta y solo debe evaluarse si de verdad hace falta.
+ *
+ * El patrón sigue siendo `/callbell/i` —igual de laxo que antes— pero ahora se
+ * prueba contra el **hostname** y no contra la URL completa. Ese era el agujero:
+ * `https://atacante.com/x?ref=callbell` lo satisfacía y se llevaba el bearer (la URL
+ * del adjunto viene del webhook). Se mantiene laxo A PROPÓSITO: no está confirmado
+ * desde qué host sirve Callbell los adjuntos (podría ser un CDN tipo
+ * `callbell-media.…`), y anclar el dominio arriesgaría romper descargas que hoy
+ * funcionan. Ver `MediaAuth.hostPattern`.
  */
 export function callbellMediaAuth(): MediaAuth {
   return {

@@ -104,24 +104,38 @@ export async function POST(req: Request) {
 
   let agent;
   try {
-    agent = await resolveKapsoAgentForInbound(supabase, {
-      phoneNumberId,
-      number: null, // Kapso no manda el número de negocio, solo su id
-    });
+    agent = await resolveKapsoAgentForInbound(supabase, { phoneNumberId });
   } catch (e) {
+    // Solo a los logs de Vercel: acá todavía no verificamos la firma, así que no
+    // podemos darle a un request sin autenticar una forma de escribir en la base. Y
+    // si esto falló es porque Supabase no responde — el log a Supabase fallaría igual.
     const message = e instanceof Error ? e.message : String(e);
     console.error("[kapso webhook] resolve-agent failed:", message);
-    await logEvent("process_error", { phase: "resolve-agent", phoneNumberId, error: message });
     return ok();
   }
 
   // 5) Firma. Va ANTES de cualquier escritura: resolver el agente es solo una
   //    lectura, pero a partir de acá todo deja rastro y este endpoint es público.
   //    El secreto sale del agente (cada proyecto de Kapso puede tener el suyo) y,
-  //    si el número no es nuestro, del global. Sin secreto configurado no se
-  //    bloquea (dev), igual que en Callbell.
+  //    si el número no es nuestro, del global.
+  //
+  //    **FAIL-CLOSED, a diferencia de Callbell**: sin secreto configurado NO se
+  //    procesa. Callbell arrastra el criterio contrario por historia, pero acá no hay
+  //    nada que conservar y lo que está en juego es serio: este endpoint escribe en la
+  //    base, dispara llamadas pagas a OpenAI y **manda WhatsApps reales desde el número
+  //    del negocio**. Sin firma, cualquiera que conozca la URL puede inventarse un
+  //    inbound y hacer que el bot le escriba a quien quiera, a nuestra costa. Un
+  //    secreto es un campo del dashboard; dejar el agujero abierto no vale ese ahorro.
   const secret = agent ? agentKapsoWebhookSecret(agent) : env.KAPSO_WEBHOOK_SECRET;
-  if (secret && !verifyKapsoSignature(raw, req.headers.get(KAPSO_SIGNATURE_HEADER), secret)) {
+  if (!secret) {
+    console.warn(
+      `[kapso webhook] rechazado: no hay secreto de webhook configurado (phone_number_id ${phoneNumberId ?? "?"}). ` +
+        `Pégalo en el agente (Agentes → Proveedor → Secreto del webhook) o en KAPSO_WEBHOOK_SECRET, ` +
+        `y que coincida con el secret_key con el que registraste el webhook en Kapso.`,
+    );
+    return ok();
+  }
+  if (!verifyKapsoSignature(raw, req.headers.get(KAPSO_SIGNATURE_HEADER), secret)) {
     // A los logs de Vercel y NO a `events_log`: un request sin firma válida no debe
     // poder escribir en la base (si no, cualquiera que conozca la URL podría inflar
     // la tabla). El caso real de este error es un secreto mal pegado, y para eso
@@ -138,6 +152,22 @@ export async function POST(req: Request) {
 
   // 6) Ingesta de cada mensaje. Un fallo se registra y NUNCA tumba el 200.
   for (const event of events) {
+    // El agente se resolvió con el `phone_number_id` del PRIMER evento porque los
+    // lotes de Kapso son por conversación (y encima registramos el webhook sin
+    // buffering, ADR-0058). Si alguna vez llegara un lote mezclado, ingestar el resto
+    // con el agente del primero los metería en la marca equivocada: preferimos
+    // saltarlos y dejar el rastro.
+    const eventPhoneNumberId = getPhoneNumberId(event);
+    if (eventPhoneNumberId && eventPhoneNumberId !== phoneNumberId) {
+      await logEvent("inbox_rejected", {
+        provider: "kapso",
+        reason: "batch-mixed-phone-number-id",
+        expected: phoneNumberId,
+        got: eventPhoneNumberId,
+        messageId: getMessageId(event),
+      });
+      continue;
+    }
     try {
       await ingestKapsoEvent(event, agent.id);
     } catch (e) {

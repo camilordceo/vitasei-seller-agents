@@ -57,6 +57,19 @@ Consecuencias concretas del diseño:
 - **409 "in-flight".** Kapso rechaza un envío si el anterior al mismo destinatario sigue en
   vuelo; Callbell no. Como el flujo manda texto + N imágenes seguidas, el adaptador reintenta
   con backoff (400/1200/2500 ms).
+- **Firma obligatoria (fail-closed), a diferencia de Callbell.** Sin secreto configurado, el
+  webhook de Kapso **rechaza**. Callbell arrastra el criterio contrario ("sin secreto no se
+  valida") por historia; en Kapso no había nada que conservar y el endpoint escribe en la base,
+  dispara llamadas pagas a OpenAI y **manda WhatsApps reales desde el número del negocio**: sin
+  firma, cualquiera que conozca la URL puede inventarse un inbound y hacer que el bot le escriba
+  a quien quiera, a nuestra costa. La firma se valida **antes de la primera escritura**, y los
+  rechazos van a los logs de Vercel y no a `events_log` (si no, un request sin firmar tendría
+  cómo inflar la tabla).
+- **El guardia de host de la credencial de media se compara contra el hostname**, nunca contra
+  la URL. La URL del adjunto viene del webhook, así que un patrón probado contra la URL entera
+  es explotable con un query param (`https://atacante.com/x?ref=callbell`) para llevarse la
+  API key. Esto **también arregla** el camino de Callbell, que tenía el mismo agujero desde
+  ADR-0022.
 - **Resiliencia de despliegue.** `selectAgents` intenta con las columnas nuevas y **reintenta
   sin ellas ante 42703**, así que el deploy no depende del orden de la migración: sin la 0026,
   `provider` llega `undefined` → `normalizeProviderId` → `callbell` → el comportamiento de hoy.
@@ -74,6 +87,12 @@ Consecuencias concretas del diseño:
   es TEXTO con CHECK (no enum) justamente para que eso no requiera un `ALTER TYPE`.
 - **Deuda aceptada**: los nombres `callbell_*` de las columnas ya no describen su contenido.
   Se documentó en la base y en los tipos en vez de renombrar (ver alternativas).
+- **Asimetría de resiliencia entre leer y escribir agentes.** La lectura sobrevive sin la
+  migración 0026 (reintento ante 42703 → todo cae a `callbell`), así que el inbound nunca se
+  cae. La escritura NO: guardar un agente sin la migración falla con "Falta aplicar la
+  migración 0026". Es deliberado — reintentar sin las columnas guardaría el agente **ignorando
+  en silencio** el proveedor recién elegido, que es peor que fallar. Mismo criterio que
+  `setHotmartAgent` con la 0020.
 - **Queda sin verificar contra tráfico real** (la doc de Kapso es ambigua): si `media_url`
   necesita auth y si la firma es del cuerpo crudo o de la re-serialización. El código tolera
   **ambos** casos a propósito. Ver `docs/24` §Pendientes de verificar.

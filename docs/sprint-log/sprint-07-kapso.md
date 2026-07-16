@@ -61,6 +61,32 @@ la Cloud API de Meta con auth `X-API-Key`.
 - [x] **Sin regresiones en Callbell** — los 251 tests existentes pasan **sin haber modificado
       ninguno**; total 302/302. Typecheck y `next build` limpios.
 
+## Revisión de código (hallazgos propios corregidos)
+
+Se corrió una revisión adversarial sobre el diff completo. Encontró **bugs reales** que habría
+sido caro descubrir en producción; todos corregidos y cubiertos con tests:
+
+1. **Fuga de credencial de media (también en Callbell, desde ADR-0022).** El guardia de host se
+   probaba contra la **URL completa**, así que `/callbell/i` lo satisfacía
+   `https://atacante.com/x?ref=callbell`. Como la URL del adjunto viene del webhook, bastaba
+   responder 401 para llevarse el bearer. Ahora se compara contra el **hostname**.
+2. **Webhook fail-open.** Sin secreto configurado no se validaba la firma (criterio copiado de
+   Callbell). En un endpoint público que gasta en OpenAI y manda WhatsApps desde el número del
+   negocio, eso es un agujero: ahora **rechaza** si no hay secreto.
+3. **Reactivaciones rotas para contactos sin nombre.** `templateValuesFor` trataba `text: ""`
+   como "sin variables" → la plantilla salía con 0 parámetros y Meta la rechaza por conteo. En
+   Callbell iba como variable en blanco y se entregaba. Un test **afirmaba el comportamiento
+   equivocado**: se corrigió el test junto con el código.
+4. **Guardar un agente fallaba sin la migración 0026** con un error críptico, contradiciendo lo
+   que prometía la propia migración. Ahora dice qué hacer, y la migración documenta la asimetría
+   real (leer tolera, escribir requiere).
+5. **Código muerto**: el respaldo por `whatsapp_number` en `matchKapsoAgent` era inalcanzable
+   (Kapso nunca manda el número de negocio). Eliminado: un fallback muerto pero testeado da
+   confianza falsa.
+6. **Lotes mezclados** y **escritura en `events_log` antes de verificar la firma**: con guardia
+   y movida, respectivamente.
+7. **Touch target** de los botones de proveedor: 34px → 44px (regla de UI del proyecto).
+
 ## Desviaciones del PRD
 
 - **`hotmart_enabled` no necesitó cambios**: se planeó "endurecer para que sea uno solo", pero

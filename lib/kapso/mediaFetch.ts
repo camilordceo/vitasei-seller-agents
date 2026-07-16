@@ -19,6 +19,9 @@ export function kapsoMediaAuth(apiKey: string): MediaAuth {
   return {
     header: "X-API-Key",
     value: apiKey,
-    hostPattern: /(^|\/\/)([^/]*\.)?kapso\.ai\//i,
+    // Ancla el hostname COMPLETO: `kapso.ai` o cualquier subdominio suyo. Nada de
+    // `atacante-kapso.ai` ni `kapso.ai.evil.com`. Se compara contra el hostname, no
+    // contra la URL (ver `MediaAuth.hostPattern`).
+    hostPattern: /^(.+\.)?kapso\.ai$/i,
   };
 }
