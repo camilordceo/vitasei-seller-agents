@@ -25,6 +25,7 @@ import {
   type PaymentMethodConfig,
 } from "@/lib/agent/paymentMethods";
 import type { AgentEditInput } from "./types";
+import type { MessagingProviderId } from "@/lib/messaging/types";
 
 const inputCls =
   "w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
@@ -38,9 +39,14 @@ export interface AgentEditorInitial {
   brand: string;
   country: string;
   whatsappNumber: string;
+  provider: MessagingProviderId;
   callbellChannelUuid: string;
   hasCallbellApiKey: boolean;
   callbellApiKeyLast4: string | null;
+  kapsoPhoneNumberId: string;
+  kapsoTemplateLanguage: string;
+  hasKapsoApiKey: boolean;
+  hasKapsoWebhookSecret: boolean;
   logisticsTeamUuid: string;
   vectorStoreId: string;
   model: string;
@@ -80,9 +86,16 @@ export function AgentEditor({
   const [brand, setBrand] = useState(initial.brand);
   const [country, setCountry] = useState(initial.country);
   const [whatsappNumber, setWhatsappNumber] = useState(initial.whatsappNumber);
+  const [provider, setProvider] = useState<MessagingProviderId>(initial.provider);
   const [channelUuid, setChannelUuid] = useState(initial.callbellChannelUuid);
   const [apiKey, setApiKey] = useState("");
   const [teamUuid, setTeamUuid] = useState(initial.logisticsTeamUuid);
+  // Kapso (ADR-0056). Los secretos arrancan vacíos: son write-only, como la key de
+  // Callbell — vacío significa "no cambiar", no "borrar".
+  const [kapsoPhoneNumberId, setKapsoPhoneNumberId] = useState(initial.kapsoPhoneNumberId);
+  const [kapsoTemplateLanguage, setKapsoTemplateLanguage] = useState(initial.kapsoTemplateLanguage);
+  const [kapsoApiKey, setKapsoApiKey] = useState("");
+  const [kapsoWebhookSecret, setKapsoWebhookSecret] = useState("");
   const [vectorStoreId, setVectorStoreId] = useState(initial.vectorStoreId);
   const [model, setModel] = useState(initial.model);
   const [temperature, setTemperature] = useState(String(initial.temperature));
@@ -228,8 +241,13 @@ export function AgentEditor({
       brand,
       country,
       whatsappNumber,
+      provider,
       callbellChannelUuid: channelUuid,
       callbellApiKey: apiKey,
+      kapsoPhoneNumberId,
+      kapsoApiKey,
+      kapsoWebhookSecret,
+      kapsoTemplateLanguage,
       logisticsTeamUuid: teamUuid,
       // En modo "create" el store se autogenera: guardamos vacío (null) para que el loader lo cree.
       vectorStoreId: catalogMode === "create" ? "" : vectorStoreId,
@@ -313,8 +331,34 @@ export function AgentEditor({
   const keyPlaceholder = initial.hasCallbellApiKey
     ? `•••• ${initial.callbellApiKeyLast4 ?? ""} — deja vacío para conservarla`
     : "Pega la API key de la cuenta de Callbell de esta marca";
+  const kapsoKeyPlaceholder = initial.hasKapsoApiKey
+    ? "•••• — deja vacío para conservarla"
+    : "Pega la API key del proyecto de Kapso";
+  const kapsoSecretPlaceholder = initial.hasKapsoWebhookSecret
+    ? "•••• — deja vacío para conservarlo"
+    : "El secret_key del webhook de Kapso (usa el global si se deja vacío)";
 
   const locked = isPending || createdId !== null;
+
+  // `h-11` = 44px: es el touch target mínimo de las reglas de UI del proyecto.
+  const providerBtn = (id: MessagingProviderId, label: string) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={provider === id}
+      onClick={() => {
+        dirty();
+        setProvider(id);
+      }}
+      className={`inline-flex h-11 items-center rounded-md border px-4 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
+        provider === id
+          ? "border-slate-900 bg-slate-900 text-white"
+          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   const modeBtn = (mode: CatalogMode, label: string) => (
     <button
@@ -413,11 +457,25 @@ export function AgentEditor({
         </div>
       </div>
 
-      {/* Enrutamiento Callbell */}
+      {/* Proveedor de WhatsApp + enrutamiento (ADR-0056) */}
       <fieldset className="grid gap-4 sm:grid-cols-2">
         <legend className="mb-1 text-sm font-semibold text-slate-700">
-          Enrutamiento y Callbell
+          Proveedor de WhatsApp y enrutamiento
         </legend>
+
+        <div className="sm:col-span-2">
+          <span className={labelCls}>Proveedor</span>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Proveedor de WhatsApp">
+            {providerBtn("callbell", "Callbell")}
+            {providerBtn("kapso", "Kapso")}
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Por acá entran y salen los mensajes de este agente. Los dos conviven: puedes tener
+            una marca en Callbell y otra en Kapso al mismo tiempo. El resto del agente (prompt,
+            catálogo, horario, retargets, pagos) funciona igual en ambos.
+          </p>
+        </div>
+
         <div>
           <label htmlFor="wa" className={labelCls}>
             Número de WhatsApp (E.164 sin +)
@@ -433,57 +491,154 @@ export function AgentEditor({
             placeholder="5215555555555"
           />
         </div>
-        <div>
-          <label htmlFor="chan" className={labelCls}>
-            Callbell channel_uuid
-          </label>
-          <input
-            id="chan"
-            value={channelUuid}
-            onChange={(e) => {
-              dirty();
-              setChannelUuid(e.target.value);
-            }}
-            className={monoCls}
-            placeholder="UUID del canal de esta línea"
-          />
-        </div>
-        <div className="sm:col-span-2">
-          <label htmlFor="key" className={labelCls}>
-            Callbell API key {initial.hasCallbellApiKey ? "(configurada)" : "(usa la global si se deja vacía)"}
-          </label>
-          <input
-            id="key"
-            type="password"
-            autoComplete="new-password"
-            value={apiKey}
-            onChange={(e) => {
-              dirty();
-              setApiKey(e.target.value);
-            }}
-            className={monoCls}
-            placeholder={keyPlaceholder}
-          />
-          <p className="mt-1 text-xs text-slate-400">
-            Solo si esta marca vive en otra cuenta de Callbell. Si se deja vacía, se usa la key
-            global del proyecto. No se muestra por seguridad.
-          </p>
-        </div>
-        <div>
-          <label htmlFor="team" className={labelCls}>
-            Equipo de logística (team_uuid)
-          </label>
-          <input
-            id="team"
-            value={teamUuid}
-            onChange={(e) => {
-              dirty();
-              setTeamUuid(e.target.value);
-            }}
-            className={monoCls}
-            placeholder="UUID del equipo (handoff)"
-          />
-        </div>
+
+        {provider === "callbell" ? (
+          <>
+            <div>
+              <label htmlFor="chan" className={labelCls}>
+                Callbell channel_uuid
+              </label>
+              <input
+                id="chan"
+                value={channelUuid}
+                onChange={(e) => {
+                  dirty();
+                  setChannelUuid(e.target.value);
+                }}
+                className={monoCls}
+                placeholder="UUID del canal de esta línea"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="key" className={labelCls}>
+                Callbell API key{" "}
+                {initial.hasCallbellApiKey ? "(configurada)" : "(usa la global si se deja vacía)"}
+              </label>
+              <input
+                id="key"
+                type="password"
+                autoComplete="new-password"
+                value={apiKey}
+                onChange={(e) => {
+                  dirty();
+                  setApiKey(e.target.value);
+                }}
+                className={monoCls}
+                placeholder={keyPlaceholder}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Solo si esta marca vive en otra cuenta de Callbell. Si se deja vacía, se usa la key
+                global del proyecto. No se muestra por seguridad.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="team" className={labelCls}>
+                Equipo de logística (team_uuid)
+              </label>
+              <input
+                id="team"
+                value={teamUuid}
+                onChange={(e) => {
+                  dirty();
+                  setTeamUuid(e.target.value);
+                }}
+                className={monoCls}
+                placeholder="UUID del equipo (handoff)"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <label htmlFor="kapso-pn" className={labelCls}>
+                Kapso Phone Number ID
+              </label>
+              <input
+                id="kapso-pn"
+                value={kapsoPhoneNumberId}
+                onChange={(e) => {
+                  dirty();
+                  setKapsoPhoneNumberId(e.target.value);
+                }}
+                className={monoCls}
+                placeholder="647015955153740"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                El <strong>Meta Phone Number ID</strong> del número (no el teléfono). Kapso lo
+                lista en WhatsApp → Phone numbers. Es lo que enruta el inbound a este agente.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="kapso-lang" className={labelCls}>
+                Idioma de las plantillas
+              </label>
+              <input
+                id="kapso-lang"
+                value={kapsoTemplateLanguage}
+                onChange={(e) => {
+                  dirty();
+                  setKapsoTemplateLanguage(e.target.value);
+                }}
+                className={monoCls}
+                placeholder="es_CO"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                En Kapso las plantillas se piden por nombre + idioma. Este es el idioma por
+                defecto; una plantilla puntual puede forzar otro con <code>nombre:en_US</code>.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="kapso-key" className={labelCls}>
+                Kapso API key {initial.hasKapsoApiKey ? "(configurada)" : ""}
+              </label>
+              <input
+                id="kapso-key"
+                type="password"
+                autoComplete="new-password"
+                value={kapsoApiKey}
+                onChange={(e) => {
+                  dirty();
+                  setKapsoApiKey(e.target.value);
+                }}
+                className={monoCls}
+                placeholder={kapsoKeyPlaceholder}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                API key del proyecto de Kapso (Integrations → API keys). No se muestra por
+                seguridad.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="kapso-secret" className={labelCls}>
+                Secreto del webhook {initial.hasKapsoWebhookSecret ? "(configurado)" : ""}
+              </label>
+              <input
+                id="kapso-secret"
+                type="password"
+                autoComplete="new-password"
+                value={kapsoWebhookSecret}
+                onChange={(e) => {
+                  dirty();
+                  setKapsoWebhookSecret(e.target.value);
+                }}
+                className={monoCls}
+                placeholder={kapsoSecretPlaceholder}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                El mismo <code>secret_key</code> con el que registraste el webhook en Kapso. Si se
+                deja vacío se usa el global (<code>KAPSO_WEBHOOK_SECRET</code>).{" "}
+                <strong>Es obligatorio</strong>: sin ninguno de los dos, los mensajes entrantes se
+                rechazan (el webhook es público y sin firma cualquiera podría hacer que el bot
+                escriba desde tu número).
+              </p>
+            </div>
+            <p className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              En Kapso el <strong>handoff</strong> no reasigna a un equipo (no existen los
+              equipos de Callbell): la conversación igual queda en <em>handed_off</em> y la IA se
+              calla, pero el reparto al humano lo haces desde el inbox de Kapso.
+            </p>
+          </>
+        )}
       </fieldset>
 
       {/* Catálogo (productos) */}

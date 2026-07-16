@@ -5,9 +5,10 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods } from "@/lib/agent/paymentMethods";
+import { normalizeProviderId } from "@/lib/messaging/types";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
-import { sendText, credsFromEnv } from "@/lib/callbell/sender";
-import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
+import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
+import { loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
 import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
 import type { CallRequestStatus, Json } from "@/lib/supabase/types";
@@ -454,9 +455,10 @@ function cleanTemperature(t: number): number {
 }
 
 /**
- * Construye el patch de columnas de un agente a partir del formulario. La API key
- * es write-only: solo se incluye si se pegó una nueva (vacío = no cambiar), para
- * no borrar el secreto sin querer. Ver docs/16, ADR-0023.
+ * Construye el patch de columnas de un agente a partir del formulario. Los secretos
+ * (API keys, secreto del webhook) son write-only: solo se incluyen si se pegó uno
+ * nuevo (vacío = no cambiar), para no borrarlos sin querer. Ver docs/16, ADR-0023;
+ * docs/24, ADR-0056.
  */
 function agentPatch(input: AgentEditInput): Record<string, unknown> {
   const patch: Record<string, unknown> = {
@@ -464,7 +466,10 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
     brand: textOrNull(input.brand),
     country: textOrNull(input.country),
     whatsapp_number: textOrNull(input.whatsappNumber),
+    provider: normalizeProviderId(input.provider),
     callbell_channel_uuid: textOrNull(input.callbellChannelUuid),
+    kapso_phone_number_id: textOrNull(input.kapsoPhoneNumberId),
+    kapso_template_language: textOrNull(input.kapsoTemplateLanguage),
     logistics_team_uuid: textOrNull(input.logisticsTeamUuid),
     vector_store_id: textOrNull(input.vectorStoreId),
     model: textOrNull(input.model) ?? "gpt-5.1",
@@ -482,7 +487,26 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
   };
   const newKey = input.callbellApiKey.trim();
   if (newKey.length > 0) patch.callbell_api_key = newKey;
+  const newKapsoKey = input.kapsoApiKey.trim();
+  if (newKapsoKey.length > 0) patch.kapso_api_key = newKapsoKey;
+  const newKapsoSecret = input.kapsoWebhookSecret.trim();
+  if (newKapsoSecret.length > 0) patch.kapso_webhook_secret = newKapsoSecret;
   return patch;
+}
+
+/**
+ * Traduce el 42703 (columna inexistente) de un guardado de agente a algo accionable.
+ *
+ * La LECTURA de agentes sobrevive sin la migración 0026 (`selectAgents` reintenta con
+ * las columnas viejas), así que el inbound nunca se cae. La ESCRITURA no puede hacer lo
+ * mismo: reintentar sin `provider` guardaría el agente **ignorando en silencio** el
+ * proveedor que el operador acaba de elegir, que es peor que fallar. Así que falla, pero
+ * diciendo exactamente qué hacer — mismo criterio que `setHotmartAgent` con la 0020.
+ */
+function missingProviderMigration(error: { code?: string }): string | null {
+  return error.code === "42703"
+    ? "Falta aplicar la migración 0026 (provider + credenciales de Kapso) en Supabase."
+    : null;
 }
 
 /**
@@ -499,7 +523,7 @@ export async function saveAgent(agentId: string, input: AgentEditInput): Promise
     .from("agents")
     .update(agentPatch(input) as never)
     .eq("id", agentId);
-  if (error) throw new Error(`saveAgent: ${error.message}`);
+  if (error) throw new Error(`saveAgent: ${missingProviderMigration(error) ?? error.message}`);
 
   await supabase.from("events_log").insert({
     conversation_id: null,
@@ -526,7 +550,7 @@ export async function createAgent(input: AgentEditInput): Promise<string> {
     .insert(agentPatch(input) as never)
     .select("id")
     .single();
-  if (error) throw new Error(`createAgent: ${error.message}`);
+  if (error) throw new Error(`createAgent: ${missingProviderMigration(error) ?? error.message}`);
 
   await supabase.from("events_log").insert({
     conversation_id: null,
@@ -600,12 +624,12 @@ export async function sendManualMessage(conversationId: string, text: string): P
   if (contactErr) throw new Error(`sendManualMessage contact: ${contactErr.message}`);
   if (!contact?.phone) throw new Error("El contacto no tiene teléfono.");
 
-  // Credenciales de Callbell del agente de la conversación (cuenta/canal correctos).
+  // Proveedor del agente de la conversación (Callbell o Kapso, con sus credenciales).
   const agent = await loadAgentForConversation(supabase, convo.agent_id);
-  const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
+  const messaging = agent ? providerForAgent(agent) : callbellProviderFromEnv();
 
-  // Enviar por Callbell (lanza si la API responde error, p. ej. fuera de la ventana 24h).
-  const sent = await sendText(creds, contact.phone, clean, {
+  // Enviar (lanza si la API responde error, p. ej. fuera de la ventana 24h).
+  const sent = await messaging.sendText(contact.phone, clean, {
     metadata: { conversation_id: conversationId, source: "dashboard-manual" },
   });
 

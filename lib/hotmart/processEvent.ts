@@ -1,8 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
-import { sendTemplate, type CallbellCreds } from "@/lib/callbell/sender";
-import { loadAgent, agentCallbellCreds, findHotmartAgentId } from "@/lib/agent/agents";
+import type { MessagingProvider } from "@/lib/messaging/types";
+import { loadAgent, providerForAgent, findHotmartAgentId } from "@/lib/agent/agents";
 import type { Database, Json } from "@/lib/supabase/types";
 import type { HotmartWebhookPayload, ExtractedCartData } from "./types";
 import { extractCartData, isCartAbandonmentEvent } from "./types";
@@ -207,10 +207,14 @@ export async function processHotmartCartAbandonment(
     };
   }
 
-  const creds = agentCallbellCreds(agent);
+  // Proveedor del agente designado para Hotmart: Callbell o Kapso. Es el único
+  // punto que cambia al mover la línea de carritos de un proveedor al otro; el
+  // resto del flujo (idempotencia, plantilla por curso, marca `hotmart_flow`, tag
+  // `hotmart-recovery` y el contexto de la respuesta) es idéntico. Ver ADR-0056.
+  const messaging = providerForAgent(agent);
   const sendResult = await sendHotmartTemplate(
     supabase,
-    creds,
+    messaging,
     conversationId,
     data,
     templateUuid,
@@ -388,7 +392,7 @@ interface SendTemplateResult {
  */
 async function sendHotmartTemplate(
   supabase: DB,
-  creds: CallbellCreds,
+  messaging: MessagingProvider,
   conversationId: string,
   data: ExtractedCartData,
   templateUuid: string,
@@ -405,7 +409,7 @@ async function sendHotmartTemplate(
         ? messageText
         : `[Plantilla Hotmart: ${data.productName || "Carrito abandonado"}]`;
 
-    const sent = await sendTemplate(creds, data.phone, templateUuid, {
+    const sent = await messaging.sendTemplate(data.phone, templateUuid, {
       text: messageText.trim().length > 0 ? messageText : undefined,
       templateValues,
       metadata: { conversation_id: conversationId, source: "hotmart" },

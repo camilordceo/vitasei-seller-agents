@@ -128,6 +128,30 @@ export const env = {
     return optional("CALLBELL_WHATSAPP_CHANNEL_UUID");
   },
 
+  // Kapso — segundo proveedor de WhatsApp (docs/24, ADR-0056). Todo es OPCIONAL:
+  // la configuración real es POR AGENTE desde el dashboard (`agents.provider` +
+  // `agents.kapso_*`), porque cada marca vive en su propio proyecto de Kapso. Estas
+  // env son solo el fallback/atajo para el primer agente mientras se pegan los IDs,
+  // igual que las de Callbell. Sin ningún agente en Kapso, nada de esto se usa.
+  get KAPSO_API_KEY() {
+    return optional("KAPSO_API_KEY");
+  },
+  // Meta Phone Number ID del número (Kapso es un proxy de la Cloud API de Meta):
+  // va en el path del envío y es el campo por el que se enruta el inbound.
+  get KAPSO_PHONE_NUMBER_ID() {
+    return optional("KAPSO_PHONE_NUMBER_ID");
+  },
+  // `secret_key` con el que se registró el webhook en Kapso (firma HMAC SHA256).
+  // Vacío = no se valida la firma (solo dev). Ver docs/24 §Firma.
+  get KAPSO_WEBHOOK_SECRET() {
+    return optional("KAPSO_WEBHOOK_SECRET");
+  },
+  // Idioma por defecto de las plantillas de Kapso (se referencian por nombre +
+  // idioma, no por uuid como en Callbell). Default `es`.
+  get KAPSO_TEMPLATE_LANGUAGE() {
+    return optional("KAPSO_TEMPLATE_LANGUAGE");
+  },
+
   // Número de WhatsApp de la IA (E.164 sin '+'). Multi-agente (docs/16, ADR-0023):
   // el enrutamiento vive en la tabla `agents`; esta env es el FALLBACK del agente
   // seed (para no caer producción mientras se pegan los IDs en el dashboard).

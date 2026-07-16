@@ -13,6 +13,65 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Kapso como segundo proveedor de WhatsApp, en paralelo a Callbell** (ADR-0056/0057/0058;
+  `agents.provider` + columnas `kapso_*`, migración `0026`). Todo el backend hablaba **solo con
+  Callbell**: el envío estaba cableado en seis lugares, había un solo webhook y seis columnas con
+  su nombre. Ahora **cada agente elige su proveedor** y los dos **conviven en el mismo deploy**:
+  una marca sigue en Callbell mientras la línea de **Hotmart** opera en Kapso, y mover una línea
+  de un proveedor al otro es **cambiar un selector en el dashboard**, no un deploy (volver atrás,
+  igual). El hallazgo que definió el diseño: **Kapso no es un proveedor tipo Callbell, es un proxy
+  Meta-compatible** —sus envíos son literalmente la forma de la Cloud API de Meta
+  (`messaging_product`/`type`/`text.body`/`template.components`) con auth `X-API-Key`—.
+  - **Un cerebro, dos transportes.** El envío pasa a ser un **puerto** (`MessagingProvider`) con
+    dos adaptadores. El cerebro **no se tocó**: debounce, gate anti-alucinación, cierre de venta,
+    retargets, reactivaciones, videos y Hotmart funcionan en Kapso **sin reescribir su lógica**
+    (se descartó el fork paralelo, que duplicaba ~1.500 líneas y divergía en semanas). El
+    adaptador de Callbell es una **envoltura delgada** del sender actual: su comportamiento en el
+    cable es idéntico y los 251 tests existentes pasaron **sin modificar ninguno**.
+  - **Webhook** `/api/webhooks/kapso` → mismo `ingestInboundMessage` + `runDebouncedReply`. Lee el
+    cuerpo **crudo** (`req.text()`) porque la firma se calcula sobre esos bytes, enruta por
+    `phone_number_id` y tolera payloads **sueltos y en lote**.
+  - **Enrutamiento por proveedor** (`matchAgent` / `matchKapsoAgent`): durante la prueba en
+    paralelo el mismo `whatsapp_number` puede existir en dos agentes y sin el filtro el respaldo
+    por número **cruzaría las líneas** (un inbound de Callbell contestado con las credenciales de
+    Kapso).
+  - **409 "in-flight"**: Kapso rechaza un envío si el anterior al mismo destinatario sigue en
+    vuelo (Callbell no). Como el flujo manda texto + N imágenes seguidas, el sender **reintenta
+    con backoff**.
+  - **Ambigüedades de la doc, blindadas**: la firma se valida contra el cuerpo crudo **y** contra
+    `JSON.stringify` (su doc dice una cosa y sus ejemplos hacen otra; ambas exigen el secreto), y
+    la descarga de media intenta **anónima** y solo reintenta con la key ante 401/403 (no está
+    documentado si `media_url` requiere auth). Anotadas en `docs/24` §Pendientes de verificar.
+  - **Firma obligatoria (fail-closed)**, a diferencia de Callbell: sin secreto configurado el
+    webhook **rechaza**. El endpoint es público y escribe en la base, gasta en OpenAI y **manda
+    WhatsApps desde el número del negocio**; sin firma, cualquiera que conozca la URL podría
+    hacer que el bot le escriba a quien quiera. La firma se valida **antes de la primera
+    escritura** y los rechazos van a los logs de Vercel (no a `events_log`, que sería un vector
+    de escritura sin autenticar).
+  - **Audio gratis** (ADR-0057): Kapso ya manda la nota de voz **transcrita**; se guarda como el
+    `content` en la ingesta y el cerebro **no llama a Whisper** (solo transcribe si está vacío),
+    sin ninguna rama "si es Kapso". Whisper queda de respaldo automático.
+  - **Debounce propio** (ADR-0058): se descartó el buffering nativo de Kapso para no tener dos
+    comportamientos distintos en la pieza más delicada del flujo (y porque su ACK de 10s obliga
+    igual a `waitUntil`). El parser tolera lotes por si alguien lo enciende en su dashboard.
+  - **Reuso de columnas** documentado en la base (`comment on column`):
+    `messages.callbell_message_uuid` guarda el id del mensaje **del proveedor** (uuid | `wamid`) y
+    `hotmart_templates.template_uuid` / `agents.reactivation_template_7d/15d`, la **referencia de
+    plantilla del proveedor** (uuid en Callbell | `nombre`/`nombre:idioma` en Kapso). Se prefirió
+    a renombrar (~15 archivos de la ruta crítica, cero ganancia funcional).
+  - **Handoff**: Kapso no tiene equipos ni bot que apagar (`supportsHandoff = false`). **Sigue
+    funcionando** —lo que calla a la IA es `conversations.status = 'handed_off'`, no el
+    proveedor—; lo que se pierde es la reasignación en la bandeja del proveedor (en Kapso se hace
+    desde su Inbox). El editor lo avisa.
+  - **Dashboard**: selector de proveedor con campos condicionales y secretos **write-only**;
+    proveedor visible en la lista de agentes y en el selector de Hotmart; el campo de plantilla
+    dejó de decir "UUID de Callbell". `findHotmartAgentId` **avisa** si quedan dos agentes
+    marcados en vez de resolver el empate en silencio (peligroso justo al mover la línea).
+  - **Resiliente al orden de despliegue**: `selectAgents` reintenta sin las columnas nuevas ante
+    `42703`, así que sin la migración `0026` todo cae a `callbell` y se comporta como hoy.
+  - Documentación: `docs/24-integracion-kapso.md` (tabla comparativa, payloads, alta del webhook,
+    prueba de humo) y ADR-0056/0057/0058. Verificado: typecheck, build y **302/302 tests** (51
+    nuevos), sin regresiones en Callbell.
 - **Métodos de pago (tags de compra) configurables por agente** (ADR-0055; `agents.payment_methods`
   jsonb + `fulfillment_method` enum→texto, migración `0025`). Antes los tags de compra estaban
   cableados (`#compra-contra-entrega`→cod, `#addi`→addi) e iguales para todos; un agente de otro
@@ -62,6 +121,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   Nueva env `RETARGET_STAGE3_MS` (default 23h).
 
 ### Fixed
+- **La credencial de descarga de adjuntos podía filtrarse a un host ajeno** (ADR-0056; afectaba
+  también a **Callbell**, donde el agujero existía desde ADR-0022). `fetchMedia` probaba el
+  patrón de host contra la **URL completa**, así que `/callbell/i` lo satisfacía cualquier URL
+  con "callbell" en el path o el query (`https://atacante.com/x?ref=callbell`). Como la URL del
+  adjunto viene **del webhook**, bastaba con que ese host respondiera 401 para que le
+  mandáramos el bearer de Callbell (o la API key de Kapso). Ahora el patrón se compara contra el
+  **hostname**, y una URL no parseable nunca recibe credencial. El de Callbell se mantiene laxo
+  a propósito (no está confirmado desde qué host sirve sus adjuntos, podría ser un CDN); el de
+  Kapso ancla el dominio. Cubierto con tests.
 - **Costo IA ya no topa en 1000 eventos** (parte de ADR-0053): las lecturas de `events_log` en
   `getAiCostReport` pasan a **paginadas** (`fetchAllRows`). Era la tabla que más crece (un evento
   por respuesta) y con >1000 filas PostgREST cortaba en seco, **subcontando** el costo real; el

@@ -2,7 +2,12 @@
 
 > La plataforma pasa de **un solo agente** a **muchos agentes**. Agregar Vitasei USA/México
 > (o cualquier marca/número) es "pegar unos IDs" en el dashboard: su número empieza a llegar y
-> a responder con **su propia IA, catálogo y cuenta de Callbell**. Sin tocar código.
+> a responder con **su propia IA, catálogo y cuenta del proveedor**. Sin tocar código.
+>
+> **Desde ADR-0056** cada agente además elige su **proveedor de WhatsApp** (`agents.provider`:
+> Callbell o **Kapso**) y guarda las credenciales de ese proveedor. Los dos conviven en el mismo
+> deploy. Este documento describe el enrutamiento y la config común; lo específico de Kapso
+> (webhook, firma, plantillas por nombre, handoff) está en **`docs/24-integracion-kapso.md`**.
 
 ## 1. Problema
 

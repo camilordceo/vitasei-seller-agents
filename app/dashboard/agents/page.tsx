@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { getAgents } from "@/lib/dashboard/queries";
+import { providerLabel } from "@/lib/messaging/types";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Sección Agentes (multi-marca): lista de agentes disponibles + botón para crear.
- * Cada agente enruta un número de WhatsApp a su propia IA + cuenta de Callbell.
- * Ver docs/16, ADR-0023.
+ * Cada agente enruta un número de WhatsApp a su propia IA + la cuenta de SU
+ * proveedor (Callbell o Kapso). Ver docs/16, ADR-0023; docs/24, ADR-0056.
  */
 export default async function AgentsPage() {
   const agents = await getAgents();
@@ -48,6 +49,17 @@ export default async function AgentsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-slate-900">{a.name}</span>
                     <AgentEnabledPill enabled={a.enabled} />
+                    {/* Por qué proveedor sale este agente: con dos líneas vivas a la
+                        vez, saberlo de un vistazo evita tocar la marca equivocada. */}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        a.provider === "kapso"
+                          ? "bg-indigo-50 text-indigo-700"
+                          : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {providerLabel(a.provider)}
+                    </span>
                     {a.brand || a.country ? (
                       <span className="text-xs text-slate-400">
                         {[a.brand, a.country].filter(Boolean).join(" · ")}
@@ -56,8 +68,16 @@ export default async function AgentsPage() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
                     <span className="font-mono">{a.whatsappNumber ?? "sin número"}</span>
-                    <span>{a.callbellChannelUuid ? "canal ✓" : "canal: env"}</span>
-                    <span>{a.hasCallbellApiKey ? "API key propia" : "API key: global"}</span>
+                    {a.provider === "kapso" ? (
+                      <span>
+                        {a.kapsoPhoneNumberId ? "phone number id ✓" : "falta phone number id"}
+                      </span>
+                    ) : (
+                      <>
+                        <span>{a.callbellChannelUuid ? "canal ✓" : "canal: env"}</span>
+                        <span>{a.hasCallbellApiKey ? "API key propia" : "API key: global"}</span>
+                      </>
+                    )}
                     <span>{a.vectorStoreId ? "catálogo ✓" : "catálogo: env"}</span>
                     <span className="font-mono">{a.model}</span>
                   </div>

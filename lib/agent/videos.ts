@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sendVideo, type CallbellCreds } from "@/lib/callbell/sender";
+import type { MessagingProvider } from "@/lib/messaging/types";
 import { matchVideos, resolveRulesForAgent, type VideoRule } from "./videoMatch";
 import type { Database, Json } from "@/lib/supabase/types";
 
@@ -8,8 +8,8 @@ type DB = SupabaseClient<Database>;
 
 /**
  * Videos por palabra clave (docs/20, ADR-0038). Cuando la RESPUESTA del bot
- * menciona una palabra configurada, se envía un video por Callbell después de la
- * respuesta. Best-effort: NADA de esto rompe el flujo de la respuesta.
+ * menciona una palabra configurada, se envía un video por el proveedor del agente
+ * después de la respuesta. Best-effort: NADA de esto rompe el flujo de la respuesta.
  */
 
 /**
@@ -85,15 +85,15 @@ async function loadSentVideoIds(supabase: DB, conversationId: string): Promise<S
 
 /**
  * Si el texto de la respuesta menciona una palabra configurada, envía el video
- * correspondiente por Callbell **la PRIMERA vez que la palabra aparece** en una
- * respuesta de la conversación, y **NO** en las siguientes que la mencionen: cada
- * video se manda **una sola vez por conversación** (marcador por id en
+ * correspondiente **la PRIMERA vez que la palabra aparece** en una respuesta de la
+ * conversación, y **NO** en las siguientes que la mencionen: cada video se manda
+ * **una sola vez por conversación** (marcador por id en
  * `events_log.keyword_video_sent`). Best-effort: cualquier fallo se loguea y se
  * sigue (nunca lanza). Se invoca tras enviar la respuesta normal (no en handoff).
  */
 export async function sendKeywordVideos(
   supabase: DB,
-  creds: CallbellCreds,
+  messaging: MessagingProvider,
   args: {
     conversationId: string;
     phone: string;
@@ -132,7 +132,7 @@ export async function sendKeywordVideos(
       // Caption PEGADO al video: va en el MISMO mensaje (content.text), no como un
       // texto aparte, para no mandar 3 mensajes al cliente. Ver docs/20.
       const caption = v.caption?.trim() || null;
-      const sent = await sendVideo(creds, phone, v.videoUrl, caption, { metadata });
+      const sent = await messaging.sendVideo(phone, v.videoUrl, caption, { metadata });
       await supabase.from("messages").insert({
         conversation_id: conversationId,
         direction: "outbound",

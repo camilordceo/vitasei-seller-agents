@@ -1,13 +1,13 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
-import { sendTemplate, credsFromEnv } from "@/lib/callbell/sender";
+import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
 import {
   loadAgentForConversation,
-  agentCallbellCreds,
   agentReactivationSettings,
   loadAgentReactivationSettings,
   loadReactivationImages,
+  providerForAgent,
 } from "@/lib/agent/agents";
 import { isAgentActiveNow } from "@/lib/agent/schedule";
 import { evaluateReactivation, planReactivations } from "@/lib/agent/reactivationPlan";
@@ -258,9 +258,11 @@ async function processReactivationRow(
     .maybeSingle();
   const firstName = (contact?.name ?? "").trim().split(/\s+/)[0] ?? "";
 
-  // Credenciales de Callbell del agente (cuenta/canal). La plantilla debe existir
-  // en esa cuenta. Fallback a env si no hay agente (datos legados).
-  const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
+  // Proveedor del agente (Callbell o Kapso). La plantilla debe existir en ESA
+  // cuenta: en Callbell `template_uuid` es un uuid suyo; en Kapso es el nombre de la
+  // plantilla aprobada en Meta. Fallback a Callbell por env si no hay agente
+  // (datos legados). Ver ADR-0056.
+  const messaging = agent ? providerForAgent(agent) : callbellProviderFromEnv();
 
   // Header de imagen de la plantilla de esta etapa (si el agente configuró una).
   // Consulta aparte y resiliente (no en AGENT_COLS): sin imagen → plantilla de solo
@@ -270,7 +272,7 @@ async function processReactivationRow(
     : { image7d: null, image15d: null };
   const imageUrl = row.stage === 1 ? images.image7d : images.image15d;
 
-  const sent = await sendTemplate(creds, row.phone, templateUuid as string, {
+  const sent = await messaging.sendTemplate(row.phone, templateUuid as string, {
     text: firstName,
     imageUrl,
     metadata: { conversation_id: row.conversation_id, reactivation_stage: row.stage },

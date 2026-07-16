@@ -10,15 +10,16 @@ import type { OrderDraft } from "@/lib/openai/extractOrder";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { prependContactContext } from "@/lib/agent/contactContext";
-import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
-import { toDataUrl } from "@/lib/callbell/media";
-import { fetchMedia } from "@/lib/callbell/mediaFetch";
+import { toDataUrl } from "@/lib/messaging/media";
+import { fetchMedia, type MediaAuth } from "@/lib/messaging/mediaFetch";
+import type { MessagingProvider } from "@/lib/messaging/types";
 import {
   loadAgentForConversation,
   loadPaymentMethods,
-  agentCallbellCreds,
+  agentMediaAuth,
   agentTeamUuid,
   agentVectorStoreId,
+  providerForAgent,
   type Agent,
 } from "@/lib/agent/agents";
 import { methodLabelMap, UNDECIDED_METHOD } from "@/lib/agent/paymentMethods";
@@ -347,7 +348,9 @@ export async function runDebouncedReply(args: DebounceArgs): Promise<void> {
     // El `previous_response_id` aporta el contexto previo. Ver docs/15.
     const openai = createOpenAIClient();
     const hotmartFlow = await readHotmartFlow(supabase, conversationId);
-    const content = await gatherPendingContent(supabase, openai, conversationId, hotmartFlow);
+    const content = await gatherPendingContent(supabase, openai, conversationId, hotmartFlow, {
+      mediaAuth: agentMediaAuth(agent),
+    });
     if (!content.hasContent) return; // nada que responder (ni texto ni media legible)
 
     await generateAndSend({
@@ -427,7 +430,9 @@ export async function regenerateReply(conversationId: string): Promise<void> {
   // típico —el bot nunca respondió— no hay outbound, así que entra todo el hilo.
   const openai = createOpenAIClient();
   const hotmartFlow = await readHotmartFlow(supabase, conversationId);
-  const content = await gatherPendingContent(supabase, openai, conversationId, hotmartFlow);
+  const content = await gatherPendingContent(supabase, openai, conversationId, hotmartFlow, {
+    mediaAuth: agentMediaAuth(agent),
+  });
   if (!content.hasContent)
     throw new Error("No hay mensajes del cliente pendientes por responder.");
 
@@ -470,6 +475,8 @@ async function gatherPendingContent(
   conversationId: string,
   /** ¿La conversación entró por el flujo de Hotmart? Anexa la marca al input de la IA. */
   hotmartFlow: boolean,
+  /** Credencial para bajar los adjuntos — depende del proveedor del agente (ADR-0056). */
+  opts: { mediaAuth: MediaAuth },
 ): Promise<PendingContent> {
   const { data: lastOut } = await supabase
     .from("messages")
@@ -501,6 +508,8 @@ async function gatherPendingContent(
 
     if (type === "audio") {
       // Nota de voz: transcribir (si no está ya) y usar el texto como del cliente.
+      // En Kapso el `content` suele venir lleno desde la ingesta (su webhook trae la
+      // transcripción hecha), así que esta rama no llama a Whisper. Ver ADR-0057.
       let transcript = content;
       if (!transcript && m.media_url && mediaOn) {
         transcript = await transcribeAudioAndPersist(
@@ -509,6 +518,7 @@ async function gatherPendingContent(
           conversationId,
           m.id,
           m.media_url,
+          opts.mediaAuth,
         );
       }
       if (transcript) textParts.push(transcript);
@@ -520,7 +530,7 @@ async function gatherPendingContent(
       // Imagen: caption (si vino) + la imagen como visión.
       if (content) textParts.push(content);
       if (m.media_url && mediaOn) {
-        const dataUrl = await fetchImageDataUrl(supabase, conversationId, m.media_url);
+        const dataUrl = await fetchImageDataUrl(supabase, conversationId, m.media_url, opts.mediaAuth);
         if (dataUrl) imageDataUrls.push(dataUrl);
         else
           textParts.push(
@@ -573,9 +583,10 @@ async function transcribeAudioAndPersist(
   conversationId: string,
   messageId: string,
   url: string,
+  mediaAuth: MediaAuth,
 ): Promise<string> {
   try {
-    const result = await transcribeAudioUrl(openai, url);
+    const result = await transcribeAudioUrl(openai, url, mediaAuth);
     const transcript = result?.text ?? "";
     if (transcript) {
       await supabase.from("messages").update({ content: transcript }).eq("id", messageId);
@@ -622,9 +633,10 @@ async function fetchImageDataUrl(
   supabase: DB,
   conversationId: string,
   url: string,
+  mediaAuth: MediaAuth,
 ): Promise<string | null> {
   try {
-    const media = await fetchMedia(url);
+    const media = await fetchMedia(url, { auth: mediaAuth });
     if (!media || media.kind !== "image") {
       await supabase.from("events_log").insert({
         conversation_id: conversationId,
@@ -664,9 +676,9 @@ interface GenerateContext {
 }
 
 /**
- * Generar (1× Responses) → parsear tags → gate → enviar por Callbell → S5
- * (método/orden/handoff). El envío de imágenes de los `#ID` válidos depende de
- * que el SKU exista en `products`.
+ * Generar (1× Responses) → parsear tags → gate → enviar por el proveedor del
+ * agente (Callbell o Kapso) → S5 (método/orden/handoff). El envío de imágenes de
+ * los `#ID` válidos depende de que el SKU exista en `products`.
  */
 async function generateAndSend(ctx: GenerateContext): Promise<void> {
   const {
@@ -683,8 +695,9 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     imageDataUrls,
   } = ctx;
 
-  // Credenciales de Callbell de ESTE agente (API key + canal; fallback a env).
-  const creds = agentCallbellCreds(agent);
+  // Adaptador de ESTE agente: Callbell o Kapso. De acá para abajo el flujo no sabe
+  // por cuál de los dos sale (ADR-0056).
+  const messaging = providerForAgent(agent);
 
   // Métodos de pago del agente (tags de compra por mercado: contra-entrega/addi en
   // CO, Zelle en EE.UU., etc.). Resiliente a que falte la columna. Ver ADR-0055.
@@ -863,7 +876,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // bot (solo es una solicitud); un fallo aquí NUNCA rompe la respuesta. Ver ADR-0034.
   if (parsed.tags.llamada) {
     try {
-      await createCallRequestAndNotify(supabase, creds, {
+      await createCallRequestAndNotify(supabase, messaging, {
         conversationId,
         contactId,
         phone,
@@ -1010,7 +1023,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
 
       // Aviso al dueño: nueva venta con cliente + resumen de la orden. Best-effort:
       // un fallo aquí NUNCA rompe el flujo del pedido (se loguea y sigue).
-      await notifyOwnerOfSale(supabase, creds, conversationId, {
+      await notifyOwnerOfSale(supabase, messaging, conversationId, {
         clientPhone: phone,
         orderId: order.id,
         method,
@@ -1034,8 +1047,11 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
 
   if (isHandoff) {
     // Handoff: solo texto (reasigna + apaga el bot). Sin imágenes: se cierra.
+    // `teamUuid`/`botStatus` solo los honra Callbell; Kapso no tiene equipos y los
+    // ignora. Lo que de verdad calla a NUESTRA IA es el `status = 'handed_off'` que
+    // se escribe más abajo, así que el handoff funciona igual en los dos. Ver ADR-0056.
     if (textToSend.length > 0) {
-      const sent = await sendText(creds, phone, textToSend, {
+      const sent = await messaging.sendText(phone, textToSend, {
         ...meta,
         teamUuid: agentTeamUuid(agent),
         botStatus: "bot_end",
@@ -1077,7 +1093,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       const [first, ...rest] = validImages;
       // La primera imagen lleva el texto como caption → reutilizamos el mensaje
       // outbound (que ya guardaba el texto) marcándolo como imagen.
-      const sent = await sendImage(creds, phone, first.imageUrl, textToSend, meta);
+      const sent = await messaging.sendImage(phone, first.imageUrl, textToSend, meta);
       await supabase
         .from("messages")
         .update({ type: "image", media_url: first.imageUrl, callbell_message_uuid: sent.uuid })
@@ -1094,12 +1110,12 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       });
       // Imágenes adicionales: mensajes aparte con el nombre del producto.
       for (const img of rest) {
-        await sendProductImage(supabase, creds, conversationId, phone, img, meta);
+        await sendProductImage(supabase, messaging, conversationId, phone, img, meta);
       }
     } else {
       // Texto (si hay) como su propio mensaje.
       if (textToSend.length > 0) {
-        const sent = await sendText(creds, phone, textToSend, meta);
+        const sent = await messaging.sendText(phone, textToSend, meta);
         await supabase
           .from("messages")
           .update({ callbell_message_uuid: sent.uuid })
@@ -1112,7 +1128,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       }
       // Imágenes por separado (con el nombre del producto como caption).
       for (const img of validImages) {
-        await sendProductImage(supabase, creds, conversationId, phone, img, meta);
+        await sendProductImage(supabase, messaging, conversationId, phone, img, meta);
       }
     }
 
@@ -1121,8 +1137,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     // info extra (solo marcan el pago y generan la orden). Ver ADR-0055.
     if (parsed.tags.paymentMethod === "addi" && env.ADDI_LINK) {
       const addiLink = env.ADDI_LINK;
-      const sent = await sendText(
-        creds,
+      const sent = await messaging.sendText(
         phone,
         `Puedes financiar tu compra con Addi aquí: ${addiLink}`,
         meta,
@@ -1138,7 +1153,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     // configurada (ej. "magnesio"), enviar el video correspondiente tras la
     // respuesta — una sola vez por conversación. Best-effort (no rompe nada).
     // Ver docs/20, ADR-0038.
-    await sendKeywordVideos(supabase, creds, {
+    await sendKeywordVideos(supabase, messaging, {
       conversationId,
       phone,
       agentId: agent.id,
@@ -1202,13 +1217,13 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
  */
 async function sendProductImage(
   supabase: DB,
-  creds: CallbellCreds,
+  messaging: MessagingProvider,
   conversationId: string,
   phone: string,
   img: { sku: string; imageUrl: string; name: string | null },
   opts: { metadata?: Record<string, unknown> },
 ): Promise<void> {
-  const sent = await sendImage(creds, phone, img.imageUrl, img.name, opts);
+  const sent = await messaging.sendImage(phone, img.imageUrl, img.name, opts);
   await supabase.from("messages").insert({
     conversation_id: conversationId,
     direction: "outbound",
@@ -1235,7 +1250,7 @@ async function sendProductImage(
  */
 async function createCallRequestAndNotify(
   supabase: DB,
-  creds: CallbellCreds,
+  messaging: MessagingProvider,
   info: {
     conversationId: string;
     contactId: string;
@@ -1288,7 +1303,7 @@ async function createCallRequestAndNotify(
     contactName: contact?.name ?? null,
     brand,
   });
-  const sent = await sendText(creds, ownerPhone, text, {
+  const sent = await messaging.sendText(ownerPhone, text, {
     metadata: { conversation_id: conversationId, call_request_notification: true },
   });
   await supabase.from("events_log").insert({
@@ -1299,8 +1314,8 @@ async function createCallRequestAndNotify(
 }
 
 /**
- * Envía el aviso de venta al dueño (`SALES_NOTIFY_PHONE`) por el Callbell del
- * agente que hizo la venta. Best-effort: loguea el desenlace y JAMÁS lanza.
+ * Envía el aviso de venta al dueño (`SALES_NOTIFY_PHONE`) por el MISMO proveedor
+ * del agente que hizo la venta. Best-effort: loguea el desenlace y JAMÁS lanza.
  *
  * OJO (WhatsApp): es un mensaje libre → solo se ENTREGA dentro de la ventana de
  * 24h desde que el dueño le escribió al número del negocio. Para entrega
@@ -1308,7 +1323,7 @@ async function createCallRequestAndNotify(
  */
 async function notifyOwnerOfSale(
   supabase: DB,
-  creds: CallbellCreds,
+  messaging: MessagingProvider,
   conversationId: string,
   info: {
     clientPhone: string;
@@ -1326,7 +1341,7 @@ async function notifyOwnerOfSale(
   if (!ownerPhone) return; // feature apagado (env vacío)
   try {
     const text = buildSaleNotification(info);
-    const sent = await sendText(creds, ownerPhone, text, {
+    const sent = await messaging.sendText(ownerPhone, text, {
       metadata: { conversation_id: conversationId, sales_notification: true },
     });
     await supabase.from("events_log").insert({

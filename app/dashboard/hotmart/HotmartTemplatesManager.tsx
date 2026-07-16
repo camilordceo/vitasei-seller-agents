@@ -9,8 +9,15 @@ import {
   type HotmartTemplateInput,
 } from "../actions";
 import type { HotmartTemplateRow } from "@/lib/dashboard/queries";
+import { providerLabel, type MessagingProviderId } from "@/lib/messaging/types";
 
-export type AgentOption = { id: string; name: string; brand: string | null };
+export type AgentOption = {
+  id: string;
+  name: string;
+  brand: string | null;
+  /** Proveedor del agente: define si `templateUuid` es un UUID o un nombre. Ver ADR-0056. */
+  provider: MessagingProviderId;
+};
 
 const inputCls =
   "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400";
@@ -73,23 +80,31 @@ function TemplateFields({
           {agents.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name}
-              {a.brand ? ` · ${a.brand}` : ""}
+              {a.brand ? ` · ${a.brand}` : ""} [{providerLabel(a.provider)}]
             </option>
           ))}
         </select>
       </div>
       <div>
         <label htmlFor={`${idPrefix}-uuid`} className={labelCls}>
-          UUID plantilla de Callbell
+          Plantilla del proveedor
         </label>
         <input
           id={`${idPrefix}-uuid`}
           type="text"
           value={value.templateUuid}
           onChange={(e) => onChange({ templateUuid: e.target.value })}
-          placeholder="UUID de la plantilla aprobada"
+          placeholder="UUID (Callbell) o nombre (Kapso)"
           className={`mt-1 font-mono ${inputCls}`}
         />
+        {/* El campo es el mismo para los dos proveedores porque el dato cumple la
+            misma función; lo que cambia es el formato. Ver ADR-0056. */}
+        <p className="mt-1 text-xs text-slate-400">
+          Según el proveedor del agente: en <strong>Callbell</strong> el UUID de la plantilla; en{" "}
+          <strong>Kapso</strong> su nombre aprobado en Meta (p. ej.{" "}
+          <code>carrito_abandonado</code>, o <code>carrito_abandonado:en_US</code> para forzar
+          idioma).
+        </p>
       </div>
       <div>
         <label htmlFor={`${idPrefix}-product`} className={labelCls}>
