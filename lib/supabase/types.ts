@@ -19,7 +19,13 @@ export type MessageType =
   | "video"
   | "document"
   | "other";
-export type FulfillmentMethod = "addi" | "cod" | "undecided";
+/**
+ * Método de pago/fulfillment. Desde ADR-0055 es TEXTO LIBRE: cada agente define
+ * sus métodos (Colombia: `cod`/`addi`; EE.UU.: `zelle`; etc.). `undecided` es el
+ * sentinela de "aún no elegido". El tipo se deja abierto (`string`) manteniendo las
+ * claves conocidas como pista para el autocompletado.
+ */
+export type FulfillmentMethod = "addi" | "cod" | "undecided" | (string & {});
 export type OrderStatus =
   | "pending_handoff"
   | "handed_off"
@@ -334,6 +340,7 @@ export interface Database {
           retarget_instruction_1: string | null;
           retarget_instruction_2: string | null;
           retarget_config: Json | null;
+          payment_methods: Json | null;
           created_at: string;
           updated_at: string;
         };
@@ -363,6 +370,7 @@ export interface Database {
           retarget_instruction_1?: string | null;
           retarget_instruction_2?: string | null;
           retarget_config?: Json | null;
+          payment_methods?: Json | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -392,6 +400,7 @@ export interface Database {
           retarget_instruction_1?: string | null;
           retarget_instruction_2?: string | null;
           retarget_config?: Json | null;
+          payment_methods?: Json | null;
           created_at?: string;
           updated_at?: string;
         };

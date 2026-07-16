@@ -15,11 +15,13 @@ import { toDataUrl } from "@/lib/callbell/media";
 import { fetchMedia } from "@/lib/callbell/mediaFetch";
 import {
   loadAgentForConversation,
+  loadPaymentMethods,
   agentCallbellCreds,
   agentTeamUuid,
   agentVectorStoreId,
   type Agent,
 } from "@/lib/agent/agents";
+import { methodLabelMap, UNDECIDED_METHOD } from "@/lib/agent/paymentMethods";
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { sendKeywordVideos } from "@/lib/agent/videos";
@@ -684,6 +686,11 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // Credenciales de Callbell de ESTE agente (API key + canal; fallback a env).
   const creds = agentCallbellCreds(agent);
 
+  // Métodos de pago del agente (tags de compra por mercado: contra-entrega/addi en
+  // CO, Zelle en EE.UU., etc.). Resiliente a que falte la columna. Ver ADR-0055.
+  const paymentMethods = await loadPaymentMethods(supabase, agent.id);
+  const methodLabels = methodLabelMap(paymentMethods);
+
   // Contexto del contacto: su nombre (de Callbell, en `contacts.name`) se antepone
   // al texto del turno para que la IA lo salude/trate por su nombre y adecúe el
   // género. Best-effort: si la lectura falla, se genera sin el contexto (nunca
@@ -756,8 +763,9 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     });
   }
 
-  // Parsear tags + cleanText (puro) y guardar el outbound + encadenar.
-  const parsed = parseReply(gen.text);
+  // Parsear tags + cleanText (puro) y guardar el outbound + encadenar. Los tags de
+  // pago se reconocen según los métodos configurados de ESTE agente.
+  const parsed = parseReply(gen.text, { paymentMethods });
 
   const { data: outbound, error: outErr } = await supabase
     .from("messages")
@@ -841,11 +849,12 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // --- S5: flujos de compra + handoff -------------------------------------
   const isHandoff = parsed.tags.ordenLista || parsed.tags.humano;
 
-  // #addi / #compra-contra-entrega → fijar el método en la conversación.
-  if (parsed.tags.addi || parsed.tags.cod) {
+  // Tag de pago del agente (contra-entrega/addi/zelle/…) → fijar el método elegido
+  // en la conversación. La clave `method` viene de la config del agente. Ver ADR-0055.
+  if (parsed.tags.paymentMethod) {
     await supabase
       .from("conversations")
-      .update({ fulfillment_method: parsed.tags.addi ? "addi" : "cod" })
+      .update({ fulfillment_method: parsed.tags.paymentMethod })
       .eq("id", conversationId);
   }
 
@@ -870,25 +879,25 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   }
 
   // RED DE SEGURIDAD (ADR-0031 → mejorada en ADR-0039): a veces el modelo CIERRA
-  // la venta pero olvida `#orden-lista` y solo emite `#compra-contra-entrega`/`#addi`.
-  // Antes la orden solo se inferían con una frase de confirmación MUY estrecha, así
-  // que muchos cierres se perdían (no se creaba orden ni se avisaba). Ahora se
-  // infiere el cierre cuando el método está decidido Y hay señal: se acaba de elegir
-  // el método (#compra-contra-entrega/#addi) O el texto confirma. El gate de "hay
-  // datos reales" (abajo, tras la extracción) evita crear órdenes vacías al elegir
-  // método antes de recolectar datos. NO fuerza handoff (menor radio si falla).
+  // la venta pero olvida `#orden-lista` y solo emite el tag de pago. Antes la orden
+  // solo se inferían con una frase de confirmación MUY estrecha, así que muchos
+  // cierres se perdían (no se creaba orden ni se avisaba). Ahora se infiere el cierre
+  // cuando el método está decidido Y hay señal: se acaba de elegir el método (tag de
+  // pago) O el texto confirma. El gate de "hay datos reales" (abajo, tras la
+  // extracción) evita crear órdenes vacías al elegir método antes de recolectar
+  // datos. NO fuerza handoff (menor radio si falla).
   const { data: convMethodRow } = await supabase
     .from("conversations")
     .select("fulfillment_method")
     .eq("id", conversationId)
     .single();
-  const convMethod = convMethodRow?.fulfillment_method ?? "undecided";
-  const methodDecided = convMethod === "cod" || convMethod === "addi";
+  const convMethod = convMethodRow?.fulfillment_method ?? UNDECIDED_METHOD;
+  const methodDecided = convMethod !== UNDECIDED_METHOD && convMethod !== "";
   const inferClose =
     !parsed.tags.ordenLista &&
     !parsed.tags.humano &&
     methodDecided &&
-    (parsed.tags.cod || parsed.tags.addi || isPurchaseConfirmation(parsed.cleanText));
+    (parsed.tags.paymentMethod != null || isPurchaseConfirmation(parsed.cleanText));
 
   // Intentar cerrar orden: explícito (`#orden-lista`) o inferido.
   const shouldCreateOrder = parsed.tags.ordenLista || inferClose;
@@ -1005,6 +1014,8 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         clientPhone: phone,
         orderId: order.id,
         method,
+        methodLabel: methodLabels[method] ?? null,
+        brand: agent.brand ?? agent.name,
         total,
         draft,
       });
@@ -1105,8 +1116,10 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       }
     }
 
-    // #addi → enviar el link/instrucciones si está configurado (v1 sin API Addi).
-    if (parsed.tags.addi && env.ADDI_LINK) {
+    // Método Addi → enviar el link/instrucciones si está configurado (v1 sin API
+    // Addi). Es específico de Colombia (método `addi`); los demás métodos no envían
+    // info extra (solo marcan el pago y generan la orden). Ver ADR-0055.
+    if (parsed.tags.paymentMethod === "addi" && env.ADDI_LINK) {
       const addiLink = env.ADDI_LINK;
       const sent = await sendText(
         creds,
@@ -1301,6 +1314,10 @@ async function notifyOwnerOfSale(
     clientPhone: string;
     orderId: string;
     method: string;
+    /** Nombre visible del método (config del agente); fallback al `method` crudo. */
+    methodLabel: string | null;
+    /** Marca del agente para el encabezado del aviso. */
+    brand: string;
     total: number | null;
     draft: OrderDraft;
   },

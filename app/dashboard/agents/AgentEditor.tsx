@@ -19,6 +19,11 @@ import {
   type ScheduleWindow,
 } from "@/lib/agent/schedule";
 import { WeekScheduleEditor } from "./WeekScheduleEditor";
+import {
+  normalizePaymentTag,
+  slugMethod,
+  type PaymentMethodConfig,
+} from "@/lib/agent/paymentMethods";
 import type { AgentEditInput } from "./types";
 
 const inputCls =
@@ -45,6 +50,7 @@ export interface AgentEditorInitial {
   scheduleEnabled: boolean;
   scheduleTimezone: string;
   schedule: AgentSchedule;
+  paymentMethods: PaymentMethodConfig[];
 }
 
 /**
@@ -90,6 +96,30 @@ export function AgentEditor({
   );
   const [days, setDays] = useState<ScheduleWindow[][]>(initial.schedule.days);
   const [holidaysText, setHolidaysText] = useState(initial.schedule.holidays.join("\n"));
+
+  // Métodos de pago (tags de compra por mercado). El `method` (clave guardada) sigue
+  // al tag; los seeds CO conservan cod/addi mientras no se edite su tag. Ver ADR-0055.
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodConfig[]>(
+    initial.paymentMethods,
+  );
+  const addPaymentMethod = () => {
+    dirty();
+    setPaymentMethods((prev) => [...prev, { tag: "", label: "", method: "" }]);
+  };
+  const removePaymentMethod = (i: number) => {
+    dirty();
+    setPaymentMethods((prev) => prev.filter((_, idx) => idx !== i));
+  };
+  const setMethodTag = (i: number, value: string) => {
+    dirty();
+    setPaymentMethods((prev) =>
+      prev.map((m, idx) => (idx === i ? { ...m, tag: value, method: slugMethod(value) } : m)),
+    );
+  };
+  const setMethodLabel = (i: number, value: string) => {
+    dirty();
+    setPaymentMethods((prev) => prev.map((m, idx) => (idx === i ? { ...m, label: value } : m)));
+  };
 
   const buildSchedule = (): AgentSchedule => ({
     days,
@@ -210,6 +240,14 @@ export function AgentEditor({
       scheduleEnabled,
       scheduleTimezone: scheduleTimezone.trim() || DEFAULT_TIMEZONE,
       schedule: buildSchedule(),
+      // Normaliza cada tag; el server (parsePaymentMethods) descarta vacíos/duplicados.
+      paymentMethods: paymentMethods
+        .map((m) => ({
+          tag: normalizePaymentTag(m.tag),
+          label: m.label.trim(),
+          method: m.method || slugMethod(m.tag),
+        }))
+        .filter((m) => m.tag.length > 0),
     };
 
     const hasCatalog = Boolean(catalogProducts && catalogProducts.length > 0);
@@ -705,6 +743,69 @@ export function AgentEditor({
             </div>
           </>
         ) : null}
+      </fieldset>
+
+      {/* Métodos de pago (tags de compra por mercado) */}
+      <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-slate-50/60 p-4">
+        <legend className="px-1 text-sm font-semibold text-slate-700">Métodos de pago</legend>
+        <p className="text-xs text-slate-500">
+          Tags de compra que este agente reconoce según su mercado (Colombia: contra entrega,
+          Addi; EE.UU.: Zelle…). Cuando el modelo escribe el tag al cerrar, el sistema lo detecta
+          para <span className="font-medium text-slate-600">generar la orden</span> y lo quita del
+          texto que ve el cliente. Recuerda instruir el tag en el prompt del agente.
+        </p>
+
+        {paymentMethods.length === 0 ? (
+          <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-3 text-xs text-slate-400">
+            Sin métodos configurados. Agrega al menos uno para que el agente pueda cerrar ventas.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <div className="hidden grid-cols-[1fr_1fr_auto] gap-2 px-1 text-xs font-medium text-slate-400 sm:grid">
+              <span>Tag (lo que escribe el modelo)</span>
+              <span>Nombre visible</span>
+              <span className="w-9" />
+            </div>
+            {paymentMethods.map((m, i) => (
+              <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <input
+                  type="text"
+                  value={m.tag}
+                  onChange={(e) => setMethodTag(i, e.target.value)}
+                  placeholder="#zelle"
+                  aria-label={`Tag del método ${i + 1}`}
+                  className={monoCls}
+                />
+                <input
+                  type="text"
+                  value={m.label}
+                  onChange={(e) => setMethodLabel(i, e.target.value)}
+                  placeholder="Zelle"
+                  aria-label={`Nombre del método ${i + 1}`}
+                  className={inputCls}
+                />
+                <button
+                  type="button"
+                  onClick={() => removePaymentMethod(i)}
+                  aria-label={`Quitar el método ${i + 1}`}
+                  className="inline-flex h-[42px] w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-500 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div>
+          <button
+            type="button"
+            onClick={addPaymentMethod}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          >
+            + Agregar método
+          </button>
+        </div>
       </fieldset>
 
       {/* IA */}

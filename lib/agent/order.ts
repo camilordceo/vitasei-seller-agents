@@ -43,18 +43,19 @@ export function normalizeQty(qty: number): number {
 
 /**
  * Método de fulfillment definitivo: prioriza el ya elegido en la conversación
- * (por `#addi`/`#compra-contra-entrega`); si sigue `undecided`, usa el del draft.
+ * (por el tag de pago del agente); si sigue `undecided`/vacío, usa el del draft
+ * (extracción, solo conoce addi/cod). El método es texto libre (ADR-0055).
  */
 export function resolveFulfillmentMethod(
   conversationMethod: FulfillmentMethod,
   draftMethod: string | null,
 ): FulfillmentMethod {
-  if (conversationMethod === "addi" || conversationMethod === "cod") return conversationMethod;
+  if (conversationMethod && conversationMethod !== "undecided") return conversationMethod;
   if (draftMethod === "addi" || draftMethod === "cod") return draftMethod;
   return "undecided";
 }
 
-const METHOD_LABEL_ES: Record<string, string> = {
+const METHOD_LABEL_FALLBACK: Record<string, string> = {
   addi: "Addi",
   cod: "Contra entrega",
   undecided: "Sin definir",
@@ -63,20 +64,27 @@ const METHOD_LABEL_ES: Record<string, string> = {
 /**
  * Texto del aviso de venta para el dueño (WhatsApp): cliente, método, total,
  * productos y datos de envío. Puro (fácil de ajustar el formato / testear).
+ * La marca y la etiqueta del método vienen del agente (multi-marca, ADR-0055).
  */
 export function buildSaleNotification(info: {
   /** Teléfono del cliente en E.164 sin '+'. */
   clientPhone: string;
   method: string;
+  /** Nombre visible del método (config del agente); fallback a un mapa conocido. */
+  methodLabel?: string | null;
+  /** Marca del agente para el encabezado (default "Vitasei" para no romper CO). */
+  brand?: string;
   total: number | null;
   draft: OrderDraft;
 }): string {
   const { clientPhone, method, total, draft } = info;
-  const lines: string[] = ["🛒 Nueva venta — Vitasei", ""];
+  const brand = info.brand?.trim() || "Vitasei";
+  const methodLabel = info.methodLabel?.trim() || METHOD_LABEL_FALLBACK[method] || method;
+  const lines: string[] = [`🛒 Nueva venta — ${brand}`, ""];
 
   const name = draft.shipping.name?.trim();
   lines.push(`Cliente: ${name ? `${name} · ` : ""}+${clientPhone}`);
-  lines.push(`Método: ${METHOD_LABEL_ES[method] ?? method}`);
+  lines.push(`Método: ${methodLabel}`);
   lines.push(`Total: ${total != null ? formatCOP(total) : "por confirmar"}`);
 
   if (draft.items.length > 0) {

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { emptyWeek } from "@/lib/agent/schedule";
+import { DEFAULT_PAYMENT_METHODS } from "@/lib/agent/paymentMethods";
 import { AgentEditor, type AgentEditorInitial } from "../AgentEditor";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,8 @@ const BLANK: AgentEditorInitial = {
   scheduleEnabled: false,
   scheduleTimezone: "America/Bogota",
   schedule: { days: emptyWeek(), holidays: [] },
+  // Métodos por defecto (Colombia); se editan/quitan según el mercado del agente.
+  paymentMethods: DEFAULT_PAYMENT_METHODS,
 };
 
 export default function NewAgentPage() {

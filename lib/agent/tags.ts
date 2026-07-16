@@ -8,10 +8,13 @@
  *   2) los QUITA del texto que ve el cliente (`cleanText`),
  *   3) por cada `#ID` válido (gate: existe en `products`) manda la imagen.
  *
- * Los tags de flujo (`#addi`, `#compra-contra-entrega`, `#orden-lista`,
- * `#humano`) siguen yendo en su propia línea al final. El envío de imágenes y
- * el gate son del Sprint 4; acá solo se parsea. Ver ADR-0014.
+ * Los tags de flujo universales (`#orden-lista`, `#humano`, `#llamada`) van en su
+ * propia línea al final. Los tags de PAGO (`#compra-contra-entrega`, `#addi`,
+ * `#zelle`…) son POR AGENTE: se pasan en `opts.paymentMethods` y el que matchee
+ * fija `paymentMethod`. Ver ADR-0014 (tags) y ADR-0055 (métodos por agente).
  */
+
+import { matchPaymentMethod, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
 
 export interface ParsedTags {
   /**
@@ -19,10 +22,10 @@ export interface ParsedTags {
    * es el token COMPLETO (incluye el prefijo `#ID`), igual que `products.sku`.
    */
   skus: string[];
-  /** `#addi` */
-  addi: boolean;
-  /** `#compra-contra-entrega` */
-  cod: boolean;
+  /** Clave del método de pago elegido (por un tag configurado del agente), o null. */
+  paymentMethod: string | null;
+  /** Tag de pago que matcheó (p. ej. `#zelle`), o null. */
+  paymentTag: string | null;
   /** `#orden-lista` */
   ordenLista: boolean;
   /** `#humano` */
@@ -39,23 +42,27 @@ export interface ParsedReply {
   tags: ParsedTags;
 }
 
+export interface ParseReplyOptions {
+  /** Métodos de pago configurados del agente (sus tags se reconocen y se quitan). */
+  paymentMethods?: ReadonlyArray<PaymentMethodConfig>;
+}
+
 /** `#ID` seguido de dígitos, EN CUALQUIER PARTE del texto (inline). */
 const RE_ID_INLINE = /#ID\d+/g;
 /** Igual, pero comiéndose el espacio previo, para limpiar el texto sin dobles espacios. */
 const RE_ID_STRIP = /[ \t]*#ID\d+/g;
-const RE_ADDI = /^#addi$/;
-const RE_COD = /^#compra-contra-entrega$/;
 const RE_ORDEN = /^#orden-lista$/;
 const RE_HUMANO = /^#humano$/;
 const RE_LLAMADA = /^#llamada$/;
 
 /**
- * Extrae los `#ID` inline y los tags de flujo, y devuelve el texto limpio que
- * ve el cliente. Los `#ID` se sacan de cualquier parte; los tags de flujo solo
- * si (tras trim) la línea matchea exactamente uno de los patrones.
+ * Extrae los `#ID` inline y los tags (flujo universal + pago del agente), y
+ * devuelve el texto limpio que ve el cliente. Los `#ID` se sacan de cualquier
+ * parte; los tags solo si (tras trim) la línea matchea exactamente uno.
  */
-export function parseReply(output: string): ParsedReply {
+export function parseReply(output: string, opts: ParseReplyOptions = {}): ParsedReply {
   const src = output ?? "";
+  const paymentMethods = opts.paymentMethods ?? [];
 
   // 1) `#ID` inline → skus (token completo, dedup, en orden) + raw.
   const skus: string[] = [];
@@ -69,10 +76,10 @@ export function parseReply(output: string): ParsedReply {
   // 2) Quitar los `#ID` del texto (con el espacio previo para no dejar huecos).
   const withoutIds = src.replace(RE_ID_STRIP, "");
 
-  // 3) Tags de flujo por línea + construir el texto limpio.
+  // 3) Tags por línea + construir el texto limpio.
   const kept: string[] = [];
-  let addi = false;
-  let cod = false;
+  let paymentMethod: string | null = null;
+  let paymentTag: string | null = null;
   let ordenLista = false;
   let humano = false;
   let llamada = false;
@@ -85,13 +92,8 @@ export function parseReply(output: string): ParsedReply {
       .replace(/[*_`~]/g, "")
       .replace(/^[\s>*_~•-]+/, "")
       .trim();
-    if (RE_ADDI.test(norm)) {
-      addi = true;
-      raw.push(norm);
-    } else if (RE_COD.test(norm)) {
-      cod = true;
-      raw.push(norm);
-    } else if (RE_ORDEN.test(norm)) {
+    // Flujo universal primero (gana ante un tag de pago que coincida por error).
+    if (RE_ORDEN.test(norm)) {
       ordenLista = true;
       raw.push(norm);
     } else if (RE_HUMANO.test(norm)) {
@@ -101,7 +103,17 @@ export function parseReply(output: string): ParsedReply {
       llamada = true;
       raw.push(norm);
     } else {
-      kept.push(line);
+      // Tag de pago del agente (el primero que matchee gana).
+      const pm = matchPaymentMethod(norm, paymentMethods);
+      if (pm) {
+        if (paymentMethod == null) {
+          paymentMethod = pm.method;
+          paymentTag = pm.tag;
+        }
+        raw.push(norm);
+      } else {
+        kept.push(line);
+      }
     }
   }
 
@@ -113,5 +125,8 @@ export function parseReply(output: string): ParsedReply {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return { cleanText, tags: { skus, addi, cod, ordenLista, humano, llamada, raw } };
+  return {
+    cleanText,
+    tags: { skus, paymentMethod, paymentTag, ordenLista, humano, llamada, raw },
+  };
 }

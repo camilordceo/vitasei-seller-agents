@@ -81,6 +81,12 @@ export function OrderEditor({
 
   const [status, setStatus] = useState<OrderStatus>(initial.status);
   const [method, setMethod] = useState<FulfillmentMethod>(initial.method);
+
+  // El método es texto libre por agente (ADR-0055): si el de la orden no está entre
+  // los conocidos (ej. "zelle"), se agrega como opción para no perderlo al editar.
+  const methodOptions = METHOD_OPTIONS.some((o) => o.value === initial.method)
+    ? METHOD_OPTIONS
+    : [...METHOD_OPTIONS, { value: initial.method, label: initial.method }];
   const [shippingName, setShippingName] = useState(initial.shippingName);
   const [shippingAddress, setShippingAddress] = useState(initial.shippingAddress);
   const [shippingCity, setShippingCity] = useState(initial.shippingCity);
@@ -189,7 +195,7 @@ export function OrderEditor({
             }}
             className={inputCls}
           >
-            {METHOD_OPTIONS.map((o) => (
+            {methodOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>

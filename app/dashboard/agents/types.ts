@@ -1,5 +1,6 @@
 import type { CatalogProductInput } from "@/lib/openai/catalog";
 import type { AgentSchedule } from "@/lib/agent/schedule";
+import type { PaymentMethodConfig } from "@/lib/agent/paymentMethods";
 
 /** Datos editables de un agente (marca/número) desde el dashboard. Ver docs/16. */
 export interface AgentEditInput {
@@ -20,6 +21,8 @@ export interface AgentEditInput {
   scheduleEnabled: boolean;
   scheduleTimezone: string;
   schedule: AgentSchedule;
+  /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
+  paymentMethods: PaymentMethodConfig[];
 }
 
 /** Carga de catálogo desde el editor de agente (server action `loadAgentCatalog`). */

@@ -29,6 +29,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
     scheduleEnabled: agent.scheduleEnabled,
     scheduleTimezone: agent.scheduleTimezone,
     schedule: agent.schedule,
+    paymentMethods: agent.paymentMethods,
   };
 
   return (

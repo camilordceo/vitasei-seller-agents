@@ -9,6 +9,7 @@ import {
 } from "@/lib/callbell/types";
 import type { CallbellCreds } from "@/lib/callbell/sender";
 import { parseRetargetConfig, type RetargetStageConfig } from "@/lib/agent/retargetPlan";
+import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
 import type { Database } from "@/lib/supabase/types";
 
 /**
@@ -215,4 +216,23 @@ export async function loadRetargetConfig(
     .maybeSingle();
   if (error || !data) return [];
   return parseRetargetConfig((data as { retarget_config: unknown }).retarget_config);
+}
+
+/**
+ * Métodos de pago POR AGENTE (tags de compra: contra-entrega/addi en CO, Zelle en
+ * EE.UU., etc.). Consulta APARTE (no está en `AGENT_COLS`) y resiliente a que falte
+ * la columna (42703, migración 0025 sin aplicar): devuelve `[]` → el agente queda
+ * sin métodos (no se detecta ningún tag de pago). Ver ADR-0055.
+ */
+export async function loadPaymentMethods(
+  supabase: DB,
+  agentId: string,
+): Promise<PaymentMethodConfig[]> {
+  const { data, error } = await supabase
+    .from("agents")
+    .select("payment_methods")
+    .eq("id", agentId)
+    .maybeSingle();
+  if (error || !data) return [];
+  return parsePaymentMethods((data as { payment_methods: unknown }).payment_methods);
 }

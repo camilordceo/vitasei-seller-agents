@@ -15,6 +15,12 @@ Proyecto: **`seller-agent-vitasei`**. Migración: `supabase/migrations/0001_init
 | `events_log` | El "log" del loop: webhook, reason, gate_blocked, image_sent, handoff. |
 | `catalog_imports` | Trazabilidad de cada carga de catálogo al vector store. |
 
+> **`fulfillment_method` (conversations/orders) es TEXTO LIBRE** desde la migración `0025`
+> (antes era un enum `addi|cod|undecided`). Cada agente define sus métodos de pago en
+> `agents.payment_methods` (jsonb `[{tag,label,method}]`) y el `method` elegido se guarda ahí.
+> `undecided` sigue siendo el sentinela de "sin elegir". Ver ADR-0055. La tabla `agents`
+> (multi-marca) se agregó en la migración `0010`.
+
 ## Storage
 
 - Bucket público **`product-images`** para las imágenes de producto.

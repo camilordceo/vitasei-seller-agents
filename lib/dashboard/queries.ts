@@ -30,6 +30,7 @@ import type {
 import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
 import { findHotmartAgentId } from "@/lib/agent/agents";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
+import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
 
 /**
  * Consultas de solo lectura del dashboard (Sprint 6).
@@ -303,6 +304,8 @@ export interface ConversationFilters {
   sinceDays?: number;
   /** Clave de orden: "inbound" (último del cliente, default) | "outbound" (última respuesta). */
   orderBy?: ConversationOrderBy;
+  /** Filtra por agente (marca/número). undefined = todos los agentes (migración 0010). */
+  agentId?: string;
 }
 
 /** Fila cruda de `conversations` para la lista (last_outbound_at opcional: migración 0023). */
@@ -353,6 +356,8 @@ export async function getRecentConversations(
       .order("updated_at", { ascending: false })
       .order("id", { ascending: false });
     if (opts.status) q = q.eq("status", opts.status);
+    // `agent_id` vive en `conversations` desde la migración 0010 (columna base).
+    if (opts.agentId) q = q.eq("agent_id", opts.agentId);
     if (opts.sinceDays != null) {
       const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
       // Ventana por la MISMA clave de orden (coherente con la lista).
@@ -1314,19 +1319,32 @@ export interface AgentRow {
   vectorStoreId: string | null;
   model: string;
   enabled: boolean;
+  /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
+  paymentMethods: PaymentMethodConfig[];
 }
 
 /** Agentes (marcas/números) para la lista del dashboard. NUNCA devuelve la API key. */
 export async function getAgents(): Promise<AgentRow[]> {
   const supabase = createServiceClient();
-  const { data, error } = await supabase
+  const BASE_COLS =
+    "id, name, brand, country, whatsapp_number, callbell_channel_uuid, callbell_api_key, logistics_team_uuid, vector_store_id, model, enabled, created_at";
+
+  // Se intenta con `payment_methods` (migración 0025). Si la columna aún no existe
+  // (42703), se reintenta sin ella para no romper la lista ni los reportes; los
+  // agentes quedan sin métodos configurados (labels caen a los conocidos).
+  let res = await supabase
     .from("agents")
-    .select(
-      "id, name, brand, country, whatsapp_number, callbell_channel_uuid, callbell_api_key, logistics_team_uuid, vector_store_id, model, enabled, created_at",
-    )
+    .select(`${BASE_COLS}, payment_methods`)
     .order("created_at", { ascending: true });
-  if (error) throw new Error(`getAgents: ${error.message}`);
-  return (data ?? []).map((a) => ({
+  if (res.error && res.error.code === "42703") {
+    // Sin la columna: los agentes quedan sin `payment_methods` (→ parse a []).
+    res = (await supabase
+      .from("agents")
+      .select(BASE_COLS)
+      .order("created_at", { ascending: true })) as typeof res;
+  }
+  if (res.error) throw new Error(`getAgents: ${res.error.message}`);
+  return (res.data ?? []).map((a) => ({
     id: a.id,
     name: a.name,
     brand: a.brand,
@@ -1338,6 +1356,7 @@ export async function getAgents(): Promise<AgentRow[]> {
     vectorStoreId: a.vector_store_id,
     model: a.model,
     enabled: a.enabled,
+    paymentMethods: parsePaymentMethods((a as { payment_methods?: unknown }).payment_methods),
   }));
 }
 
@@ -1360,6 +1379,8 @@ export interface AgentDetail {
   scheduleEnabled: boolean;
   scheduleTimezone: string;
   schedule: AgentSchedule;
+  /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
+  paymentMethods: PaymentMethodConfig[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1389,6 +1410,7 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
     scheduleEnabled: data.schedule_enabled,
     scheduleTimezone: data.schedule_timezone,
     schedule: parseAgentSchedule(data.schedule),
+    paymentMethods: parsePaymentMethods((data as { payment_methods?: unknown }).payment_methods),
     createdAt: data.created_at,
     updatedAt: data.updated_at,
   };

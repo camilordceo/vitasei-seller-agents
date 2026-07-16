@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
+import { parsePaymentMethods } from "@/lib/agent/paymentMethods";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { sendText, credsFromEnv } from "@/lib/callbell/sender";
 import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
@@ -475,6 +476,9 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
     schedule_enabled: input.scheduleEnabled,
     schedule_timezone: textOrNull(input.scheduleTimezone) ?? "America/Bogota",
     schedule: input.schedule as unknown as Json,
+    // Métodos de pago (tags de compra por agente). Se normalizan/deduplican con el
+    // helper puro antes de guardar (tags válidos + method estable). Ver ADR-0055.
+    payment_methods: parsePaymentMethods(input.paymentMethods) as unknown as Json,
   };
   const newKey = input.callbellApiKey.trim();
   if (newKey.length > 0) patch.callbell_api_key = newKey;

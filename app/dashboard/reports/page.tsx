@@ -7,7 +7,6 @@ import {
 } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
-  FULFILLMENT_METHODS,
   type ConversionReport,
   type SalesReport,
 } from "@/lib/dashboard/report";
@@ -21,11 +20,11 @@ import {
 import { orderStatusLabel } from "../ui";
 import { CopySummaryButton } from "./CopySummaryButton";
 import { AgentFilter } from "./AgentFilter";
-import type { FulfillmentMethod } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
 
-const METHOD_LABEL: Record<FulfillmentMethod, string> = {
+/** Etiquetas de método conocidas (fallback cuando el agente no las define). */
+const METHOD_LABEL_FALLBACK: Record<string, string> = {
   addi: "Addi",
   cod: "Contra entrega",
   undecided: "Sin definir",
@@ -82,6 +81,12 @@ export default async function ReportsPage({
   searchParams: { agent?: string };
 }) {
   const agents = await getAgents();
+  // Etiquetas de método por su clave: las configuradas por los agentes (ADR-0055)
+  // sobre los fallbacks conocidos (cod/addi/undecided).
+  const methodLabels: Record<string, string> = {
+    ...METHOD_LABEL_FALLBACK,
+    ...Object.fromEntries(agents.flatMap((a) => a.paymentMethods).map((m) => [m.method, m.label])),
+  };
   // Agente seleccionado: el del query (?agent=) si existe, o undefined = consolidado.
   const selected =
     searchParams.agent && agents.some((a) => a.id === searchParams.agent)
@@ -349,9 +354,9 @@ export default async function ReportsPage({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {FULFILLMENT_METHODS.map((m) => (
+              {r.methodKeys.map((m) => (
                 <tr key={m}>
-                  <td className="py-2 text-slate-700">{METHOD_LABEL[m]}</td>
+                  <td className="py-2 text-slate-700">{methodLabels[m] ?? m}</td>
                   <td className="py-2 text-right tabular-nums text-slate-900">
                     {formatNumber(r.byMethod[m].count)}
                   </td>

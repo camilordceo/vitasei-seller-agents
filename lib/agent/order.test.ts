@@ -66,6 +66,12 @@ describe("resolveFulfillmentMethod", () => {
     expect(resolveFulfillmentMethod("undecided", "loquesea")).toBe("undecided");
     expect(resolveFulfillmentMethod("undecided", null)).toBe("undecided");
   });
+
+  it("respeta un método libre elegido en la conversación (ej. zelle)", () => {
+    // El método ahora es texto libre (ADR-0055); el de la conversación gana.
+    expect(resolveFulfillmentMethod("zelle", null)).toBe("zelle");
+    expect(resolveFulfillmentMethod("zelle", "cod")).toBe("zelle");
+  });
 });
 
 describe("isPurchaseConfirmation", () => {
@@ -186,5 +192,18 @@ describe("buildSaleNotification", () => {
     expect(msg).toContain("+573009998877");
     expect(msg).toContain("por confirmar");
     expect(msg).toContain("Sin definir");
+  });
+
+  it("usa la marca y la etiqueta del método del agente (multi-marca, ADR-0055)", () => {
+    const msg = buildSaleNotification({
+      clientPhone: "13055551234",
+      method: "zelle",
+      methodLabel: "Zelle",
+      brand: "Vitasei USA",
+      total: 120,
+      draft,
+    });
+    expect(msg).toContain("🛒 Nueva venta — Vitasei USA");
+    expect(msg).toContain("Método: Zelle");
   });
 });

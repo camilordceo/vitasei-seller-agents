@@ -13,6 +13,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Métodos de pago (tags de compra) configurables por agente** (ADR-0055; `agents.payment_methods`
+  jsonb + `fulfillment_method` enum→texto, migración `0025`). Antes los tags de compra estaban
+  cableados (`#compra-contra-entrega`→cod, `#addi`→addi) e iguales para todos; un agente de otro
+  mercado (EE.UU. con **Zelle**) no tenía cómo: si el modelo escribía `#zelle`, se colaba visible
+  al cliente y no generaba orden. Ahora **cada agente** define sus métodos en el editor
+  (`tag` + `nombre`), guardados como `[{tag,label,method}]`. El parser (`parseReply`) se volvió
+  *agent-aware*: reconoce los tags del agente, los quita del texto y fija el método; el tag **solo**
+  marca el pago y genera la orden (sin enviar info extra; el link de Addi se conserva solo para el
+  método `addi`). `#orden-lista`/`#humano`/`#llamada` siguen universales. Como los métodos dejan de
+  ser un set fijo, `fulfillment_method` pasó a **texto libre** y el reporte "por método" agrupa
+  **dinámicamente** con etiquetas de la config de los agentes. Los agentes de Colombia conservan
+  contra-entrega/addi (claves `cod`/`addi`) vía seed. `payment_methods` se lee resiliente a 42703
+  (inbound y `getAgents`) para no romper entre el deploy y la migración.
 - **Reportes filtrables por agente** (ADR-0053; sin migración). La página `/dashboard/reports`
   agregaba todas las marcas juntas; ahora un selector **"Todos los agentes" / por agente** en la
   cabecera acota **todos** los cuadros a la vez —ventas (titulares, ventanas, por estado/método,

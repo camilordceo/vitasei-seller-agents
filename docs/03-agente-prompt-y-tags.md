@@ -10,10 +10,22 @@ asesorar → mostrar producto → resolver dudas (con File Search) → llevar a 
 | Tag | Cuándo lo emite el agente | Qué hace el backend |
 |-----|---------------------------|---------------------|
 | `#ID<dígitos>` (inline) | Al recomendar/mostrar un producto concreto | Envía imagen del producto (lookup en `products`) |
-| `#addi` | Cliente elige financiar con Addi | Envía info/link Addi; `fulfillment_method = addi` |
-| `#compra-contra-entrega` | Cliente elige pago contra entrega | Inicia recolección de datos COD |
+| **Tag de pago** (por agente) | Cliente elige un método de pago | Fija `fulfillment_method = <method>` + alimenta el cierre inferido; NO envía info extra |
 | `#orden-lista` | Ya tiene método + ítems + datos de envío completos | Crea orden + **handoff** a logística |
 | `#humano` | Cliente pide humano o caso fuera de alcance | Handoff inmediato (sin orden) |
+| `#llamada` | Cliente pide que lo llamen | Crea solicitud de llamada + aviso (no fuerza handoff) |
+
+### Métodos de pago por agente (ADR-0055)
+Los tags de **pago** ya **no** están cableados: cada agente configura los suyos en el editor de
+Agentes (`agents.payment_methods` = `[{tag,label,method}]`) según su mercado. Ejemplos:
+- Colombia: `#compra-contra-entrega` (Contra entrega, `method=cod`), `#addi` (Addi, `method=addi`).
+- EE.UU.: `#zelle` (Zelle, `method=zelle`).
+
+El backend reconoce **solo** los tags configurados del agente que responde: los quita del texto,
+fija el método (`fulfillment_method`, ahora **texto libre**) y los usa para generar la orden.
+El link de Addi se envía únicamente para el método `addi` (retrocompat CO). Un tag de pago que
+el agente **no** tenga configurado no se reconoce (queda como texto normal). **Instruir el tag es
+responsabilidad del `system_prompt` del agente.**
 
 ### Reglas de formato (críticas)
 - **`#ID` va INLINE** (formato `#ID` + dígitos, p. ej. `#ID7948237144230`): el agente lo
@@ -21,7 +33,7 @@ asesorar → mostrar producto → resolver dudas (con File Search) → llevar a 
   y lo **borra** del texto. El **SKU es el token completo** (incluye `#ID`) y es el `sku`
   exacto del catálogo. **Nunca** inventar ni modificar un `#ID`. Ver ADR-0014.
 - Puede haber varios `#ID` (se deduplican en orden) si muestra varios productos.
-- Los tags de **flujo** (`#addi`, `#compra-contra-entrega`, `#orden-lista`, `#humano`) van
+- Los tags de **flujo** (el de pago del agente, `#orden-lista`, `#humano`, `#llamada`) van
   **al final del mensaje, cada uno en su propia línea**.
 - Los tags **no son visibles** para el cliente: el backend los **quita** del texto antes de
   enviar. El agente escribe el mensaje natural.
@@ -109,8 +121,9 @@ El agente **ve** las imágenes y **escucha** las notas de voz del cliente:
 
 - **`#ID` inline:** `/#ID\d+/g` en cualquier parte del texto → `skus[]` (token completo, dedup,
   en orden); se quitan del `cleanText`.
-- **Tags de flujo por línea:** `^#addi$`, `^#compra-contra-entrega$`, `^#orden-lista$`,
-  `^#humano$`.
+- **Tags universales por línea:** `^#orden-lista$`, `^#humano$`, `^#llamada$`.
+- **Tags de pago por línea:** dinámicos por agente (`parseReply` recibe `paymentMethods`); el que
+  matchee fija `paymentMethod` (la clave `method` de la config). Ver ADR-0055.
 - `cleanText` = texto sin `#ID` ni líneas de tags (y sin líneas vacías colgantes).
 - `cleanText` se envía como mensaje de texto; los `#ID` **válidos** (gate: existen en
   `products`) generan mensajes `image` con `products.image_url`.

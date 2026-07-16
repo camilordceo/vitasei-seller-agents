@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseReply } from "./tags";
+import { DEFAULT_PAYMENT_METHODS, type PaymentMethodConfig } from "./paymentMethods";
+
+// Métodos de un agente de EE.UU. (Zelle) para las pruebas por-agente.
+const ZELLE: PaymentMethodConfig[] = [{ tag: "#zelle", label: "Zelle", method: "zelle" }];
 
 describe("parseReply", () => {
   it("extrae un #ID inline y lo quita del texto que ve el cliente", () => {
@@ -30,12 +34,33 @@ describe("parseReply", () => {
     expect(tags.skus[0].startsWith("#ID")).toBe(true);
   });
 
-  it("detecta los tags de flujo (addi, cod, orden-lista, humano, llamada) en su línea", () => {
-    expect(parseReply("ok\n#addi").tags.addi).toBe(true);
-    expect(parseReply("ok\n#compra-contra-entrega").tags.cod).toBe(true);
+  it("detecta los tags de flujo universales (orden-lista, humano, llamada) en su línea", () => {
     expect(parseReply("listo\n#orden-lista").tags.ordenLista).toBe(true);
     expect(parseReply("te paso un asesor\n#humano").tags.humano).toBe(true);
     expect(parseReply("con gusto te llamo\n#llamada").tags.llamada).toBe(true);
+  });
+
+  it("detecta los tags de pago del agente (CO: contra-entrega y addi) y devuelve el método", () => {
+    const cod = parseReply("ok\n#compra-contra-entrega", { paymentMethods: DEFAULT_PAYMENT_METHODS });
+    expect(cod.tags.paymentMethod).toBe("cod");
+    expect(cod.tags.paymentTag).toBe("#compra-contra-entrega");
+    const addi = parseReply("ok\n#addi", { paymentMethods: DEFAULT_PAYMENT_METHODS });
+    expect(addi.tags.paymentMethod).toBe("addi");
+  });
+
+  it("reconoce el tag de pago propio de otro agente (#zelle) y lo quita del texto", () => {
+    const out = "¡Listo! Puedes pagar por Zelle.\n#zelle";
+    const { cleanText, tags } = parseReply(out, { paymentMethods: ZELLE });
+    expect(tags.paymentMethod).toBe("zelle");
+    expect(tags.paymentTag).toBe("#zelle");
+    expect(cleanText).toBe("¡Listo! Puedes pagar por Zelle.");
+    expect(cleanText).not.toContain("#zelle");
+  });
+
+  it("un tag de pago NO configurado para el agente no se reconoce (queda en el texto)", () => {
+    // El agente CO no tiene #zelle → no matchea; el texto NO lo pierde.
+    const { tags } = parseReply("ok\n#zelle", { paymentMethods: DEFAULT_PAYMENT_METHODS });
+    expect(tags.paymentMethod).toBeNull();
   });
 
   it("saca el #llamada del texto que ve el cliente (queda solo el mensaje)", () => {
@@ -62,20 +87,22 @@ describe("parseReply", () => {
     expect(cleanText).toContain("¿Qué quieres mejorar?");
   });
 
-  it("detecta un tag de flujo aunque venga con markdown (viñeta + negrita)", () => {
-    expect(parseReply("Seguimos con contra entrega.\n- **#compra-contra-entrega**").tags.cod).toBe(
-      true,
-    );
+  it("detecta un tag aunque venga con markdown (viñeta + negrita)", () => {
+    expect(
+      parseReply("Seguimos con contra entrega.\n- **#compra-contra-entrega**", {
+        paymentMethods: DEFAULT_PAYMENT_METHODS,
+      }).tags.paymentMethod,
+    ).toBe("cod");
     expect(parseReply("Listo el pedido.\n* #orden-lista").tags.ordenLista).toBe(true);
     expect(parseReply("Te paso un asesor.\n`#humano`").tags.humano).toBe(true);
   });
 
-  it("combina #ID inline con un tag de flujo al final", () => {
+  it("combina #ID inline con un tag de pago al final", () => {
     const out = "Perfecto, te muestro el colágeno #ID7948237144231.\n#compra-contra-entrega";
-    const { cleanText, tags } = parseReply(out);
+    const { cleanText, tags } = parseReply(out, { paymentMethods: DEFAULT_PAYMENT_METHODS });
     expect(cleanText).toBe("Perfecto, te muestro el colágeno.");
     expect(tags.skus).toEqual(["#ID7948237144231"]);
-    expect(tags.cod).toBe(true);
+    expect(tags.paymentMethod).toBe("cod");
   });
 
   it("ignora un '#ID' sin dígitos y '#' en medio del texto", () => {
@@ -93,14 +120,14 @@ describe("parseReply", () => {
     expect(tags.skus).toEqual(["#ID7948237144230"]);
   });
 
-  it("sin tags: cleanText es el texto y los flags quedan en false", () => {
+  it("sin tags: cleanText es el texto y los flags quedan en false/null", () => {
     const out = "Claro, con gusto te ayudo.";
     const { cleanText, tags } = parseReply(out);
     expect(cleanText).toBe(out);
     expect(tags).toMatchObject({
       skus: [],
-      addi: false,
-      cod: false,
+      paymentMethod: null,
+      paymentTag: null,
       ordenLista: false,
       humano: false,
       llamada: false,

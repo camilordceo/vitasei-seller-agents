@@ -14,7 +14,31 @@ export const ORDER_STATUSES: OrderStatus[] = [
   "cancelled",
 ];
 
-export const FULFILLMENT_METHODS: FulfillmentMethod[] = ["addi", "cod", "undecided"];
+/**
+ * Métodos conocidos que SIEMPRE aparecen en el corte "por método" (aunque tengan 0
+ * órdenes), en este orden. El resto de métodos (texto libre por agente, ADR-0055)
+ * se agregan según aparezcan en las órdenes, alfabéticos, con `undecided` al final.
+ */
+export const FULFILLMENT_METHODS: FulfillmentMethod[] = ["cod", "addi", "undecided"];
+
+/** Clave de método normalizada (vacío → `undecided`). */
+function methodKey(method: string | null | undefined): string {
+  return method && method.trim() ? method : "undecided";
+}
+
+/**
+ * Ordena las claves de método: primero las conocidas (`FULFILLMENT_METHODS`, sin
+ * `undecided`), luego las demás alfabéticamente, y `undecided` siempre al final.
+ */
+export function orderMethodKeys(methods: Iterable<string>): string[] {
+  const set = new Set<string>(methods);
+  const known = FULFILLMENT_METHODS.filter((m) => m !== "undecided" && set.has(m));
+  const extras = [...set]
+    .filter((m) => !FULFILLMENT_METHODS.includes(m) && m !== "undecided")
+    .sort((a, b) => a.localeCompare(b));
+  const tail = set.has("undecided") ? ["undecided"] : [];
+  return [...known, ...extras, ...tail];
+}
 
 /** Estados que cuentan como "venta generada" (todo menos cancelada). */
 export const GENERATED_STATUSES: OrderStatus[] = ["pending_handoff", "handed_off", "confirmed"];
@@ -53,7 +77,10 @@ export interface SalesReport {
   /** Todo menos cancelada — lo que la IA "generó". */
   generated: Bucket;
   byStatus: Record<OrderStatus, Bucket>;
-  byMethod: Record<FulfillmentMethod, Bucket>;
+  /** Cortes por método de pago (claves dinámicas: texto libre por agente). */
+  byMethod: Record<string, Bucket>;
+  /** Claves de `byMethod` en orden de despliegue (conocidas → extras → undecided). */
+  methodKeys: string[];
   /** Órdenes generadas hoy (día calendario en Bogota). */
   today: Bucket;
   /** Últimos 7 días (ventana móvil). */
@@ -110,9 +137,16 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
   const byStatus = Object.fromEntries(
     ORDER_STATUSES.map((s) => [s, emptyBucket()]),
   ) as Record<OrderStatus, Bucket>;
+  // Métodos a mostrar: los conocidos (siempre) + los presentes en las órdenes NO
+  // canceladas (texto libre por agente). Ordenados para el despliegue.
+  const presentMethods = new Set<string>(FULFILLMENT_METHODS);
+  for (const f of facts) {
+    if (f.status !== "cancelled") presentMethods.add(methodKey(f.method));
+  }
+  const methodKeys = orderMethodKeys(presentMethods);
   const byMethod = Object.fromEntries(
-    FULFILLMENT_METHODS.map((m) => [m, emptyBucket()]),
-  ) as Record<FulfillmentMethod, Bucket>;
+    methodKeys.map((m) => [m, emptyBucket()]),
+  ) as Record<string, Bucket>;
 
   const confirmed = emptyBucket();
   const pipeline = emptyBucket();
@@ -145,7 +179,8 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
 
     // No canceladas = generadas.
     add(generated, f.total);
-    if (byMethod[f.method]) add(byMethod[f.method], f.total);
+    const mk = methodKey(f.method);
+    if (byMethod[mk]) add(byMethod[mk], f.total);
     if (f.status === "confirmed") add(confirmed, f.total);
     if (f.status === "pending_handoff" || f.status === "handed_off") add(pipeline, f.total);
 
@@ -175,6 +210,7 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
     generated,
     byStatus,
     byMethod,
+    methodKeys,
     today,
     last7,
     last30,
