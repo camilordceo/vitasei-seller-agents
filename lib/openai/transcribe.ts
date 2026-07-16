@@ -1,8 +1,8 @@
 import "server-only";
 import OpenAI, { toFile } from "openai";
 import { env } from "@/lib/env";
-import type { FetchedMedia } from "@/lib/callbell/media";
-import { fetchMedia } from "@/lib/callbell/mediaFetch";
+import type { FetchedMedia } from "@/lib/messaging/media";
+import { fetchMedia, type MediaAuth } from "@/lib/messaging/mediaFetch";
 
 /**
  * Transcripción de notas de voz (ver docs/15, ADR-0022).
@@ -19,12 +19,17 @@ export interface Transcription {
   durationSec: number | null;
 }
 
-/** Descarga la URL del adjunto y la transcribe. Devuelve null si no se pudo bajar. */
+/**
+ * Descarga la URL del adjunto y la transcribe. Devuelve null si no se pudo bajar.
+ * `mediaAuth` es la credencial del proveedor del agente (ADR-0056): sin ella, un
+ * adjunto protegido devolvería 401 y perderíamos la nota de voz.
+ */
 export async function transcribeAudioUrl(
   openai: OpenAI,
   url: string,
+  mediaAuth?: MediaAuth,
 ): Promise<Transcription | null> {
-  const media = await fetchMedia(url);
+  const media = await fetchMedia(url, { auth: mediaAuth ?? null });
   if (!media) return null;
   return transcribeMedia(openai, media);
 }

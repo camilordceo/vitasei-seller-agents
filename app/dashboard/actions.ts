@@ -6,8 +6,8 @@ import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods } from "@/lib/agent/paymentMethods";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
-import { sendText, credsFromEnv } from "@/lib/callbell/sender";
-import { loadAgentForConversation, agentCallbellCreds } from "@/lib/agent/agents";
+import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
+import { loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
 import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
 import type { CallRequestStatus, Json } from "@/lib/supabase/types";
@@ -600,12 +600,12 @@ export async function sendManualMessage(conversationId: string, text: string): P
   if (contactErr) throw new Error(`sendManualMessage contact: ${contactErr.message}`);
   if (!contact?.phone) throw new Error("El contacto no tiene teléfono.");
 
-  // Credenciales de Callbell del agente de la conversación (cuenta/canal correctos).
+  // Proveedor del agente de la conversación (Callbell o Kapso, con sus credenciales).
   const agent = await loadAgentForConversation(supabase, convo.agent_id);
-  const creds = agent ? agentCallbellCreds(agent) : credsFromEnv();
+  const messaging = agent ? providerForAgent(agent) : callbellProviderFromEnv();
 
-  // Enviar por Callbell (lanza si la API responde error, p. ej. fuera de la ventana 24h).
-  const sent = await sendText(creds, contact.phone, clean, {
+  // Enviar (lanza si la API responde error, p. ej. fuera de la ventana 24h).
+  const sent = await messaging.sendText(contact.phone, clean, {
     metadata: { conversation_id: conversationId, source: "dashboard-manual" },
   });
 

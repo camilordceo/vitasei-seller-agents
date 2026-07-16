@@ -6,12 +6,12 @@ import { createOpenAIClient } from "@/lib/openai/client";
 import { generateReply } from "@/lib/openai/responses";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
-import { sendText, sendImage, type CallbellCreds } from "@/lib/callbell/sender";
+import type { MessagingProvider } from "@/lib/messaging/types";
 import {
   loadAgentForConversation,
   loadRetargetConfig,
-  agentCallbellCreds,
   agentVectorStoreId,
+  providerForAgent,
   type Agent,
 } from "@/lib/agent/agents";
 import { isAgentActiveNow } from "@/lib/agent/schedule";
@@ -325,7 +325,7 @@ async function sendRetargetMessage(
   ctx: SendCtx,
 ): Promise<"sent" | "skipped"> {
   const { row, agent, previousResponseId, lastInboundAt, now } = ctx;
-  const creds = agentCallbellCreds(agent);
+  const messaging = providerForAgent(agent);
 
   // Guía editable por agente de ESTA etapa (por índice temporal). Resiliente: si el
   // agente ya no tiene esa etapa (redujo su config tras agendar) o no puso guía,
@@ -412,24 +412,24 @@ async function sendRetargetMessage(
 
   if (combine) {
     const [first, ...rest] = validImages;
-    const sent = await sendImage(creds, row.phone, first.imageUrl, textToSend, meta);
+    const sent = await messaging.sendImage(row.phone, first.imageUrl, textToSend, meta);
     await supabase
       .from("messages")
       .update({ type: "image", media_url: first.imageUrl, callbell_message_uuid: sent.uuid })
       .eq("id", outboundMessageId);
     for (const img of rest) {
-      await sendRetargetImage(supabase, creds, row.conversation_id, row.phone, img, meta);
+      await sendRetargetImage(supabase, messaging, row.conversation_id, row.phone, img, meta);
     }
   } else {
     if (textToSend.length > 0) {
-      const sent = await sendText(creds, row.phone, textToSend, meta);
+      const sent = await messaging.sendText(row.phone, textToSend, meta);
       await supabase
         .from("messages")
         .update({ callbell_message_uuid: sent.uuid })
         .eq("id", outboundMessageId);
     }
     for (const img of validImages) {
-      await sendRetargetImage(supabase, creds, row.conversation_id, row.phone, img, meta);
+      await sendRetargetImage(supabase, messaging, row.conversation_id, row.phone, img, meta);
     }
   }
 
@@ -457,13 +457,13 @@ async function sendRetargetMessage(
 /** Envía UNA imagen de producto en su propio mensaje (nombre como caption). */
 async function sendRetargetImage(
   supabase: DB,
-  creds: CallbellCreds,
+  messaging: MessagingProvider,
   conversationId: string,
   phone: string,
   img: { sku: string; imageUrl: string; name: string | null },
   opts: { metadata?: Record<string, unknown> },
 ): Promise<void> {
-  const sent = await sendImage(creds, phone, img.imageUrl, img.name, opts);
+  const sent = await messaging.sendImage(phone, img.imageUrl, img.name, opts);
   await supabase.from("messages").insert({
     conversation_id: conversationId,
     direction: "outbound",

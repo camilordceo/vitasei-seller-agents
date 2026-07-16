@@ -320,6 +320,21 @@ export interface Database {
           brand: string | null;
           country: string | null;
           whatsapp_number: string | null;
+          /**
+           * Proveedor de WhatsApp: 'callbell' (histórico, default) | 'kapso'.
+           * Puede llegar `undefined` en runtime si la migración 0026 aún no está
+           * aplicada (`selectAgents` reintenta sin las columnas nuevas), por eso
+           * SIEMPRE se lee con `agentProvider()`/`normalizeProviderId()`. Ver ADR-0056.
+           */
+          provider: string | null;
+          /** SECRETO — API key del proyecto de Kapso (header `X-API-Key`). */
+          kapso_api_key: string | null;
+          /** Meta Phone Number ID: path de envío + enrutamiento del inbound. */
+          kapso_phone_number_id: string | null;
+          /** SECRETO — `secret_key` de la firma HMAC del webhook de Kapso. */
+          kapso_webhook_secret: string | null;
+          /** Idioma por defecto de las plantillas de Kapso (`es`, `es_CO`, …). */
+          kapso_template_language: string | null;
           callbell_channel_uuid: string | null;
           callbell_api_key: string | null;
           logistics_team_uuid: string | null;
@@ -350,6 +365,11 @@ export interface Database {
           brand?: string | null;
           country?: string | null;
           whatsapp_number?: string | null;
+          provider?: string | null;
+          kapso_api_key?: string | null;
+          kapso_phone_number_id?: string | null;
+          kapso_webhook_secret?: string | null;
+          kapso_template_language?: string | null;
           callbell_channel_uuid?: string | null;
           callbell_api_key?: string | null;
           logistics_team_uuid?: string | null;
@@ -380,6 +400,11 @@ export interface Database {
           brand?: string | null;
           country?: string | null;
           whatsapp_number?: string | null;
+          provider?: string | null;
+          kapso_api_key?: string | null;
+          kapso_phone_number_id?: string | null;
+          kapso_webhook_secret?: string | null;
+          kapso_template_language?: string | null;
           callbell_channel_uuid?: string | null;
           callbell_api_key?: string | null;
           logistics_team_uuid?: string | null;

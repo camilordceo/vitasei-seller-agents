@@ -1,3 +1,5 @@
+import { normalizePhone } from "@/lib/messaging/phone";
+
 /**
  * Tipos y helpers del webhook de Callbell.
  *
@@ -46,13 +48,10 @@ export interface CallbellWebhookBody {
 
 /**
  * Normaliza un teléfono a E.164 sin '+' → solo dígitos (ej: 573001234567).
- * Devuelve null si no quedan dígitos.
+ * La implementación vive en `lib/messaging/phone.ts` (compartida con Kapso desde
+ * ADR-0056); se re-exporta acá para no tocar a quien ya la importaba de este módulo.
  */
-export function normalizePhone(raw?: string | null): string | null {
-  if (!raw) return null;
-  const digits = raw.replace(/\D/g, "");
-  return digits.length > 0 ? digits : null;
-}
+export { normalizePhone };
 
 /**
  * Orígenes que NO son del cliente (mensajes salientes/echo del bot u operador).
