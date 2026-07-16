@@ -26,6 +26,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   **dinámicamente** con etiquetas de la config de los agentes. Los agentes de Colombia conservan
   contra-entrega/addi (claves `cod`/`addi`) vía seed. `payment_methods` se lee resiliente a 42703
   (inbound y `getAgents`) para no romper entre el deploy y la migración.
+- **Conversaciones filtrables por agente** (ADR-0054; sin migración). La lista de
+  `/dashboard/conversations` mezclaba todas las marcas; ahora un selector **"Todos los agentes" /
+  por agente** en la cabecera de filtros acota la lista navegando por `?agent=<id>`. Como
+  `conversations` ya lleva `agent_id` (migración 0010), `getRecentConversations` recibe un
+  `agentId?` opcional y filtra con un `eq` directo (sin el `Set` de `conversation_id` que sí
+  necesita Reportes). El `agente` se **preserva** al cambiar los demás filtros (fecha/pedido/
+  estado/orden) y al paginar; cambiar de agente vuelve a la página 1 y el agente activo aparece
+  en el subtítulo. El selector solo se muestra si hay más de un agente.
 - **Reportes filtrables por agente** (ADR-0053; sin migración). La página `/dashboard/reports`
   agregaba todas las marcas juntas; ahora un selector **"Todos los agentes" / por agente** en la
   cabecera acota **todos** los cuadros a la vez —ventas (titulares, ventanas, por estado/método,

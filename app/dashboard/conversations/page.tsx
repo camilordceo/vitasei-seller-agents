@@ -1,11 +1,23 @@
 import Link from "next/link";
-import { getRecentConversations, type ConversationOrderBy } from "@/lib/dashboard/queries";
+import {
+  getAgents,
+  getRecentConversations,
+  type ConversationOrderBy,
+} from "@/lib/dashboard/queries";
 import { ConversationList } from "../ui";
 import type { ConversationStatus } from "@/lib/supabase/types";
+import { AgentFilter } from "./AgentFilter";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { range?: string; order?: string; status?: string; sort?: string; page?: string };
+type SearchParams = {
+  range?: string;
+  order?: string;
+  status?: string;
+  sort?: string;
+  agent?: string;
+  page?: string;
+};
 
 /** Conversaciones por página (para el "siguiente" / "más antiguas"). */
 const PAGE_SIZE = 50;
@@ -96,6 +108,13 @@ export default async function ConversationsPage({
 
   const pageNum = Math.max(1, Math.floor(Number(searchParams.page)) || 1);
 
+  // Agentes para el selector + validación del `?agent=` (ignora ids inexistentes).
+  const agents = await getAgents();
+  const agentKey =
+    searchParams.agent && agents.some((a) => a.id === searchParams.agent)
+      ? searchParams.agent
+      : undefined;
+
   // Pedimos UNA de más (PAGE_SIZE + 1) para saber si hay página siguiente sin un
   // count aparte: si vuelven más de PAGE_SIZE, hay "más antiguas".
   const fetched = await getRecentConversations({
@@ -105,6 +124,7 @@ export default async function ConversationsPage({
     hasOrder: orderKey === "with" ? true : orderKey === "without" ? false : undefined,
     status: statusKey,
     orderBy: sortKey,
+    agentId: agentKey,
   });
   const hasNext = fetched.length > PAGE_SIZE;
   const convos = fetched.slice(0, PAGE_SIZE);
@@ -115,7 +135,13 @@ export default async function ConversationsPage({
 
   // Construye un href preservando los demás filtros; "all" (o "inbound" en sort)
   // limpia esa dimensión. Cambiar cualquier filtro/orden vuelve a la página 1.
-  const current = { range: rangeKey, order: orderKey, status: statusKey, sort: sortParam };
+  const current = {
+    range: rangeKey,
+    order: orderKey,
+    status: statusKey,
+    sort: sortParam,
+    agent: agentKey,
+  };
   function hrefWith(key: keyof typeof current, value: string): string {
     const clears = value === "all" || (key === "sort" && value === "inbound");
     const next = { ...current, [key]: clears ? undefined : value };
@@ -124,6 +150,7 @@ export default async function ConversationsPage({
     if (next.order) qs.set("order", next.order);
     if (next.status) qs.set("status", next.status);
     if (next.sort) qs.set("sort", next.sort);
+    if (next.agent) qs.set("agent", next.agent);
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
@@ -135,24 +162,53 @@ export default async function ConversationsPage({
     if (orderKey) qs.set("order", orderKey);
     if (statusKey) qs.set("status", statusKey);
     if (sortParam) qs.set("sort", sortParam);
+    if (agentKey) qs.set("agent", agentKey);
     if (target > 1) qs.set("page", String(target));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
 
-  const anyFilter = Boolean(rangeKey || orderKey || statusKey || sortParam);
+  // Filtros que el selector de agente debe conservar (sin `agent` ni `page`).
+  const preserved: Record<string, string> = {};
+  if (rangeKey) preserved.range = rangeKey;
+  if (orderKey) preserved.order = orderKey;
+  if (statusKey) preserved.status = statusKey;
+  if (sortParam) preserved.sort = sortParam;
+
+  const anyFilter = Boolean(rangeKey || orderKey || statusKey || sortParam || agentKey);
+
+  // Agente seleccionado (para el subtítulo). undefined = todos.
+  const selectedAgent = agentKey ? agents.find((a) => a.id === agentKey) : undefined;
+  const agentScope = selectedAgent
+    ? `${selectedAgent.name}${selectedAgent.brand ? ` · ${selectedAgent.brand}` : ""}`
+    : null;
 
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Conversaciones</h1>
-          <p className="text-sm text-slate-500">Todas las conversaciones del agente.</p>
+          <p className="text-sm text-slate-500">
+            {agentScope ? (
+              <>
+                Conversaciones de <span className="font-medium text-slate-700">{agentScope}</span>.
+              </>
+            ) : (
+              <>Todas las conversaciones del agente.</>
+            )}
+          </p>
         </div>
         <span className="text-sm text-slate-400">{convos.length}</span>
       </div>
 
       <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+        {agents.length > 1 && (
+          <AgentFilter
+            agents={agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }))}
+            current={agentKey ?? ""}
+            preserved={preserved}
+          />
+        )}
         <FilterRow
           label="Fecha"
           filters={RANGE_FILTERS}
