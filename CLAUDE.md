@@ -5,7 +5,7 @@ orden y no avances sin cumplir el criterio de aceptación de cada uno.
 
 ## Stack
 Next.js 14 (App Router) · TypeScript estricto · Tailwind · Supabase (Postgres + Storage + Auth) ·
-OpenAI Responses API + file_search · Callbell (WhatsApp).
+OpenAI Responses API + file_search · **Callbell y Kapso** (WhatsApp).
 
 ## Principios
 - **Webhook sin cola async:** ingesta síncrona (guarda inbound + marca "último mensaje") →
@@ -13,6 +13,9 @@ OpenAI Responses API + file_search · Callbell (WhatsApp).
 - **Debounce:** se espera `REPLY_DEBOUNCE_MS` (default 12s) y solo responde la tarea del
   ÚLTIMO mensaje, juntando los mensajes seguidos en una sola llamada. Nada de servicios extra.
 - **Supabase = fuente de verdad** del historial. `previous_response_id` es conveniencia, no estado canónico.
+- **Un cerebro, dos transportes:** el envío pasa SIEMPRE por el puerto `MessagingProvider`
+  (`lib/messaging/`); `agents.provider` elige Callbell o Kapso. Nunca llames al sender de un
+  proveedor desde el flujo: usa `providerForAgent(agent)`. Ver ADR-0056.
 - **Gate anti-alucinación siempre:** ningún `#ID` se envía si el SKU no existe en `products`.
 - **Tags nunca son visibles al cliente:** se quitan del texto antes de enviar.
 - **Service role solo en server.** Nunca exponer `SUPABASE_SERVICE_ROLE_KEY` al cliente.
@@ -33,11 +36,14 @@ mensaje, junta los pendientes y **genera** (1× `responses.create`) → **prepar
 ```
 app/
   api/webhooks/callbell/route.ts   # valida + procesa inline + 200
+  api/webhooks/kapso/route.ts      # ídem para Kapso → MISMO ingest + debounce
   (dashboard)/...
 lib/
   supabase/        # clientes browser + server(service-role)
   openai/          # responses + vector store + carga catálogo
+  messaging/       # PUERTO (MessagingProvider) + adaptadores + media/phone comunes
   callbell/        # sender (sendText, sendImage), tipos webhook
+  kapso/           # sender (forma de Meta), webhook v2, firma, plantillas, routing
   agent/           # processMessage (flujo inline) + parser de tags + gate
 supabase/migrations/0001_init.sql
 docs/

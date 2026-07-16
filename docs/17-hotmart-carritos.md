@@ -7,11 +7,18 @@ Capturar los eventos de **carrito abandonado** de Hotmart y enviar automáticame
 
 1. Hotmart detecta un carrito abandonado → dispara webhook a nuestra API.
 2. Nuestro backend recibe el evento → extrae el teléfono del comprador.
-3. Envía una plantilla de WhatsApp vía Callbell (único envío permitido fuera de 24h).
+3. Envía una plantilla de WhatsApp por el **proveedor del agente designado** (único envío
+   permitido fuera de 24h).
 4. Crea/actualiza la conversación en Supabase para que el agente pueda continuar.
 
 **Resultado:** el cliente recibe un mensaje de WhatsApp y, si responde, el agente de IA
 toma la conversación normalmente.
+
+> **Proveedor (ADR-0056).** El envío sale por la cuenta del proveedor del agente designado en
+> `/dashboard/hotmart`: **Callbell** (plantilla por `uuid`) o **Kapso** (plantilla por
+> **nombre**). Ese selector es también el interruptor para **mover la línea de un proveedor al
+> otro** — y volver atrás. El resto del flujo (idempotencia, plantilla por curso, marca
+> `hotmart_flow`, contexto de la respuesta) es idéntico en los dos. Ver `docs/24`.
 
 ---
 
