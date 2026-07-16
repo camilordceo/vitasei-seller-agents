@@ -302,18 +302,31 @@ export async function loadReactivationImages(
  * antiguo si hubiera más de uno. Consulta APARTE (no está en `AGENT_COLS`) para NO
  * arriesgar la ruta crítica de inbound: si falta la columna (42703, migración 0020
  * sin aplicar) o falla, devuelve null y el llamador usa el fallback. Ver ADR-0041.
+ *
+ * `setHotmartAgent` (dashboard) garantiza exclusividad —apaga la marca en todos y la
+ * prende en uno—, así que "más de uno" solo puede venir de una edición manual en la
+ * base. Antes ese empate se resolvía en SILENCIO por antigüedad, lo cual es peligroso
+ * al mover la línea de un proveedor a otro: los carritos se seguirían yendo por el
+ * agente viejo sin ninguna señal. Ahora se detecta y se avisa. Ver ADR-0056.
  */
 export async function findHotmartAgentId(supabase: DB): Promise<string | null> {
   const { data, error } = await supabase
     .from("agents")
-    .select("id")
+    .select("id, name")
     .eq("enabled", true)
     .eq("hotmart_enabled", true)
     .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(2);
   if (error) return null; // columna ausente o error → sin marca (usa fallback)
-  return data?.id ?? null;
+  const rows = data ?? [];
+  if (rows.length > 1) {
+    console.warn(
+      `[findHotmartAgentId] Hay ${rows.length} agentes marcados para Hotmart (${rows
+        .map((r) => r.name)
+        .join(", ")}). Gana el más antiguo: "${rows[0].name}". Deja solo uno en /dashboard/hotmart.`,
+    );
+  }
+  return rows[0]?.id ?? null;
 }
 
 /**

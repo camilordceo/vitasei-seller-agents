@@ -1,16 +1,27 @@
 import type { CatalogProductInput } from "@/lib/openai/catalog";
 import type { AgentSchedule } from "@/lib/agent/schedule";
 import type { PaymentMethodConfig } from "@/lib/agent/paymentMethods";
+import type { MessagingProviderId } from "@/lib/messaging/types";
 
-/** Datos editables de un agente (marca/número) desde el dashboard. Ver docs/16. */
+/** Datos editables de un agente (marca/número) desde el dashboard. Ver docs/16, docs/24. */
 export interface AgentEditInput {
   name: string;
   brand: string;
   country: string;
   whatsappNumber: string;
+  /** Proveedor de WhatsApp del agente: por acá sale y por acá entra. Ver ADR-0056. */
+  provider: MessagingProviderId;
   callbellChannelUuid: string;
   /** Nueva API key de Callbell; VACÍO = no cambiar (write-only, no se muestra). */
   callbellApiKey: string;
+  /** Meta Phone Number ID del número en Kapso (envío + enrutamiento del inbound). */
+  kapsoPhoneNumberId: string;
+  /** Nueva API key de Kapso; VACÍO = no cambiar (write-only). */
+  kapsoApiKey: string;
+  /** Nuevo secreto de firma del webhook de Kapso; VACÍO = no cambiar (write-only). */
+  kapsoWebhookSecret: string;
+  /** Idioma por defecto de las plantillas de Kapso (`es`, `es_CO`…). */
+  kapsoTemplateLanguage: string;
   logisticsTeamUuid: string;
   vectorStoreId: string;
   model: string;

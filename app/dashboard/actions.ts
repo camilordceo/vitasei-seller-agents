@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods } from "@/lib/agent/paymentMethods";
+import { normalizeProviderId } from "@/lib/messaging/types";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
 import { loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
@@ -454,9 +455,10 @@ function cleanTemperature(t: number): number {
 }
 
 /**
- * Construye el patch de columnas de un agente a partir del formulario. La API key
- * es write-only: solo se incluye si se pegó una nueva (vacío = no cambiar), para
- * no borrar el secreto sin querer. Ver docs/16, ADR-0023.
+ * Construye el patch de columnas de un agente a partir del formulario. Los secretos
+ * (API keys, secreto del webhook) son write-only: solo se incluyen si se pegó uno
+ * nuevo (vacío = no cambiar), para no borrarlos sin querer. Ver docs/16, ADR-0023;
+ * docs/24, ADR-0056.
  */
 function agentPatch(input: AgentEditInput): Record<string, unknown> {
   const patch: Record<string, unknown> = {
@@ -464,7 +466,10 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
     brand: textOrNull(input.brand),
     country: textOrNull(input.country),
     whatsapp_number: textOrNull(input.whatsappNumber),
+    provider: normalizeProviderId(input.provider),
     callbell_channel_uuid: textOrNull(input.callbellChannelUuid),
+    kapso_phone_number_id: textOrNull(input.kapsoPhoneNumberId),
+    kapso_template_language: textOrNull(input.kapsoTemplateLanguage),
     logistics_team_uuid: textOrNull(input.logisticsTeamUuid),
     vector_store_id: textOrNull(input.vectorStoreId),
     model: textOrNull(input.model) ?? "gpt-5.1",
@@ -482,6 +487,10 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
   };
   const newKey = input.callbellApiKey.trim();
   if (newKey.length > 0) patch.callbell_api_key = newKey;
+  const newKapsoKey = input.kapsoApiKey.trim();
+  if (newKapsoKey.length > 0) patch.kapso_api_key = newKapsoKey;
+  const newKapsoSecret = input.kapsoWebhookSecret.trim();
+  if (newKapsoSecret.length > 0) patch.kapso_webhook_secret = newKapsoSecret;
   return patch;
 }
 

@@ -18,7 +18,14 @@ export default async function HotmartPage() {
     getRecentHotmartEvents(25),
     getHotmartAgentId(),
   ]);
-  const agentOptions = agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }));
+  // El proveedor viaja al selector: al mover la línea de carritos de Callbell a
+  // Kapso hay que ver de un vistazo por dónde va a salir. Ver ADR-0056.
+  const agentOptions = agents.map((a) => ({
+    id: a.id,
+    name: a.name,
+    brand: a.brand,
+    provider: a.provider,
+  }));
 
   return (
     <div className="space-y-6">

@@ -4,14 +4,17 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setHotmartAgent } from "../actions";
 import type { AgentOption } from "./HotmartTemplatesManager";
+import { providerLabel } from "@/lib/messaging/types";
 
 const selectCls =
   "w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 sm:w-auto";
 
 /**
- * Designa qué agente (marca / línea con su cuenta de Callbell) maneja los eventos
- * de Hotmart. Los carritos abandonados se envían por la cuenta de Callbell de ESE
- * agente, así que la plantilla debe existir en esa cuenta. Ver ADR-0041.
+ * Designa qué agente (marca / línea) maneja los eventos de Hotmart. Los carritos
+ * abandonados se envían por la cuenta del PROVEEDOR de ese agente, así que la
+ * plantilla debe existir allí. Es también el interruptor para mover la línea de
+ * Callbell a Kapso: se elige el agente de Kapso y los siguientes carritos salen por
+ * ahí (volver atrás es el mismo clic al revés). Ver ADR-0041, ADR-0056.
  */
 export function HotmartAgentSelector({
   agents,
@@ -45,7 +48,9 @@ export function HotmartAgentSelector({
       <h2 className="text-sm font-semibold text-slate-700">Agente de Hotmart</h2>
       <p className="mt-0.5 text-xs text-slate-400">
         Qué agente (marca / línea) maneja los carritos abandonados. La plantilla se envía por la
-        cuenta de Callbell de ese agente, así que su UUID debe existir en esa cuenta.
+        cuenta del <strong>proveedor</strong> de ese agente, así que debe existir allí: en Callbell
+        se identifica por UUID; en Kapso, por nombre. Cambiar de agente aquí mueve la línea de un
+        proveedor al otro.
       </p>
 
       {agents.length === 0 ? (
@@ -68,7 +73,7 @@ export function HotmartAgentSelector({
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
-                {a.brand ? ` · ${a.brand}` : ""}
+                {a.brand ? ` · ${a.brand}` : ""} [{providerLabel(a.provider)}]
               </option>
             ))}
           </select>

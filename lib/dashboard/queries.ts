@@ -28,6 +28,7 @@ import type {
   RetargetStatus,
 } from "@/lib/supabase/types";
 import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
+import { normalizeProviderId, type MessagingProviderId } from "@/lib/messaging/types";
 import { findHotmartAgentId } from "@/lib/agent/agents";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
@@ -1313,8 +1314,11 @@ export interface AgentRow {
   brand: string | null;
   country: string | null;
   whatsappNumber: string | null;
+  /** Proveedor de WhatsApp del agente. Ver ADR-0056. */
+  provider: MessagingProviderId;
   callbellChannelUuid: string | null;
   hasCallbellApiKey: boolean;
+  kapsoPhoneNumberId: string | null;
   logisticsTeamUuid: string | null;
   vectorStoreId: string | null;
   model: string;
@@ -1323,35 +1327,34 @@ export interface AgentRow {
   paymentMethods: PaymentMethodConfig[];
 }
 
-/** Agentes (marcas/números) para la lista del dashboard. NUNCA devuelve la API key. */
+/**
+ * Agentes (marcas/números) para la lista del dashboard. NUNCA devuelve la API key
+ * (solo `hasCallbellApiKey`).
+ *
+ * Usa `select("*")` a propósito: las columnas nuevas van llegando por migraciones
+ * (`payment_methods` en la 0025, `provider` en la 0026) y una lista explícita obliga
+ * a encadenar un fallback por cada una para sobrevivir a la ventana entre el deploy
+ * y la migración. Con `*` el problema desaparece: lo que aún no existe simplemente
+ * llega `undefined` y los parsers lo resuelven. Son pocos agentes, así que el costo
+ * de traer todas las columnas es irrelevante. Ver ADR-0056.
+ */
 export async function getAgents(): Promise<AgentRow[]> {
   const supabase = createServiceClient();
-  const BASE_COLS =
-    "id, name, brand, country, whatsapp_number, callbell_channel_uuid, callbell_api_key, logistics_team_uuid, vector_store_id, model, enabled, created_at";
-
-  // Se intenta con `payment_methods` (migración 0025). Si la columna aún no existe
-  // (42703), se reintenta sin ella para no romper la lista ni los reportes; los
-  // agentes quedan sin métodos configurados (labels caen a los conocidos).
-  let res = await supabase
+  const { data, error } = await supabase
     .from("agents")
-    .select(`${BASE_COLS}, payment_methods`)
+    .select("*")
     .order("created_at", { ascending: true });
-  if (res.error && res.error.code === "42703") {
-    // Sin la columna: los agentes quedan sin `payment_methods` (→ parse a []).
-    res = (await supabase
-      .from("agents")
-      .select(BASE_COLS)
-      .order("created_at", { ascending: true })) as typeof res;
-  }
-  if (res.error) throw new Error(`getAgents: ${res.error.message}`);
-  return (res.data ?? []).map((a) => ({
+  if (error) throw new Error(`getAgents: ${error.message}`);
+  return (data ?? []).map((a) => ({
     id: a.id,
     name: a.name,
     brand: a.brand,
     country: a.country,
     whatsappNumber: a.whatsapp_number,
+    provider: normalizeProviderId((a as { provider?: unknown }).provider),
     callbellChannelUuid: a.callbell_channel_uuid,
     hasCallbellApiKey: !!a.callbell_api_key,
+    kapsoPhoneNumberId: (a as { kapso_phone_number_id?: string | null }).kapso_phone_number_id ?? null,
     logisticsTeamUuid: a.logistics_team_uuid,
     vectorStoreId: a.vector_store_id,
     model: a.model,
@@ -1366,10 +1369,17 @@ export interface AgentDetail {
   brand: string | null;
   country: string | null;
   whatsappNumber: string | null;
+  /** Proveedor de WhatsApp del agente. Ver ADR-0056. */
+  provider: MessagingProviderId;
   callbellChannelUuid: string | null;
   /** Últimos 4 de la API key (para mostrar sin exponer el secreto). */
   callbellApiKeyLast4: string | null;
   hasCallbellApiKey: boolean;
+  kapsoPhoneNumberId: string | null;
+  kapsoTemplateLanguage: string | null;
+  /** Los secretos de Kapso NUNCA salen: solo si están puestos. */
+  hasKapsoApiKey: boolean;
+  hasKapsoWebhookSecret: boolean;
   logisticsTeamUuid: string | null;
   vectorStoreId: string | null;
   model: string;
@@ -1392,15 +1402,27 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
   if (error) throw new Error(`getAgent: ${error.message}`);
   if (!data) return null;
   const key = data.callbell_api_key ?? "";
+  const kapso = data as {
+    provider?: unknown;
+    kapso_api_key?: string | null;
+    kapso_phone_number_id?: string | null;
+    kapso_webhook_secret?: string | null;
+    kapso_template_language?: string | null;
+  };
   return {
     id: data.id,
     name: data.name,
     brand: data.brand,
     country: data.country,
     whatsappNumber: data.whatsapp_number,
+    provider: normalizeProviderId(kapso.provider),
     callbellChannelUuid: data.callbell_channel_uuid,
     callbellApiKeyLast4: key ? key.slice(-4) : null,
     hasCallbellApiKey: key.length > 0,
+    kapsoPhoneNumberId: kapso.kapso_phone_number_id ?? null,
+    kapsoTemplateLanguage: kapso.kapso_template_language ?? null,
+    hasKapsoApiKey: (kapso.kapso_api_key ?? "").length > 0,
+    hasKapsoWebhookSecret: (kapso.kapso_webhook_secret ?? "").length > 0,
     logisticsTeamUuid: data.logistics_team_uuid,
     vectorStoreId: data.vector_store_id,
     model: data.model,
