@@ -20,6 +20,7 @@ import { KAPSO_SIGNATURE_HEADER, verifyKapsoSignature } from "@/lib/kapso/signat
 import { ingestInboundMessage, runDebouncedReply } from "@/lib/agent/processMessage";
 import { agentKapsoWebhookSecret, resolveKapsoAgentForInbound } from "@/lib/agent/agents";
 import { createServiceClient } from "@/lib/supabase/server";
+import { env } from "@/lib/env";
 import type { Json } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
@@ -114,19 +115,25 @@ export async function POST(req: Request) {
     return ok();
   }
 
+  // 5) Firma. Va ANTES de cualquier escritura: resolver el agente es solo una
+  //    lectura, pero a partir de acá todo deja rastro y este endpoint es público.
+  //    El secreto sale del agente (cada proyecto de Kapso puede tener el suyo) y,
+  //    si el número no es nuestro, del global. Sin secreto configurado no se
+  //    bloquea (dev), igual que en Callbell.
+  const secret = agent ? agentKapsoWebhookSecret(agent) : env.KAPSO_WEBHOOK_SECRET;
+  if (secret && !verifyKapsoSignature(raw, req.headers.get(KAPSO_SIGNATURE_HEADER), secret)) {
+    // A los logs de Vercel y NO a `events_log`: un request sin firma válida no debe
+    // poder escribir en la base (si no, cualquiera que conozca la URL podría inflar
+    // la tabla). El caso real de este error es un secreto mal pegado, y para eso
+    // basta con verlo en los logs. 200 para no filtrar información.
+    console.warn(`[kapso webhook] firma inválida (phone_number_id ${phoneNumberId ?? "?"})`);
+    return ok();
+  }
+
   if (!agent) {
     // No es un número nuestro, o falta pegar el Phone Number ID en el dashboard.
     await logEvent("inbox_rejected", { provider: "kapso", phoneNumberId });
     return ok();
-  }
-
-  // 5) Firma. Se valida DESPUÉS de resolver el agente (una lectura sin efectos)
-  //    porque el secreto puede ser propio de cada proyecto de Kapso. Sin secreto
-  //    configurado no se bloquea (dev), igual que en Callbell.
-  const secret = agentKapsoWebhookSecret(agent);
-  if (secret && !verifyKapsoSignature(raw, req.headers.get(KAPSO_SIGNATURE_HEADER), secret)) {
-    await logEvent("webhook_signature_rejected", { provider: "kapso", phoneNumberId });
-    return ok(); // 200 para no filtrar información
   }
 
   // 6) Ingesta de cada mensaje. Un fallo se registra y NUNCA tumba el 200.
