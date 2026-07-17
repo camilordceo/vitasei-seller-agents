@@ -195,9 +195,11 @@ export async function saveOrder(orderId: string, input: OrderEditInput): Promise
 /**
  * Crea una orden EN BLANCO para una conversación existente y devuelve su id para
  * que el dashboard abra el editor. Sirve para registrar a mano una venta que el
- * agente no cerró (p. ej. cerró sin `#orden-lista`). **Idempotente**: si la
- * conversación ya tiene orden, devuelve esa (no duplica). Nace en `pending_handoff`
- * con el método de la conversación; ítems/envío/total se completan en el editor.
+ * agente no cerró (p. ej. cerró sin `#orden-lista`). **Idempotente por orden
+ * ACTIVA**: si la conversación ya tiene una orden NO cancelada, devuelve esa (no
+ * duplica); si solo tiene canceladas (el cliente canceló y vuelve a pedir), crea una
+ * nueva. Nace en `pending_handoff` con el método de la conversación; ítems/envío/total
+ * se completan en el editor. Ver ADR-0059.
  * Cuenta en métricas apenas exista (salvo que se marque Cancelada). Ver docs/12, ADR-0032.
  */
 export async function createOrderForConversation(conversationId: string): Promise<string> {
@@ -211,11 +213,14 @@ export async function createOrderForConversation(conversationId: string): Promis
   if (convoErr) throw new Error(`createOrderForConversation convo: ${convoErr.message}`);
   if (!convo) throw new Error("La conversación no existe.");
 
-  // Idempotencia: si ya hay orden en esta conversación, abre esa (no se duplica).
+  // Idempotencia por orden ACTIVA: si ya hay una orden NO cancelada, abre esa (no se
+  // duplica). Si la conversación solo tiene canceladas (el cliente canceló y vuelve a
+  // pedir), sigue de largo y crea una nueva en blanco. Ver ADR-0059.
   const { data: existing, error: existErr } = await supabase
     .from("orders")
     .select("id")
     .eq("conversation_id", conversationId)
+    .neq("status", "cancelled")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

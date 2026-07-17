@@ -915,14 +915,19 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // Intentar cerrar orden: explícito (`#orden-lista`) o inferido.
   const shouldCreateOrder = parsed.tags.ordenLista || inferClose;
 
-  // Extraer la orden (completion aparte) y crearla. Idempotente: si la
-  // conversación ya tiene orden, la reutilizamos (no duplicamos ni re-avisamos).
+  // Extraer la orden (completion aparte) y crearla. Idempotente por ORDEN ACTIVA:
+  // reutilizamos una orden existente solo si NO está cancelada (no duplicamos ni
+  // re-avisamos). Si el cliente canceló una compra previa y hoy vuelve a pedir, la
+  // orden cancelada NO bloquea la nueva: se crea otra (deja la cancelada como está
+  // y avisa al dueño de la nueva venta). Ver ADR-0059.
   let orderId: string | null = null;
   if (shouldCreateOrder) {
     const { data: existingOrder, error: existErr } = await supabase
       .from("orders")
       .select("id")
       .eq("conversation_id", conversationId)
+      .neq("status", "cancelled")
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (existErr) throw new Error(`create-order existing check: ${existErr.message}`);

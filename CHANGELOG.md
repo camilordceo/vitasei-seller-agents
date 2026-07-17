@@ -183,6 +183,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   (`lib/openai/catalog.ts` `imageStoragePath`, `lib/supabase/storage.ts`).
 
 ### Changed
+- **Órdenes · una conversación puede tener más de una orden ("canceló y volvió a pedir")**
+  (ADR-0059): la creación de orden pasa de ser idempotente **por conversación** a serlo **por
+  orden ACTIVA**. Antes, tanto el bot (`lib/agent/processMessage.ts`) como "Crear orden" del
+  dashboard (`createOrderForConversation` en `app/dashboard/actions.ts`) reutilizaban **cualquier**
+  orden previa de la conversación sin mirar su estado → si el cliente había **cancelado** una
+  compra y volvía a pedir, se reabría la cancelada: **no** nacía orden nueva (invisible en
+  órdenes/reportes) ni **avisaba al dueño**. Ahora solo se reutiliza una orden **no cancelada**
+  (`.neq("status", "cancelled")`); si todas están canceladas se crea una nueva con la fecha de hoy,
+  que cuenta en métricas y dispara el aviso al dueño. La anterior **queda cancelada intacta**. No
+  hace falta migración: la BD nunca tuvo `UNIQUE(conversation_id)` (`idx_orders_conversation` es un
+  índice normal) y el filtro "orden activa" ya era el idioma de las guardas de compra de
+  retargets/reactivaciones (`retarget.ts`, `reactivation.ts`). El detalle de conversación sigue
+  mostrando la orden **más reciente**; el histórico completo está en la sección **Órdenes**.
 - **Catálogo · se sube como UN solo documento al vector store** (ADR-0048, reemplaza la
   decisión #2 de ADR-0009): antes la carga subía **un archivo `.md` por producto** a OpenAI, en
   serie, esperando el procesamiento de cada uno (`uploadAndPoll`). Con un catálogo completo eso se
