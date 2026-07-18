@@ -1,4 +1,4 @@
-import "server-only";
+﻿import "server-only";
 import type { PostgrestError } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
@@ -7,9 +7,19 @@ import {
   tokenCostUsd,
 } from "@/lib/openai/pricing";
 import {
+  bogotaDayEndIso,
+  bogotaDayKey,
+  bogotaDayStartIso,
   summarizeConversationActivity,
   summarizeOrders,
   summarizeProductConversion,
+  summarizeRoas,
+  matchesSearch,
+  searchKey,
+  type AgentCostConfig,
+  type ChatFact,
+  type RoasOrderFact,
+  type RoasReport,
   type ConversationActivityFact,
   type ConversionReport,
   type OrderFact,
@@ -317,6 +327,12 @@ export interface ConversationFilters {
   hasVoiceCall?: boolean;
   /** Filtra por etiqueta (id de `labels`): solo conversaciones con esa etiqueta. undefined = todas. */
   labelId?: string;
+  /** true = solo conversaciones SIN ninguna etiqueta (la cola por clasificar). Ignora `labelId`. */
+  withoutLabel?: boolean;
+  /** Día calendario (YYYY-MM-DD, hora Colombia) desde el que se incluyen. Inclusivo. */
+  fromDate?: string;
+  /** Día calendario (YYYY-MM-DD, hora Colombia) hasta el que se incluyen. Inclusivo. */
+  toDate?: string;
   /** Filtra por producto/fuente (`product_category` exacto). undefined = todos. */
   productCategory?: string;
 }
@@ -362,6 +378,21 @@ export async function getRecentConversations(
     labelConvoIds = [...new Set(rows.map((r) => r.conversation_id))];
     if (labelConvoIds.length === 0) return [];
   }
+
+  /**
+   * Filtro "sin etiqueta" (la cola por clasificar). NO se resuelve en la consulta:
+   * en la práctica casi ninguna conversación está etiquetada, así que el conjunto
+   * "sin etiqueta" es casi toda la tabla y tanto un `.in(...)` con el complemento
+   * como un `not.in(...)` pasan de miles de UUIDs → PostgREST devuelve 400 por
+   * URL demasiado larga (comprobado contra la base real).
+   *
+   * Se filtra en JS con las etiquetas que la lista YA trae para pintar los chips
+   * (cero consultas extra), igual que "con/sin pedido": se pide una ventana más
+   * ancha y se recorta [offset, offset+limit) abajo. Ver `jsFiltered`.
+   */
+  const unlabeledOnly = Boolean(opts.withoutLabel && !opts.labelId);
+  // Filtros que se resuelven DESPUÉS de la consulta → la paginación se recorta en JS.
+  const jsFiltered = opts.hasOrder != null || unlabeledOnly;
 
   /**
    * Filtro "tuvo llamada con IA": se resuelven los `conversation_id` de
@@ -417,12 +448,18 @@ export async function getRecentConversations(
       // Ventana por la MISMA clave de orden (coherente con la lista).
       q = q.gte(sortCol, since);
     }
-    if (opts.hasOrder == null) {
+    // Rango exacto desde/hasta (días calendario de Bogota), también sobre la clave
+    // de orden. La página nunca manda rango y `sinceDays` a la vez: elegir uno
+    // limpia el otro, para que la ventana no sea ambigua.
+    if (opts.fromDate) q = q.gte(sortCol, bogotaDayStartIso(opts.fromDate));
+    if (opts.toDate) q = q.lt(sortCol, bogotaDayEndIso(opts.toDate));
+    if (!jsFiltered) {
       // Fecha/estado son filtros de BD → paginación EXACTA con range(offset..offset+limit-1).
       q = q.range(offset, offset + limit - 1);
     } else {
-      // "con/sin pedido" se resuelve en JS (cruza con `orders`): traemos desde el
-      // inicio lo suficiente para cubrir la página pedida (con margen) y cortamos
+      // "con/sin pedido" (cruza con `orders`) y "sin etiqueta" (cruza con
+      // `conversation_labels`) se resuelven en JS: traemos desde el inicio lo
+      // suficiente para cubrir la página pedida (con margen) y cortamos
       // [offset, offset+limit) abajo. Volumen v1 bajo → aceptable; si crece, mover a
       // una vista/RPC. Tope 1000 (límite de PostgREST); no se alcanza con volumen v1.
       q = q.limit(Math.min(Math.max((offset + limit) * 5, 200), 1000));
@@ -527,9 +564,14 @@ export async function getRecentConversations(
   if (opts.hasOrder === true) mapped = mapped.filter((r) => r.hasOrder);
   else if (opts.hasOrder === false) mapped = mapped.filter((r) => !r.hasOrder);
 
-  // Sin hasOrder ya vino paginado por range(); con hasOrder recortamos la ventana
-  // [offset, offset+limit) tras el filtro en JS.
-  return opts.hasOrder == null ? mapped : mapped.slice(offset, offset + limit);
+  // "Sin etiqueta" se lee de los chips que ya se armaron arriba. Si la tabla de
+  // etiquetas no existe (migración 0014), TODAS quedan sin etiqueta — que es la
+  // lectura correcta, no un error.
+  if (unlabeledOnly) mapped = mapped.filter((r) => r.labels.length === 0);
+
+  // Sin filtros de JS ya vino paginado por range(); con ellos recortamos la
+  // ventana [offset, offset+limit) después de filtrar.
+  return jsFiltered ? mapped.slice(offset, offset + limit) : mapped;
 }
 
 export interface ConversationFilterOptions {
@@ -931,6 +973,147 @@ export async function getOrders(opts?: {
   });
 }
 
+export interface OrderListFilters {
+  status?: OrderStatus;
+  /** Texto libre: teléfono, nombre del contacto o ciudad. Sin acentos y sin mayúsculas. */
+  q?: string;
+  /** SKU exacto de un ítem de la orden. */
+  sku?: string;
+  /** Página 1-based. */
+  page?: number;
+  pageSize?: number;
+}
+
+export interface OrdersSummary {
+  /** Órdenes que cumplen el filtro (todas, no solo la página). */
+  count: number;
+  /** Monto de las órdenes NO canceladas. */
+  revenue: number;
+  /** Monto de las confirmadas. */
+  confirmedRevenue: number;
+  /** Ticket promedio de las no canceladas que tienen total. */
+  avgTicket: number;
+  /** Moneda si TODAS las órdenes del filtro coinciden; null si hay mezcla. */
+  currency: string | null;
+}
+
+export interface OrdersPage {
+  rows: OrderRow[];
+  summary: OrdersSummary;
+  page: number;
+  hasNext: boolean;
+  /** Productos presentes en las órdenes (para el selector), ordenados por nombre. */
+  products: Array<{ sku: string; name: string }>;
+}
+
+/**
+ * Lista de órdenes con filtros, resumen y paginación.
+ *
+ * Barre TODAS las órdenes y filtra en JS (mismo criterio que los reportes) en vez
+ * de empujar los filtros a PostgREST. Es a propósito: buscar por teléfono/nombre
+ * cruza `contacts` y buscar por producto cruza `order_items`, y los totales del
+ * encabezado tienen que cubrir el filtro COMPLETO, no la página que se ve. Con el
+ * volumen v1 el barrido es barato; si crece, esto se muda a una vista/RPC.
+ */
+export async function getOrdersPage(opts: OrderListFilters = {}): Promise<OrdersPage> {
+  const pageSize = opts.pageSize ?? 50;
+  const page = Math.max(1, opts.page ?? 1);
+  const supabase = createServiceClient();
+
+  const [orders, items, contacts] = await Promise.all([
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("orders")
+          .select(
+            "id, conversation_id, contact_id, status, fulfillment_method, total, currency, shipping_city, created_at",
+          )
+          .order("created_at", { ascending: false })
+          .range(from, to),
+      "getOrdersPage orders",
+    ),
+    fetchAllRows(
+      (from, to) => supabase.from("order_items").select("order_id, sku, name").range(from, to),
+      "getOrdersPage items",
+    ),
+    fetchAllRows(
+      (from, to) => supabase.from("contacts").select("id, name, phone").range(from, to),
+      "getOrdersPage contacts",
+    ),
+  ]);
+
+  const contactById = new Map(contacts.map((c) => [c.id, c]));
+
+  // Ítems por orden: conteo (para la lista), SKUs (para el filtro de producto) y
+  // el catálogo de opciones del selector (sku → nombre más reciente que se vio).
+  const itemsByOrder = new Map<string, { count: number; skus: Set<string> }>();
+  const productBySku = new Map<string, string>();
+  for (const it of items) {
+    const entry = itemsByOrder.get(it.order_id) ?? { count: 0, skus: new Set<string>() };
+    entry.count += 1;
+    if (it.sku) entry.skus.add(it.sku);
+    itemsByOrder.set(it.order_id, entry);
+    if (it.sku && !productBySku.has(it.sku)) productBySku.set(it.sku, it.name ?? it.sku);
+  }
+
+  const q = searchKey(opts.q).trim();
+  const filtered = orders.filter((o) => {
+    if (opts.status && o.status !== opts.status) return false;
+    if (opts.sku && !itemsByOrder.get(o.id)?.skus.has(opts.sku)) return false;
+    if (q) {
+      const c = contactById.get(o.contact_id);
+      // Nombre, teléfono y ciudad. La comparación (acentos, dígitos sueltos) vive
+      // en `matchesSearch`, que está testeada.
+      if (!matchesSearch([c?.name, c?.phone, o.shipping_city], q)) return false;
+    }
+    return true;
+  });
+
+  // Resumen sobre el filtro COMPLETO. Las canceladas no suman monto (mismo
+  // criterio que "Órdenes generadas" en Reportes) pero sí cuentan en `count`.
+  const active = filtered.filter((o) => o.status !== "cancelled");
+  const revenue = active.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+  const withTotal = active.filter((o) => Number(o.total) > 0);
+  const currencies = new Set(filtered.map((o) => o.currency).filter(Boolean));
+  const summary: OrdersSummary = {
+    count: filtered.length,
+    revenue,
+    confirmedRevenue: filtered
+      .filter((o) => o.status === "confirmed")
+      .reduce((sum, o) => sum + (Number(o.total) || 0), 0),
+    avgTicket: withTotal.length > 0 ? revenue / withTotal.length : 0,
+    currency: currencies.size === 1 ? [...currencies][0] : null,
+  };
+
+  const start = (page - 1) * pageSize;
+  const slice = filtered.slice(start, start + pageSize);
+
+  return {
+    rows: slice.map((r) => {
+      const c = contactById.get(r.contact_id);
+      return {
+        id: r.id,
+        conversationId: r.conversation_id,
+        contactName: c?.name ?? null,
+        phone: c?.phone ?? "",
+        status: r.status,
+        method: r.fulfillment_method,
+        total: r.total,
+        currency: r.currency,
+        itemsCount: itemsByOrder.get(r.id)?.count ?? 0,
+        shippingCity: r.shipping_city,
+        createdAt: r.created_at,
+      };
+    }),
+    summary,
+    page,
+    hasNext: start + pageSize < filtered.length,
+    products: [...productBySku.entries()]
+      .map(([sku, name]) => ({ sku, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "es")),
+  };
+}
+
 export interface OrderItemDetail {
   id: string;
   sku: string;
@@ -1151,6 +1334,72 @@ export async function getConversionReport(agentId?: string): Promise<ConversionR
     conversations: convCountRes.count ?? 0,
     transactions: transactions.length,
   });
+}
+
+/**
+ * Retorno (ROAS): cuánto costó traer los chats vs. cuánto vendieron. Ver ADR-0065.
+ *
+ * Un **chat** es una conversación que recibió al menos un mensaje del cliente, y se
+ * detecta con `last_inbound_at` (columna de `conversations`) en vez de barrer
+ * `messages`: es un solo scan y da lo mismo. El costo se imputa el día en que LLEGÓ
+ * la conversación (`created_at`), que es cuando se pagó por ese lead.
+ *
+ * Resiliente a que falte la migración 0028: sin las columnas de costo, todos los
+ * agentes quedan "sin configurar" (chats y ventas sí se ven) en vez de romper la
+ * página de Reportes.
+ */
+export async function getRoasReport(agentId?: string): Promise<RoasReport> {
+  const supabase = createServiceClient();
+
+  const [agentRows, convos, orders] = await Promise.all([
+    supabase.from("agents").select("*").order("created_at", { ascending: true }),
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("conversations")
+          .select("id, agent_id, created_at, last_inbound_at")
+          .range(from, to),
+      "getRoasReport conversations",
+    ),
+    fetchAllRows(
+      (from, to) =>
+        supabase.from("orders").select("conversation_id, status, total, created_at").range(from, to),
+      "getRoasReport orders",
+    ),
+  ]);
+  if (agentRows.error) throw new Error(`getRoasReport agents: ${agentRows.error.message}`);
+
+  const agents: AgentCostConfig[] = (agentRows.data ?? [])
+    .filter((a) => !agentId || a.id === agentId)
+    .map((a) => {
+      // 0 / vacío / columna ausente cuentan como "sin configurar": un costo de 0
+      // daría un retorno infinito, que no dice nada.
+      const cost = readCostConfig(a);
+      return {
+        id: a.id,
+        name: a.name,
+        brand: a.brand,
+        costPerChat: cost.costPerChat,
+        currency: cost.costCurrency,
+      };
+    });
+
+  // Órdenes → agente vía su conversación (las órdenes no llevan `agent_id`).
+  const agentByConvo = new Map(convos.map((c) => [c.id, c.agent_id as string | null]));
+
+  const chats: ChatFact[] = convos.map((c) => ({
+    agentId: c.agent_id as string | null,
+    createdAt: c.created_at,
+    isChat: Boolean(c.last_inbound_at),
+  }));
+  const orderFacts: RoasOrderFact[] = orders.map((o) => ({
+    agentId: agentByConvo.get(o.conversation_id) ?? null,
+    status: o.status,
+    total: o.total,
+    createdAt: o.created_at,
+  }));
+
+  return summarizeRoas(agents, chats, orderFacts);
 }
 
 /**
@@ -1539,6 +1788,9 @@ export interface AgentDetail {
   schedule: AgentSchedule;
   /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
   paymentMethods: PaymentMethodConfig[];
+  /** Costo de traer una conversación (pauta). null = sin configurar. Ver ADR-0065. */
+  costPerChat: number | null;
+  costCurrency: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1581,8 +1833,25 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
     scheduleTimezone: data.schedule_timezone,
     schedule: parseAgentSchedule(data.schedule),
     paymentMethods: parsePaymentMethods((data as { payment_methods?: unknown }).payment_methods),
+    ...readCostConfig(data),
     createdAt: data.created_at,
     updatedAt: data.updated_at,
+  };
+}
+
+/**
+ * Costo por chat de una fila de `agents`. Tolera que falte la migración 0028
+ * (columnas ausentes → sin configurar) y que el numeric llegue como string.
+ */
+function readCostConfig(row: unknown): { costPerChat: number | null; costCurrency: string } {
+  const r = (row ?? {}) as { cost_per_chat?: unknown; cost_currency?: unknown };
+  const value = Number(r.cost_per_chat);
+  return {
+    costPerChat: Number.isFinite(value) && value > 0 ? value : null,
+    costCurrency:
+      typeof r.cost_currency === "string" && r.cost_currency.trim()
+        ? r.cost_currency.trim().toUpperCase()
+        : "COP",
   };
 }
 

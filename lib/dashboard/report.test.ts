@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  bogotaDayEndIso,
   bogotaDayKey,
+  bogotaDayStartIso,
   bogotaWeekdayHour,
+  isDayKey,
+  matchesSearch,
   summarizeConversationActivity,
   summarizeOrders,
   summarizeProductConversion,
+  summarizeRoas,
+  type AgentCostConfig,
+  type ChatFact,
   type ConversationActivityFact,
   type OrderFact,
+  type RoasOrderFact,
   type TransactionFact,
 } from "./report";
 
@@ -215,5 +223,167 @@ describe("summarizeConversationActivity", () => {
       transactions: 1,
       rate: 0.5,
     });
+  });
+});
+
+describe("isDayKey / rangos de día en Bogota", () => {
+  it("acepta un YYYY-MM-DD real y rechaza basura o fechas imposibles", () => {
+    expect(isDayKey("2026-07-02")).toBe(true);
+    expect(isDayKey("2026-02-31")).toBe(false);
+    expect(isDayKey("02/07/2026")).toBe(false);
+    expect(isDayKey("")).toBe(false);
+    expect(isDayKey(undefined)).toBe(false);
+  });
+
+  it("el día empieza a las 00:00 de Bogota = 05:00 UTC", () => {
+    expect(bogotaDayStartIso("2026-07-02")).toBe("2026-07-02T05:00:00.000Z");
+  });
+
+  it("el fin es EXCLUSIVO (inicio del día siguiente), así 'hasta' queda inclusivo", () => {
+    expect(bogotaDayEndIso("2026-07-02")).toBe("2026-07-03T05:00:00.000Z");
+    // Un mensaje de las 23:59 de Bogota del día 2 cae dentro del rango [2, 2].
+    const lateNight = Date.parse("2026-07-03T04:59:00Z");
+    expect(lateNight).toBeGreaterThanOrEqual(Date.parse(bogotaDayStartIso("2026-07-02")));
+    expect(lateNight).toBeLessThan(Date.parse(bogotaDayEndIso("2026-07-02")));
+  });
+});
+
+describe("summarizeRoas", () => {
+  const agent = (
+    id: string,
+    costPerChat: number | null,
+    currency = "COP",
+  ): AgentCostConfig => ({ id, name: `Agente ${id}`, brand: null, costPerChat, currency });
+
+  const chat = (agentId: string | null, isChat = true, createdAt = "2026-07-02T15:00:00Z"): ChatFact => ({
+    agentId,
+    createdAt,
+    isChat,
+  });
+
+  const order = (
+    agentId: string | null,
+    total: number,
+    status: OrderFact["status"] = "confirmed",
+  ): RoasOrderFact => ({ agentId, status, total, createdAt: "2026-07-02T15:00:00Z" });
+
+  it("calcula el retorno con el ejemplo de Colombia: 1.000 por chat", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000)],
+      [chat("a"), chat("a"), chat("a"), chat("a"), chat("a")],
+      [order("a", 120_000), order("a", 80_000)],
+    );
+    const row = r.rows[0];
+    expect(row.chats).toBe(5);
+    expect(row.investment).toBe(5000);
+    expect(row.revenue).toBe(200_000);
+    expect(row.roas).toBe(40);
+    expect(row.costPerOrder).toBe(2500);
+    expect(row.profit).toBe(195_000);
+    expect(r.configured).toBe(true);
+  });
+
+  it("no cobra las conversaciones donde el cliente nunca escribió", () => {
+    const r = summarizeRoas([agent("a", 1000)], [chat("a"), chat("a", false)], []);
+    expect(r.rows[0].chats).toBe(1);
+    expect(r.rows[0].investment).toBe(1000);
+  });
+
+  it("las canceladas no suman ventas, y ROAS confirmado solo cuenta lo confirmado", () => {
+    const r = summarizeRoas(
+      [agent("a", 100)],
+      [chat("a"), chat("a")],
+      [
+        order("a", 1000, "confirmed"),
+        order("a", 500, "pending_handoff"),
+        order("a", 9999, "cancelled"),
+      ],
+    );
+    expect(r.rows[0].orders).toBe(2);
+    expect(r.rows[0].revenue).toBe(1500);
+    expect(r.rows[0].confirmedRevenue).toBe(1000);
+    expect(r.rows[0].roas).toBe(7.5);
+    expect(r.rows[0].confirmedRoas).toBe(5);
+  });
+
+  it("un agente sin costo configurado aparece, pero sin ROAS inventado", () => {
+    const r = summarizeRoas([agent("a", null)], [chat("a")], [order("a", 50_000)]);
+    expect(r.rows[0].chats).toBe(1);
+    expect(r.rows[0].revenue).toBe(50_000);
+    expect(r.rows[0].investment).toBe(0);
+    expect(r.rows[0].roas).toBeNull();
+    expect(r.configured).toBe(false);
+  });
+
+  it("consolida cuando comparten moneda", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000), agent("b", 500)],
+      [chat("a"), chat("b"), chat("b")],
+      [order("a", 10_000), order("b", 4_000)],
+    );
+    expect(r.total).not.toBeNull();
+    expect(r.total!.chats).toBe(3);
+    expect(r.total!.investment).toBe(2000); // 1×1000 + 2×500
+    expect(r.total!.revenue).toBe(14_000);
+    expect(r.total!.roas).toBe(7);
+    // Costo por chat mezclado (ponderado), no promedio simple de 1000 y 500.
+    expect(r.total!.costPerChat).toBeCloseTo(666.67, 1);
+  });
+
+  it("NO consolida ni grafica cuando hay monedas distintas", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000, "COP"), agent("b", 2, "USD")],
+      [chat("a"), chat("b")],
+      [order("a", 10_000), order("b", 30)],
+    );
+    expect(r.total).toBeNull();
+    expect(r.perDay).toEqual([]);
+    expect(r.rows).toHaveLength(2);
+  });
+
+  it("ignora chats y órdenes de agentes fuera del alcance", () => {
+    const r = summarizeRoas([agent("a", 1000)], [chat("a"), chat("z"), chat(null)], [order("z", 1)]);
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0].chats).toBe(1);
+    expect(r.rows[0].revenue).toBe(0);
+  });
+
+  it("la serie por día trae 14 días, del más viejo al más nuevo", () => {
+    const r = summarizeRoas([agent("a", 1000)], [chat("a")], []);
+    expect(r.perDay).toHaveLength(14);
+    expect(r.perDay[0].date < r.perDay[13].date).toBe(true);
+  });
+});
+
+describe("matchesSearch", () => {
+  const contact = ["Néstor Cortés", "573001234567", "Bogotá"];
+
+  it("una búsqueda vacía no filtra nada", () => {
+    expect(matchesSearch(contact, "")).toBe(true);
+    expect(matchesSearch(contact, "   ")).toBe(true);
+  });
+
+  it("ignora mayúsculas y acentos en ambos lados", () => {
+    expect(matchesSearch(contact, "nestor")).toBe(true);
+    expect(matchesSearch(contact, "CORTES")).toBe(true);
+    expect(matchesSearch(contact, "bogota")).toBe(true);
+  });
+
+  // Regresión: los dígitos de una búsqueda de texto son "", y `"".includes("")`
+  // es true — eso hacía que CUALQUIER texto pasara y la lista no filtrara nada.
+  it("un texto que no está NO pasa (aunque no tenga dígitos)", () => {
+    expect(matchesSearch(contact, "ruby")).toBe(false);
+    expect(matchesSearch(contact, "zzz")).toBe(false);
+  });
+
+  it("encuentra el teléfono aunque se escriba con separadores", () => {
+    expect(matchesSearch(contact, "+57 300-123")).toBe(true);
+    expect(matchesSearch(contact, "3001234567")).toBe(true);
+    expect(matchesSearch(contact, "573009999999")).toBe(false);
+  });
+
+  it("tolera campos nulos", () => {
+    expect(matchesSearch([null, undefined, "Cali"], "cali")).toBe(true);
+    expect(matchesSearch([null, undefined], "cali")).toBe(false);
   });
 });

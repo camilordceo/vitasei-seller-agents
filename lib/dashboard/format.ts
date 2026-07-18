@@ -9,6 +9,26 @@ export function formatCOP(n: number | null | undefined): string {
   }).format(v);
 }
 
+/**
+ * Monto en la moneda que traiga el dato (COP por defecto). `formatCOP` asume
+ * pesos; esto se usa donde conviven mercados (órdenes, ROAS por agente) para no
+ * pintar dólares con un "$" colombiano.
+ */
+export function formatMoney(n: number | null | undefined, currency?: string | null): string {
+  const v = typeof n === "number" && Number.isFinite(n) ? n : Number(n) || 0;
+  const code = (currency ?? "COP").toUpperCase();
+  try {
+    return new Intl.NumberFormat("es-CO", {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: code === "COP" ? 0 : 2,
+    }).format(v);
+  } catch {
+    // Código de moneda inválido en los datos → número + código, sin romper la página.
+    return `${formatNumber(Math.round(v))} ${code}`;
+  }
+}
+
 export function formatNumber(n: number | null | undefined): string {
   return new Intl.NumberFormat("es-CO").format(Number(n) || 0);
 }

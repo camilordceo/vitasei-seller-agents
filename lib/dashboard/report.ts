@@ -1,4 +1,4 @@
-import type { FulfillmentMethod, OrderStatus } from "@/lib/supabase/types";
+﻿import type { FulfillmentMethod, OrderStatus } from "@/lib/supabase/types";
 
 /**
  * Agregación PURA de órdenes para los reportes de ventas (Sprint 6 — órdenes).
@@ -108,6 +108,28 @@ const bogotaDateFmt = new Intl.DateTimeFormat("en-CA", {
 export function bogotaDayKey(ms: number): string {
   // en-CA con partes 2-digit produce "YYYY-MM-DD".
   return bogotaDateFmt.format(new Date(ms));
+}
+
+/** Un día calendario válido, `YYYY-MM-DD` (lo que produce un `<input type="date">`). */
+export function isDayKey(value: string | null | undefined): boolean {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  // Descarta fechas imposibles (2026-02-31): el round-trip tiene que coincidir.
+  return bogotaDayKey(Date.parse(`${value}T12:00:00-05:00`)) === value;
+}
+
+/**
+ * Instante de INICIO de un día calendario de Bogota, en ISO/UTC. Colombia es
+ * UTC-5 fijo, así que el offset se escribe literal (sin Intl ni DST).
+ * Filtrar por rango se hace `>= dayStart(desde)` y `< dayStart(hasta + 1 día)`:
+ * el extremo "hasta" queda INCLUSIVO sin pelear con la hora del timestamp.
+ */
+export function bogotaDayStartIso(dayKey: string): string {
+  return new Date(`${dayKey}T00:00:00-05:00`).toISOString();
+}
+
+/** Instante EXCLUSIVO de fin de un día de Bogota = inicio del día siguiente. */
+export function bogotaDayEndIso(dayKey: string): string {
+  return new Date(Date.parse(`${dayKey}T00:00:00-05:00`) + DAY_MS).toISOString();
 }
 
 /**
@@ -393,4 +415,254 @@ export function summarizeConversationActivity(
       return { date: k, conversations, transactions, rate: rate(transactions, conversations) };
     }),
   };
+}
+
+// --- ROAS: retorno sobre el costo de adquirir cada chat (ver ADR-0065) -------
+
+/**
+ * Un chat = una conversación que recibió al menos un mensaje del cliente. Se le
+ * imputa el costo el día en que LLEGÓ (`created_at` de la conversación), que es
+ * cuando se pagó por el lead, no el día en que volvió a escribir.
+ */
+export interface ChatFact {
+  agentId: string | null;
+  /** ISO del `created_at` de la conversación. */
+  createdAt: string;
+  /** false = conversación sin ningún inbound (no se cobra: nunca fue un chat). */
+  isChat: boolean;
+}
+
+/** Orden atribuida a un agente, para el retorno. */
+export interface RoasOrderFact {
+  agentId: string | null;
+  status: OrderStatus;
+  total: number | null;
+  /** ISO del `created_at` de la orden. */
+  createdAt: string;
+}
+
+/** Costo por chat configurado en un agente (null = sin configurar). */
+export interface AgentCostConfig {
+  id: string;
+  name: string;
+  brand: string | null;
+  costPerChat: number | null;
+  currency: string;
+}
+
+export interface RoasRow {
+  agentId: string | null;
+  name: string;
+  brand: string | null;
+  /** null = el agente no tiene costo por chat configurado. */
+  costPerChat: number | null;
+  currency: string;
+  chats: number;
+  /** chats × costo por chat. */
+  investment: number;
+  /** Órdenes no canceladas (misma base que "Órdenes generadas"). */
+  orders: number;
+  revenue: number;
+  confirmedRevenue: number;
+  /** revenue / inversión. null si no hay inversión (sin costo o sin chats). */
+  roas: number | null;
+  /** Igual pero solo con lo confirmado: la lectura conservadora. */
+  confirmedRoas: number | null;
+  /** Inversión / órdenes generadas = cuánto costó cada venta (CPA). */
+  costPerOrder: number | null;
+  /** revenue − inversión. */
+  profit: number;
+}
+
+export interface RoasDay {
+  /** Clave de día en Bogota, YYYY-MM-DD. */
+  date: string;
+  chats: number;
+  investment: number;
+  revenue: number;
+  roas: number | null;
+}
+
+export interface RoasReport {
+  rows: RoasRow[];
+  /**
+   * Consolidado de todos los agentes del alcance. null si conviven varias monedas
+   * (sumar pesos con dólares daría un número falso).
+   */
+  total: RoasRow | null;
+  /** Últimos 14 días del alcance. Vacío si el alcance mezcla monedas. */
+  perDay: RoasDay[];
+  /** true si al menos un agente del alcance tiene costo por chat configurado. */
+  configured: boolean;
+}
+
+function ratio(numerator: number, denominator: number): number | null {
+  return denominator > 0 ? numerator / denominator : null;
+}
+
+/**
+ * Retorno por agente: cuánto costó traer los chats vs. cuánto vendieron.
+ *
+ * El costo por chat lo define cada agente en su moneda (ADR-0065), así que las
+ * filas NUNCA se suman entre monedas distintas: el consolidado y el gráfico solo
+ * salen cuando todo el alcance comparte moneda. Un agente sin costo configurado
+ * aparece igual (con sus chats y ventas) pero con inversión 0 y ROAS null: se ve
+ * que falta configurarlo en vez de mostrar un retorno inventado.
+ */
+export function summarizeRoas(
+  agents: AgentCostConfig[],
+  chats: ChatFact[],
+  orders: RoasOrderFact[],
+): RoasReport {
+  const byAgent = new Map<string, RoasRow>();
+  for (const a of agents) {
+    byAgent.set(a.id, {
+      agentId: a.id,
+      name: a.name,
+      brand: a.brand,
+      costPerChat: a.costPerChat,
+      currency: a.currency,
+      chats: 0,
+      investment: 0,
+      orders: 0,
+      revenue: 0,
+      confirmedRevenue: 0,
+      roas: null,
+      confirmedRoas: null,
+      costPerOrder: null,
+      profit: 0,
+    });
+  }
+
+  for (const c of chats) {
+    if (!c.isChat) continue;
+    const row = c.agentId ? byAgent.get(c.agentId) : undefined;
+    if (row) row.chats += 1;
+  }
+  for (const o of orders) {
+    if (o.status === "cancelled") continue;
+    const row = o.agentId ? byAgent.get(o.agentId) : undefined;
+    if (!row) continue;
+    row.orders += 1;
+    row.revenue += Number(o.total) || 0;
+    if (o.status === "confirmed") row.confirmedRevenue += Number(o.total) || 0;
+  }
+
+  const rows = [...byAgent.values()];
+  for (const row of rows) {
+    row.investment = (row.costPerChat ?? 0) * row.chats;
+    row.roas = ratio(row.revenue, row.investment);
+    row.confirmedRoas = ratio(row.confirmedRevenue, row.investment);
+    row.costPerOrder = ratio(row.investment, row.orders);
+    row.profit = row.revenue - row.investment;
+  }
+  rows.sort((a, b) => b.revenue - a.revenue);
+
+  // Una sola moneda en TODO el alcance → se puede consolidar y graficar.
+  const currencies = new Set(rows.map((r) => r.currency));
+  const singleCurrency = currencies.size === 1 ? [...currencies][0] : null;
+
+  let total: RoasRow | null = null;
+  if (singleCurrency) {
+    const chatsTotal = rows.reduce((s, r) => s + r.chats, 0);
+    const investment = rows.reduce((s, r) => s + r.investment, 0);
+    const revenue = rows.reduce((s, r) => s + r.revenue, 0);
+    const confirmedRevenue = rows.reduce((s, r) => s + r.confirmedRevenue, 0);
+    const ordersTotal = rows.reduce((s, r) => s + r.orders, 0);
+    total = {
+      agentId: null,
+      name: "Todos los agentes",
+      brand: null,
+      // Costo por chat MEZCLADO del alcance (inversión / chats), no un promedio
+      // simple: si un agente trae 10× más chats, pesa 10× más.
+      costPerChat: ratio(investment, chatsTotal),
+      currency: singleCurrency,
+      chats: chatsTotal,
+      investment,
+      orders: ordersTotal,
+      revenue,
+      confirmedRevenue,
+      roas: ratio(revenue, investment),
+      confirmedRoas: ratio(confirmedRevenue, investment),
+      costPerOrder: ratio(investment, ordersTotal),
+      profit: revenue - investment,
+    };
+  }
+
+  // Serie de 14 días (hoy primero al construir, se devuelve del más viejo al más
+  // nuevo para que el gráfico se lea de izquierda a derecha).
+  const perDay: RoasDay[] = [];
+  if (singleCurrency) {
+    const costById = new Map(agents.map((a) => [a.id, a.costPerChat ?? 0]));
+    const dayChats = new Map<string, number>();
+    const dayInvestment = new Map<string, number>();
+    const dayRevenue = new Map<string, number>();
+
+    const dayKeys: string[] = [];
+    const now = Date.now();
+    for (let i = 13; i >= 0; i--) dayKeys.push(bogotaDayKey(now - i * DAY_MS));
+    const window = new Set(dayKeys);
+
+    for (const c of chats) {
+      if (!c.isChat || !c.agentId) continue;
+      const key = bogotaDayKey(Date.parse(c.createdAt));
+      if (!window.has(key)) continue;
+      dayChats.set(key, (dayChats.get(key) ?? 0) + 1);
+      dayInvestment.set(key, (dayInvestment.get(key) ?? 0) + (costById.get(c.agentId) ?? 0));
+    }
+    for (const o of orders) {
+      if (o.status === "cancelled" || !o.agentId) continue;
+      const key = bogotaDayKey(Date.parse(o.createdAt));
+      if (!window.has(key)) continue;
+      dayRevenue.set(key, (dayRevenue.get(key) ?? 0) + (Number(o.total) || 0));
+    }
+
+    for (const key of dayKeys) {
+      const investment = dayInvestment.get(key) ?? 0;
+      const revenue = dayRevenue.get(key) ?? 0;
+      perDay.push({
+        date: key,
+        chats: dayChats.get(key) ?? 0,
+        investment,
+        revenue,
+        roas: ratio(revenue, investment),
+      });
+    }
+  }
+
+  return {
+    rows,
+    total,
+    perDay,
+    configured: rows.some((r) => r.costPerChat != null && r.costPerChat > 0),
+  };
+}
+
+// --- Búsqueda de texto libre (Órdenes) --------------------------------------
+
+/** Normaliza para buscar: minúsculas y sin acentos ("Bogotá" encuentra "bogota"). */
+export function searchKey(value: string | null | undefined): string {
+  return (value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/**
+ * ¿Alguno de los campos contiene la búsqueda? Compara sin acentos ni mayúsculas y,
+ * si la búsqueda TRAE dígitos, también los compara sueltos: así "+57 300-123"
+ * encuentra el teléfono guardado como E.164.
+ *
+ * Búsqueda vacía = no filtra (todo pasa). Ojo con el caso que ya rompió una vez:
+ * los dígitos de una búsqueda de texto son "", y `includes("")` es siempre true,
+ * así que la variante numérica SOLO se prueba cuando hay dígitos de verdad.
+ */
+export function matchesSearch(fields: Array<string | null | undefined>, query: string): boolean {
+  const q = searchKey(query).trim();
+  if (!q) return true;
+  const haystack = fields.map(searchKey).join(" ");
+  const haystackDigits = haystack.replace(/\D/g, "");
+  if (haystack.includes(q)) return true;
+  const digits = q.replace(/\D/g, "");
+  return digits.length > 0 && haystackDigits.includes(digits);
 }

@@ -5,15 +5,20 @@ import {
   getRecentConversations,
   type ConversationOrderBy,
 } from "@/lib/dashboard/queries";
+import { isDayKey } from "@/lib/dashboard/report";
 import { ConversationList } from "../ui";
+import { Collapsible } from "../Collapsible";
 import type { ConversationStatus } from "@/lib/supabase/types";
 import { AgentFilter } from "./AgentFilter";
+import { DateRangeFilter } from "./DateRangeFilter";
 import { SelectFilter } from "./SelectFilter";
 
 export const dynamic = "force-dynamic";
 
 type SearchParams = {
   range?: string;
+  from?: string;
+  to?: string;
   order?: string;
   status?: string;
   sort?: string;
@@ -23,6 +28,9 @@ type SearchParams = {
   call?: string;
   page?: string;
 };
+
+/** Valor del filtro de etiqueta que significa "sin ninguna etiqueta". */
+const TAG_NONE = "__none__";
 
 /** Conversaciones por página (para el "siguiente" / "más antiguas"). */
 const PAGE_SIZE = 50;
@@ -97,8 +105,22 @@ export default async function ConversationsPage({
 }: {
   searchParams: SearchParams;
 }) {
+  // Rango exacto (desde/hasta) y atajo de días son EXCLUYENTES: los dos acotan la
+  // misma clave de orden, así que mezclarlos daría una ventana ambigua. Gana el
+  // rango explícito; si viene invertido (desde > hasta) se ignora en vez de
+  // devolver una lista vacía sin explicación.
+  let fromKey = isDayKey(searchParams.from) ? searchParams.from : undefined;
+  let toKey = isDayKey(searchParams.to) ? searchParams.to : undefined;
+  if (fromKey && toKey && fromKey > toKey) {
+    fromKey = undefined;
+    toKey = undefined;
+  }
+  const hasDateRange = Boolean(fromKey || toKey);
+
   const rangeKey =
-    searchParams.range && RANGE_DAYS[searchParams.range] ? searchParams.range : undefined;
+    !hasDateRange && searchParams.range && RANGE_DAYS[searchParams.range]
+      ? searchParams.range
+      : undefined;
   const orderKey =
     searchParams.order === "with" || searchParams.order === "without"
       ? searchParams.order
@@ -125,10 +147,14 @@ export default async function ConversationsPage({
   // parámetros: un `?tag=`/`?product=` que no exista en el alcance se ignora (igual
   // que `?agent=`), así una URL vieja o de otro agente no rompe la lista.
   const filterOptions = await getConversationFilterOptions(agentKey);
+  // `__none__` (sin etiqueta) es un valor sintético: no es un id de `labels`, así
+  // que se valida aparte de los ids reales.
   const tagKey =
-    searchParams.tag && filterOptions.labels.some((l) => l.id === searchParams.tag)
-      ? searchParams.tag
-      : undefined;
+    searchParams.tag === TAG_NONE
+      ? TAG_NONE
+      : searchParams.tag && filterOptions.labels.some((l) => l.id === searchParams.tag)
+        ? searchParams.tag
+        : undefined;
   const productKey =
     searchParams.product && filterOptions.products.includes(searchParams.product)
       ? searchParams.product
@@ -144,11 +170,14 @@ export default async function ConversationsPage({
     limit: PAGE_SIZE + 1,
     offset: (pageNum - 1) * PAGE_SIZE,
     sinceDays: rangeKey ? RANGE_DAYS[rangeKey] : undefined,
+    fromDate: fromKey,
+    toDate: toKey,
     hasOrder: orderKey === "with" ? true : orderKey === "without" ? false : undefined,
     status: statusKey,
     orderBy: sortKey,
     agentId: agentKey,
-    labelId: tagKey,
+    labelId: tagKey === TAG_NONE ? undefined : tagKey,
+    withoutLabel: tagKey === TAG_NONE,
     productCategory: productKey,
     hasVoiceCall: callKey === "with" ? true : undefined,
   });
@@ -163,6 +192,8 @@ export default async function ConversationsPage({
   // limpia esa dimensión. Cambiar cualquier filtro/orden vuelve a la página 1.
   const current = {
     range: rangeKey,
+    from: fromKey,
+    to: toKey,
     order: orderKey,
     status: statusKey,
     sort: sortParam,
@@ -171,11 +202,13 @@ export default async function ConversationsPage({
     product: productKey,
     call: callKey,
   };
-  function hrefWith(key: keyof typeof current, value: string): string {
-    const clears = value === "all" || (key === "sort" && value === "inbound");
-    const next = { ...current, [key]: clears ? undefined : value };
+
+  /** Serializa un juego de filtros a la URL de la lista (omite los vacíos). */
+  function hrefFor(next: Partial<typeof current> & { page?: number }): string {
     const qs = new URLSearchParams();
     if (next.range) qs.set("range", next.range);
+    if (next.from) qs.set("from", next.from);
+    if (next.to) qs.set("to", next.to);
     if (next.order) qs.set("order", next.order);
     if (next.status) qs.set("status", next.status);
     if (next.sort) qs.set("sort", next.sort);
@@ -183,24 +216,25 @@ export default async function ConversationsPage({
     if (next.tag) qs.set("tag", next.tag);
     if (next.product) qs.set("product", next.product);
     if (next.call) qs.set("call", next.call);
+    if (next.page && next.page > 1) qs.set("page", String(next.page));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
 
+  function hrefWith(key: keyof typeof current, value: string): string {
+    const clears = value === "all" || (key === "sort" && value === "inbound");
+    const next = { ...current, [key]: clears ? undefined : value };
+    // El atajo de días y el rango exacto son excluyentes: elegir uno limpia el otro.
+    if (key === "range") {
+      next.from = undefined;
+      next.to = undefined;
+    }
+    return hrefFor(next);
+  }
+
   // Href de paginación: preserva los filtros actuales y fija la página (1 = sin ?page).
   function hrefWithPage(target: number): string {
-    const qs = new URLSearchParams();
-    if (rangeKey) qs.set("range", rangeKey);
-    if (orderKey) qs.set("order", orderKey);
-    if (statusKey) qs.set("status", statusKey);
-    if (sortParam) qs.set("sort", sortParam);
-    if (agentKey) qs.set("agent", agentKey);
-    if (tagKey) qs.set("tag", tagKey);
-    if (productKey) qs.set("product", productKey);
-    if (callKey) qs.set("call", callKey);
-    if (target > 1) qs.set("page", String(target));
-    const s = qs.toString();
-    return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
+    return hrefFor({ ...current, page: target });
   }
 
   // Filtros activos a conservar al cambiar UN selector, EXCLUYENDO su propia clave
@@ -209,6 +243,10 @@ export default async function ConversationsPage({
   function preservedExcept(omit: keyof typeof current): Record<string, string> {
     const p: Record<string, string> = {};
     if (rangeKey && omit !== "range") p.range = rangeKey;
+    // El rango exacto viaja junto (from+to) y compite con `range`: el filtro de
+    // fechas los omite los tres para poder reemplazar la ventana entera.
+    if (fromKey && omit !== "from") p.from = fromKey;
+    if (toKey && omit !== "to") p.to = toKey;
     if (orderKey && omit !== "order") p.order = orderKey;
     if (statusKey && omit !== "status") p.status = statusKey;
     if (sortParam && omit !== "sort") p.sort = sortParam;
@@ -220,14 +258,54 @@ export default async function ConversationsPage({
   }
 
   const anyFilter = Boolean(
-    rangeKey || orderKey || statusKey || sortParam || agentKey || tagKey || productKey || callKey,
+    rangeKey ||
+      hasDateRange ||
+      orderKey ||
+      statusKey ||
+      sortParam ||
+      agentKey ||
+      tagKey ||
+      productKey ||
+      callKey,
   );
 
-  // Agente seleccionado (para el subtítulo). undefined = todos.
+  // El filtro de fechas reemplaza la VENTANA entera, así que preserva todo lo
+  // demás menos las tres claves que la definen (`range`, `from`, `to`).
+  const preservedForDates = (() => {
+    const p = preservedExcept("from");
+    delete p.to;
+    delete p.range;
+    return p;
+  })();
+
+  // Agente seleccionado (para el subtítulo y el resumen). undefined = todos.
   const selectedAgent = agentKey ? agents.find((a) => a.id === agentKey) : undefined;
   const agentScope = selectedAgent
     ? `${selectedAgent.name}${selectedAgent.brand ? ` · ${selectedAgent.brand}` : ""}`
     : null;
+
+  // Resumen de lo que está filtrando, para leerlo con el bloque plegado.
+  const activeSummary: string[] = [];
+  if (agentScope) activeSummary.push(agentScope);
+  if (hasDateRange) {
+    activeSummary.push(
+      fromKey && toKey ? `${fromKey} → ${toKey}` : fromKey ? `desde ${fromKey}` : `hasta ${toKey}`,
+    );
+  } else if (rangeKey) {
+    activeSummary.push(RANGE_FILTERS.find((f) => f.value === rangeKey)!.label);
+  }
+  if (tagKey) {
+    activeSummary.push(
+      tagKey === TAG_NONE
+        ? "Sin etiqueta"
+        : (filterOptions.labels.find((l) => l.id === tagKey)?.name ?? "Etiqueta"),
+    );
+  }
+  if (productKey) activeSummary.push(productKey);
+  if (statusKey) activeSummary.push(STATUS_FILTERS.find((f) => f.value === statusKey)!.label);
+  if (orderKey) activeSummary.push(ORDER_FILTERS.find((f) => f.value === orderKey)!.label);
+  if (callKey) activeSummary.push("Con llamada");
+  if (sortParam) activeSummary.push("Última respuesta");
 
   return (
     <div className="space-y-4">
@@ -247,80 +325,97 @@ export default async function ConversationsPage({
         <span className="text-sm text-slate-400">{convos.length}</span>
       </div>
 
-      <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
-        {agents.length > 1 && (
-          <AgentFilter
-            agents={agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }))}
-            current={agentKey ?? ""}
-            preserved={preservedExcept("agent")}
-          />
-        )}
-        {filterOptions.labels.length > 0 && (
+      <Collapsible
+        title="Filtros"
+        subtitle={
+          activeSummary.length > 0
+            ? activeSummary.join(" · ")
+            : "Agente, fechas, etiqueta, producto, estado y orden."
+        }
+        badge={activeSummary.length > 0 ? `${activeSummary.length} activo(s)` : undefined}
+      >
+        <div className="space-y-3">
+          {agents.length > 1 && (
+            <AgentFilter
+              agents={agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }))}
+              current={agentKey ?? ""}
+              preserved={preservedExcept("agent")}
+            />
+          )}
           <SelectFilter
             label="Etiqueta"
             ariaLabel="Filtrar por etiqueta"
             paramName="tag"
             current={tagKey ?? ""}
             allLabel="Todas las etiquetas"
-            options={filterOptions.labels.map((l) => ({ value: l.id, label: l.name }))}
+            options={[
+              // "Sin etiqueta" primero: es la cola por clasificar, no una etiqueta más.
+              { value: TAG_NONE, label: "Sin etiqueta" },
+              ...filterOptions.labels.map((l) => ({ value: l.id, label: l.name })),
+            ]}
             preserved={preservedExcept("tag")}
           />
-        )}
-        <SelectFilter
-          label="Llamada IA"
-          ariaLabel="Filtrar por llamada con IA"
-          paramName="call"
-          current={callKey ?? ""}
-          allLabel="Todas"
-          options={[{ value: "with", label: "Con llamada" }]}
-          preserved={preservedExcept("call")}
-        />
-        {filterOptions.products.length > 0 && (
           <SelectFilter
-            label="Producto"
-            ariaLabel="Filtrar por producto"
-            paramName="product"
-            current={productKey ?? ""}
-            allLabel="Todos los productos"
-            options={filterOptions.products.map((p) => ({ value: p, label: p }))}
-            preserved={preservedExcept("product")}
+            label="Llamada IA"
+            ariaLabel="Filtrar por llamada con IA"
+            paramName="call"
+            current={callKey ?? ""}
+            allLabel="Todas"
+            options={[{ value: "with", label: "Con llamada" }]}
+            preserved={preservedExcept("call")}
           />
-        )}
-        <FilterRow
-          label="Fecha"
-          filters={RANGE_FILTERS}
-          active={rangeKey ?? "all"}
-          makeHref={(v) => hrefWith("range", v)}
-        />
-        <FilterRow
-          label="Pedido"
-          filters={ORDER_FILTERS}
-          active={orderKey ?? "all"}
-          makeHref={(v) => hrefWith("order", v)}
-        />
-        <FilterRow
-          label="Estado"
-          filters={STATUS_FILTERS}
-          active={statusKey ?? "all"}
-          makeHref={(v) => hrefWith("status", v)}
-        />
-        <FilterRow
-          label="Orden"
-          filters={SORT_FILTERS}
-          active={sortKey}
-          makeHref={(v) => hrefWith("sort", v)}
-        />
-        {anyFilter ? (
-          <div className="pt-1">
-            <Link
-              href="/dashboard/conversations"
-              className="text-sm text-slate-500 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-            >
-              Limpiar filtros
-            </Link>
-          </div>
-        ) : null}
-      </div>
+          {filterOptions.products.length > 0 && (
+            <SelectFilter
+              label="Producto"
+              ariaLabel="Filtrar por producto"
+              paramName="product"
+              current={productKey ?? ""}
+              allLabel="Todos los productos"
+              options={filterOptions.products.map((p) => ({ value: p, label: p }))}
+              preserved={preservedExcept("product")}
+            />
+          )}
+          <FilterRow
+            label="Fecha"
+            filters={RANGE_FILTERS}
+            active={hasDateRange ? "" : (rangeKey ?? "all")}
+            makeHref={(v) => hrefWith("range", v)}
+          />
+          <DateRangeFilter
+            from={fromKey ?? ""}
+            to={toKey ?? ""}
+            preserved={preservedForDates}
+          />
+          <FilterRow
+            label="Pedido"
+            filters={ORDER_FILTERS}
+            active={orderKey ?? "all"}
+            makeHref={(v) => hrefWith("order", v)}
+          />
+          <FilterRow
+            label="Estado"
+            filters={STATUS_FILTERS}
+            active={statusKey ?? "all"}
+            makeHref={(v) => hrefWith("status", v)}
+          />
+          <FilterRow
+            label="Orden"
+            filters={SORT_FILTERS}
+            active={sortKey}
+            makeHref={(v) => hrefWith("sort", v)}
+          />
+          {anyFilter ? (
+            <div className="pt-1">
+              <Link
+                href="/dashboard/conversations"
+                className="text-sm text-slate-500 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                Limpiar filtros
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      </Collapsible>
 
       {convos.length === 0 && hasPrev ? (
         <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
