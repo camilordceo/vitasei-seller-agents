@@ -29,6 +29,21 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Reportes: Costo IA/chat, ROAIS y lecturas de escala** (ADR-0070). El gasto de IA ahora se
+  atribuye **por agente** (tokens y audios de `events_log` vía su conversación; llamadas de
+  `voice_calls`) y entra al cuadro de retorno:
+  - Tabla ROAS con dos columnas nuevas: **Costo IA/chat** (gasto IA ÷ chats, convertido de USD
+    a la moneda del agente) y **ROAIS** (return on AI spend = ventas ÷ gasto IA; `null` sin
+    gasto, sin retornos inventados). No incluye la tarifa de plantillas de Meta (no se registra
+    aún — dicho en pantalla).
+  - El gráfico de inversión vs. ventas ahora **muestra los montos** al lado de cada barra, un
+    tooltip por día (inversión, ventas, chats, ROAS) y el total de los 14 días en la leyenda.
+  - Sección nueva **"Escala"**: **margen por chat** (venta − pauta − IA, antes de producto y
+    logística), **proyección del mes** a ritmo actual (MTD ÷ días corridos × días del mes, con
+    el mes pasado de vara) y **crecimiento semanal** (chats y ventas, 7 días vs. los 7
+    anteriores). Derivada de los mismos hechos del ROAS para que todo cuadre; con monedas
+    mezcladas no consolida plata pero sí muestra el crecimiento de chats. La proyección entra
+    al resumen copiable.
 - **Reportes: rendimiento por producto con plata y velocidad de cierre** (ADR-0069). Tres
   lecturas nuevas para ver qué productos rinden de verdad y qué tan rápido cierra la IA:
   - **Rendimiento por producto** (antes "Conversión por producto"): a la tasa se suman

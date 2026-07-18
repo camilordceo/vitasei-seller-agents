@@ -10,12 +10,14 @@ import {
   getSalesReport,
   getTopProducts,
 } from "@/lib/dashboard/queries";
+import type { RoasScalingReport } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
   type CloseSpeedReport,
   type ConversionReport,
   type RoasReport,
   type RoasRow,
+  type ScalingReport,
   type SalesReport,
 } from "@/lib/dashboard/report";
 import { rateNote } from "@/lib/dashboard/currency";
@@ -60,7 +62,7 @@ function ReportCard({
 function buildSummary(
   r: SalesReport,
   c: ConversionReport,
-  roas: RoasReport,
+  roas: RoasScalingReport,
   speed: CloseSpeedReport,
   scope: string,
 ): string {
@@ -78,6 +80,13 @@ function buildSummary(
           `Cierre mediano: ${formatMinutes(speed.medianMinutes)} · ${formatPercent(speed.withinHourRate)} en la primera hora`,
         ]
       : [];
+  const month = roas.scaling.month;
+  const projLine =
+    month && roas.total
+      ? [
+          `Proyección del mes (a ritmo actual): ${formatMoney(month.projectedRevenue, roas.total.currency)} · ~${formatNumber(month.projectedOrders)} órdenes`,
+        ]
+      : [];
   return [
     `Reporte de ventas — ${scope}`,
     `Ventas confirmadas: ${r.confirmed.count} · ${formatCOP(r.confirmed.revenue)}`,
@@ -87,6 +96,7 @@ function buildSummary(
     `Conversión: ${formatPercent(c.total.rate)} (${c.total.transactions}/${c.total.conversations} conversaciones)`,
     ...roasLine,
     ...speedLine,
+    ...projLine,
     `Hoy: ${r.today.count} (${formatCOP(r.today.revenue)}) · 7 días: ${r.last7.count} (${formatCOP(r.last7.revenue)}) · 30 días: ${r.last30.count} (${formatCOP(r.last30.revenue)})`,
   ].join("\n");
 }
@@ -122,6 +132,13 @@ function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
         )}
       </td>
       <td className={`${cell} text-right tabular-nums`}>
+        {row.aiCostPerChat != null ? (
+          formatMoney(row.aiCostPerChat, row.currency)
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
+      </td>
+      <td className={`${cell} text-right tabular-nums`}>
         {formatMoney(row.investment, row.currency)}
       </td>
       <td className={`${cell} text-right tabular-nums`}>
@@ -141,6 +158,9 @@ function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
       <td className={`py-2 text-right tabular-nums ${roasTone(row.confirmedRoas)}`}>
         {formatRoas(row.confirmedRoas)}
       </td>
+      <td className={`py-2 text-right tabular-nums ${roasTone(row.roais)}`}>
+        {formatRoas(row.roais)}
+      </td>
     </tr>
   );
 }
@@ -148,6 +168,9 @@ function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
 /** Sección de retorno: tabla por agente + barras de inversión vs. ventas por día. */
 function RoasSection({ roas }: { roas: RoasReport }) {
   const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
+  const chartCurrency = roas.total?.currency ?? "COP";
+  const invTotal14 = roas.perDay.reduce((s, d) => s + d.investment, 0);
+  const revTotal14 = roas.perDay.reduce((s, d) => s + d.revenue, 0);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -157,7 +180,10 @@ function RoasSection({ roas }: { roas: RoasReport }) {
           <p className="max-w-prose text-xs text-slate-400">
             Ventas generadas ÷ lo que costó traer los chats. Un <strong>chat</strong> es una
             conversación en la que el cliente escribió; el costo por chat lo define cada agente en
-            su moneda. <strong>ROAS 3×</strong> = por cada $1 de pauta entran $3.
+            su moneda. <strong>ROAS 3×</strong> = por cada $1 de pauta entran $3.{" "}
+            <strong>Costo IA/chat</strong> = todo el gasto de IA del agente (tokens, imágenes,
+            audios y llamadas, convertido de USD) ÷ chats, y <strong>ROAIS</strong> = ventas ÷ ese
+            gasto de IA. No incluye la tarifa de plantillas de Meta (aún no se registra).
           </p>
         </div>
         {roas.total ? (
@@ -187,23 +213,25 @@ function RoasSection({ roas }: { roas: RoasReport }) {
       ) : null}
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[46rem] text-sm">
+        <table className="w-full min-w-[56rem] text-sm">
           <thead>
             <tr className="text-left text-xs text-slate-500">
               <th className="pb-2 font-medium">Agente</th>
               <th className="pb-2 text-right font-medium">Chats</th>
               <th className="pb-2 text-right font-medium">Costo/chat</th>
+              <th className="pb-2 text-right font-medium">Costo IA/chat</th>
               <th className="pb-2 text-right font-medium">Inversión</th>
               <th className="pb-2 text-right font-medium">Ventas</th>
               <th className="pb-2 text-right font-medium">Costo/venta</th>
               <th className="pb-2 text-right font-medium">ROAS</th>
               <th className="pb-2 text-right font-medium">ROAS confirm.</th>
+              <th className="pb-2 text-right font-medium">ROAIS</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {roas.rows.length === 0 ? (
               <tr>
-                <td className="py-3 text-slate-400" colSpan={8}>
+                <td className="py-3 text-slate-400" colSpan={10}>
                   No hay agentes en este alcance.
                 </td>
               </tr>
@@ -234,28 +262,47 @@ function RoasSection({ roas }: { roas: RoasReport }) {
               <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" aria-hidden="true" />
               Ventas
             </span>
-            <span className="ml-auto">Últimos 14 días</span>
+            {/* El total del periodo, a la vista: el gráfico dice el día a día y
+                esta línea dice cuánto fue en plata. */}
+            <span className="ml-auto tabular-nums">
+              Últimos 14 días: <span className="text-rose-600">{formatMoney(invTotal14, chartCurrency)}</span>{" "}
+              → <span className="font-medium text-emerald-700">{formatMoney(revTotal14, chartCurrency)}</span>
+            </span>
           </div>
           <ul className="space-y-2">
             {roas.perDay.map((d) => (
-              <li key={d.date} className="flex items-center gap-3">
+              <li
+                key={d.date}
+                className="flex items-center gap-3"
+                title={`${formatDayKeyShort(d.date)} · Inversión ${formatMoney(d.investment, chartCurrency)} · Ventas ${formatMoney(d.revenue, chartCurrency)} · ${d.chats} chats · ROAS ${formatRoas(d.roas)}`}
+              >
                 <span className="w-14 shrink-0 text-xs text-slate-500">
                   {formatDayKeyShort(d.date)}
                 </span>
                 {/* Dos barras a la misma escala: se ve de un vistazo si el verde
-                    (ventas) le gana al rojo (pauta) ese día. */}
+                    (ventas) le gana al rojo (pauta) ese día — con el monto al lado. */}
                 <div className="flex-1 space-y-1">
-                  <div className="h-2.5 overflow-hidden rounded bg-slate-100">
-                    <div
-                      className="h-full rounded bg-rose-400"
-                      style={{ width: `${Math.round((d.investment / maxDay) * 100)}%` }}
-                    />
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 flex-1 overflow-hidden rounded bg-slate-100">
+                      <div
+                        className="h-full rounded bg-rose-400"
+                        style={{ width: `${Math.round((d.investment / maxDay) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="w-24 shrink-0 text-right text-[11px] tabular-nums text-rose-500">
+                      {formatMoney(d.investment, chartCurrency)}
+                    </span>
                   </div>
-                  <div className="h-2.5 overflow-hidden rounded bg-slate-100">
-                    <div
-                      className="h-full rounded bg-emerald-500"
-                      style={{ width: `${Math.round((d.revenue / maxDay) * 100)}%` }}
-                    />
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 flex-1 overflow-hidden rounded bg-slate-100">
+                      <div
+                        className="h-full rounded bg-emerald-500"
+                        style={{ width: `${Math.round((d.revenue / maxDay) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="w-24 shrink-0 text-right text-[11px] font-medium tabular-nums text-emerald-700">
+                      {formatMoney(d.revenue, chartCurrency)}
+                    </span>
                   </div>
                 </div>
                 <span className="w-12 shrink-0 text-right text-xs tabular-nums text-slate-500">
@@ -271,6 +318,111 @@ function RoasSection({ roas }: { roas: RoasReport }) {
           </ul>
         </div>
       )}
+    </section>
+  );
+}
+
+/** Crecimiento con signo: +12,5 % en verde, −8 % en rojo, "—" si no hay base. */
+function Growth({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-slate-400">—</span>;
+  const tone = value > 0 ? "text-emerald-700" : value < 0 ? "text-rose-700" : "text-slate-500";
+  return (
+    <span className={`font-medium tabular-nums ${tone}`}>
+      {value > 0 ? "+" : ""}
+      {formatPercent(value)}
+    </span>
+  );
+}
+
+/**
+ * Sección de escala (ADR-0070): cuánto deja CADA chat después de pauta e IA, a
+ * dónde va el mes al ritmo actual y si la operación crece semana contra semana.
+ */
+function ScalingSection({ scaling, currency }: { scaling: ScalingReport; currency: string }) {
+  const { perChat, month, wow } = scaling;
+  const projGrowth =
+    month && month.prevRevenue > 0
+      ? (month.projectedRevenue - month.prevRevenue) / month.prevRevenue
+      : null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="mb-3">
+        <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">
+          Escala: economía por chat y proyección
+        </h2>
+        <p className="max-w-prose text-xs text-slate-400">
+          Lo que deja <strong>un chat</strong> después de pagar pauta e IA (antes de producto y
+          logística), a dónde va el mes si sigue a este ritmo, y si la operación crece o se frena
+          semana contra semana. Mismos hechos que el cuadro de retorno: los números cuadran.
+        </p>
+      </div>
+
+      {perChat === null && month === null ? (
+        <p className="text-xs text-amber-700">
+          Los agentes de este alcance usan monedas distintas, así que no se consolida la plata.
+          Filtra por un agente para ver su economía; el crecimiento de chats sí se muestra abajo.
+        </p>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {perChat ? (
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+            <p className="text-xs font-medium text-slate-500">Margen por chat</p>
+            <p
+              className={`mt-1 font-display text-xl font-semibold tracking-tight ${
+                perChat.margin >= 0 ? "text-emerald-700" : "text-rose-700"
+              }`}
+            >
+              {formatMoney(perChat.margin, perChat.currency)}
+            </p>
+            <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+              vende {formatMoney(perChat.revenue, perChat.currency)} − pauta{" "}
+              {formatMoney(perChat.adCost, perChat.currency)} − IA{" "}
+              {formatMoney(perChat.aiCost, perChat.currency)}
+            </p>
+          </div>
+        ) : null}
+
+        {month ? (
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+            <p className="text-xs font-medium text-slate-500">Proyección del mes</p>
+            <p className="mt-1 font-display text-xl font-semibold tracking-tight text-slate-900">
+              {formatMoney(month.projectedRevenue, currency)}
+            </p>
+            <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+              van {formatMoney(month.revenueMtd, currency)} en {month.daysElapsed} de{" "}
+              {month.daysInMonth} días · ~{formatNumber(month.projectedOrders)} órdenes
+            </p>
+            <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+              mes pasado {formatMoney(month.prevRevenue, currency)}
+              {projGrowth != null ? (
+                <>
+                  {" "}
+                  → <Growth value={projGrowth} />
+                </>
+              ) : null}
+            </p>
+          </div>
+        ) : null}
+
+        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+          <p className="text-xs font-medium text-slate-500">Crecimiento semanal</p>
+          <p className="mt-1 font-display text-xl font-semibold tracking-tight text-slate-900">
+            <Growth value={wow.chatsGrowth} />
+          </p>
+          <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+            chats: {formatNumber(wow.chats7)} esta semana vs. {formatNumber(wow.chatsPrev7)} la
+            anterior
+          </p>
+          {wow.revenue7 != null && wow.revenuePrev7 != null ? (
+            <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+              ventas: {formatMoney(wow.revenue7, currency)} vs.{" "}
+              {formatMoney(wow.revenuePrev7, currency)} · <Growth value={wow.revenueGrowth} />
+            </p>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }
@@ -450,6 +602,9 @@ export default async function ReportsPage({
 
       {/* Retorno sobre el costo de adquirir cada chat (ADR-0065) */}
       <RoasSection roas={roas} />
+
+      {/* Economía por chat, proyección del mes y crecimiento semanal (ADR-0070) */}
+      <ScalingSection scaling={roas.scaling} currency={roas.total?.currency ?? "COP"} />
 
       {/* Conversión: conversaciones → transacciones */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5">

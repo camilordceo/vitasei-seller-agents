@@ -11,6 +11,7 @@ import {
   summarizeOrders,
   summarizeProductConversion,
   summarizeRoas,
+  summarizeScaling,
   summarizeTopProducts,
   type AgentCostConfig,
   type ChatFact,
@@ -476,6 +477,124 @@ describe("summarizeRoas", () => {
     expect(r.perDay[0].date > r.perDay[13].date).toBe(true);
     // Misma orientación que summarizeOrders/summarizeConversationActivity: hoy arriba.
     expect(r.perDay[0].date).toBe(bogotaDayKey(Date.now()));
+  });
+
+  it("costo IA/chat y ROAIS: el gasto llega en USD y se lee en la moneda del agente", () => {
+    // US$ 2 de IA en Colombia = 7.000 COP (tasa fija 1 USD = 3.500 COP).
+    const r = summarizeRoas(
+      [agent("a", 1000)],
+      [chat("a"), chat("a")],
+      [order("a", 70_000)],
+      new Map([["a", 2]]),
+    );
+    expect(r.rows[0].aiCost).toBe(7000);
+    expect(r.rows[0].aiCostPerChat).toBe(3500);
+    expect(r.rows[0].roais).toBe(10); // 70.000 / 7.000
+  });
+
+  it("sin gasto IA: costo 0, ROAIS null (no se inventa retorno); el total consolida", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000), agent("b", 500)],
+      [chat("a"), chat("b")],
+      [order("a", 35_000)],
+      new Map([["a", 1]]), // b no tiene gasto IA
+    );
+    expect(r.rows.find((x) => x.agentId === "b")!.aiCost).toBe(0);
+    expect(r.rows.find((x) => x.agentId === "b")!.roais).toBeNull();
+    expect(r.total!.aiCost).toBe(3500);
+    expect(r.total!.aiCostPerChat).toBe(1750); // 3.500 / 2 chats
+    expect(r.total!.roais).toBe(10);
+  });
+});
+
+describe("summarizeScaling", () => {
+  // Mismo ancla que el resto: 2026-07-02 10:00 en Bogota (día 2 del mes, julio = 31 días).
+  const agent = (id: string, costPerChat: number | null = 1000): AgentCostConfig => ({
+    id,
+    name: `Agente ${id}`,
+    brand: null,
+    costPerChat,
+    currency: "COP",
+  });
+  const chat = (agentId: string, createdAt: string, isChat = true): ChatFact => ({
+    agentId,
+    createdAt,
+    isChat,
+  });
+  const order = (
+    agentId: string,
+    total: number,
+    createdAt: string,
+    status: OrderFact["status"] = "confirmed",
+  ): RoasOrderFact => ({ agentId, status, total, createdAt });
+
+  const chats: ChatFact[] = [
+    chat("a", "2026-07-02T14:00:00Z"), // esta semana
+    chat("a", "2026-07-01T14:00:00Z"), // esta semana
+    chat("a", "2026-06-22T14:00:00Z"), // semana anterior (10 días atrás)
+    chat("a", "2026-06-10T14:00:00Z"), // fuera de las dos semanas
+    chat("a", "2026-07-02T15:00:00Z", false), // nunca escribió: no cuenta
+  ];
+  const orders: RoasOrderFact[] = [
+    order("a", 100_000, "2026-07-02T14:30:00Z"), // MTD (día 2)
+    order("a", 50_000, "2026-07-01T14:30:00Z"), // MTD
+    order("a", 60_000, "2026-06-22T14:30:00Z"), // mes pasado + semana anterior
+    order("a", 40_000, "2026-06-05T14:30:00Z"), // mes pasado
+    order("a", 9_999, "2026-07-02T16:00:00Z", "cancelled"), // no cuenta
+  ];
+  const report = summarizeRoas([agent("a")], chats, orders);
+  const s = summarizeScaling(report, chats, orders, NOW);
+
+  it("economía por chat: venta − pauta − IA, por chat del alcance", () => {
+    // 4 chats históricos; ventas totales 250.000 → 62.500/chat; pauta 1.000/chat; IA 0.
+    expect(s.perChat).not.toBeNull();
+    expect(s.perChat!.revenue).toBe(62_500);
+    expect(s.perChat!.adCost).toBe(1000);
+    expect(s.perChat!.aiCost).toBe(0);
+    expect(s.perChat!.margin).toBe(61_500);
+  });
+
+  it("proyección del mes: run-rate MTD × días del mes, con el mes pasado de vara", () => {
+    // MTD 150.000 en 2 días de julio (31 días) → 2.325.000 proyectado; ~31 órdenes.
+    expect(s.month).toMatchObject({
+      daysElapsed: 2,
+      daysInMonth: 31,
+      revenueMtd: 150_000,
+      ordersMtd: 2,
+      projectedRevenue: 2_325_000,
+      projectedOrders: 31,
+      prevRevenue: 100_000,
+      prevOrders: 2,
+    });
+  });
+
+  it("crecimiento semanal: 7 días vs. los 7 anteriores (chats y ventas)", () => {
+    expect(s.wow.chats7).toBe(2);
+    expect(s.wow.chatsPrev7).toBe(1);
+    expect(s.wow.chatsGrowth).toBe(1); // +100%
+    expect(s.wow.revenue7).toBe(150_000);
+    expect(s.wow.revenuePrev7).toBe(60_000);
+    expect(s.wow.revenueGrowth).toBeCloseTo(1.5, 5);
+  });
+
+  it("con monedas mezcladas no consolida plata, pero los chats sí se cuentan", () => {
+    const mixedAgents: AgentCostConfig[] = [
+      agent("a"),
+      { id: "b", name: "B", brand: null, costPerChat: 2, currency: "USD" },
+    ];
+    const mixedReport = summarizeRoas(mixedAgents, chats, orders);
+    const mixed = summarizeScaling(mixedReport, chats, orders, NOW);
+    expect(mixed.perChat).toBeNull();
+    expect(mixed.month).toBeNull();
+    expect(mixed.wow.revenue7).toBeNull();
+    expect(mixed.wow.chats7).toBe(2);
+  });
+
+  it("semana anterior en 0 → crecimiento null (no infinito)", () => {
+    const soloEstaSemana = [chat("a", "2026-07-02T14:00:00Z")];
+    const rep = summarizeRoas([agent("a")], soloEstaSemana, []);
+    const g = summarizeScaling(rep, soloEstaSemana, [], NOW);
+    expect(g.wow.chatsGrowth).toBeNull();
   });
 });
 

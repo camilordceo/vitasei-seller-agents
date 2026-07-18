@@ -15,6 +15,7 @@ import {
   summarizeOrders,
   summarizeProductConversion,
   summarizeRoas,
+  summarizeScaling,
   summarizeTopProducts,
   matchesSearch,
   searchKey,
@@ -31,6 +32,7 @@ import {
   type ProductConversionRow,
   type ProductSalesFact,
   type SalesReport,
+  type ScalingReport,
   type TopProductRow,
   type TransactionFact,
 } from "@/lib/dashboard/report";
@@ -1446,11 +1448,20 @@ export async function getConversionReport(agentId?: string): Promise<ConversionR
  * Resiliente a que falte la migración 0028: sin las columnas de costo, todos los
  * agentes quedan "sin configurar" (chats y ventas sí se ven) en vez de romper la
  * página de Reportes.
+ *
+ * Trae también el gasto de IA POR AGENTE (tokens + audios de `events_log`, vía
+ * su conversación; llamadas de `voice_calls`, que ya llevan `agent_id`) para las
+ * columnas Costo IA/chat y ROAIS, y deriva el reporte de escala (ADR-0070) de
+ * los MISMOS hechos, para que todo cuadre entre secciones.
  */
-export async function getRoasReport(agentId?: string): Promise<RoasReport> {
+export interface RoasScalingReport extends RoasReport {
+  scaling: ScalingReport;
+}
+
+export async function getRoasReport(agentId?: string): Promise<RoasScalingReport> {
   const supabase = createServiceClient();
 
-  const [agentRows, convos, orders] = await Promise.all([
+  const [agentRows, convos, orders, tokenRows, audioRows, voiceRows] = await Promise.all([
     supabase.from("agents").select("*").order("created_at", { ascending: true }),
     fetchAllRows(
       (from, to) =>
@@ -1465,6 +1476,29 @@ export async function getRoasReport(agentId?: string): Promise<RoasReport> {
         supabase.from("orders").select("conversation_id, status, total, created_at").range(from, to),
       "getRoasReport orders",
     ),
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("events_log")
+          .select("payload, conversation_id")
+          .in("type", TOKEN_EVENT_TYPES as unknown as string[])
+          .range(from, to),
+      "getRoasReport tokens",
+    ),
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("events_log")
+          .select("payload, conversation_id")
+          .eq("type", "audio_transcribed")
+          .range(from, to),
+      "getRoasReport audio",
+    ),
+    // Llamadas con IA: tabla de la migración 0027; si no existe aún, cuentan 0.
+    (async () => {
+      const { data, error } = await supabase.from("voice_calls").select("agent_id, cost_usd");
+      return error ? [] : (data ?? []);
+    })(),
   ]);
   if (agentRows.error) throw new Error(`getRoasReport agents: ${agentRows.error.message}`);
 
@@ -1498,7 +1532,29 @@ export async function getRoasReport(agentId?: string): Promise<RoasReport> {
     createdAt: o.created_at,
   }));
 
-  return summarizeRoas(agents, chats, orderFacts);
+  // Gasto IA por agente, en USD. Tokens y audios cuelgan de su conversación (los
+  // eventos sin conversación no se pueden atribuir y quedan fuera, igual que en
+  // getAiCostReport); las llamadas llevan `agent_id` directo. `tokenCostUsd` es
+  // lineal, así que sumar el costo evento por evento da lo mismo que agregarlo.
+  const aiCostUsdByAgent = new Map<string, number>();
+  const addCost = (aId: string | null | undefined, usd: number) => {
+    if (!aId) return;
+    aiCostUsdByAgent.set(aId, (aiCostUsdByAgent.get(aId) ?? 0) + usd);
+  };
+  for (const row of tokenRows) {
+    const u = readUsage(row.payload);
+    addCost(agentByConvo.get(row.conversation_id ?? ""), tokenCostUsd(u.inputTokens, u.outputTokens));
+  }
+  for (const row of audioRows) {
+    addCost(agentByConvo.get(row.conversation_id ?? ""), readAudio(row.payload).costUsd);
+  }
+  for (const raw of voiceRows) {
+    const r = raw as { agent_id: string | null; cost_usd: number | null };
+    addCost(r.agent_id, Number(r.cost_usd ?? 0));
+  }
+
+  const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent);
+  return { ...report, scaling: summarizeScaling(report, chats, orderFacts) };
 }
 
 export interface ProductConversionReport {

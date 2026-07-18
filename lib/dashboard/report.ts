@@ -1,4 +1,5 @@
 ﻿import type { FulfillmentMethod, OrderStatus } from "@/lib/supabase/types";
+import { convertMoney } from "./currency";
 
 /**
  * Agregación PURA de órdenes para los reportes de ventas (Sprint 6 — órdenes).
@@ -678,6 +679,12 @@ export interface RoasRow {
   costPerOrder: number | null;
   /** revenue − inversión. */
   profit: number;
+  /** Costo IA total del agente (tokens + audios + llamadas), YA en su moneda. */
+  aiCost: number;
+  /** aiCost / chats: cuánto cuesta la IA por conversación atendida. null sin chats. */
+  aiCostPerChat: number | null;
+  /** ROAIS (return on AI spend) = revenue / aiCost. null sin gasto IA. */
+  roais: number | null;
 }
 
 export interface RoasDay {
@@ -714,11 +721,16 @@ function ratio(numerator: number, denominator: number): number | null {
  * salen cuando todo el alcance comparte moneda. Un agente sin costo configurado
  * aparece igual (con sus chats y ventas) pero con inversión 0 y ROAS null: se ve
  * que falta configurarlo en vez de mostrar un retorno inventado.
+ *
+ * `aiCostUsdByAgent` es el gasto de IA de cada agente EN USD (tokens + audios +
+ * llamadas); acá se convierte a la moneda del agente para leer Costo IA/chat y
+ * ROAIS al lado de la pauta, en las mismas unidades. Ver ADR-0070.
  */
 export function summarizeRoas(
   agents: AgentCostConfig[],
   chats: ChatFact[],
   orders: RoasOrderFact[],
+  aiCostUsdByAgent: Map<string, number> = new Map(),
 ): RoasReport {
   const byAgent = new Map<string, RoasRow>();
   for (const a of agents) {
@@ -737,6 +749,9 @@ export function summarizeRoas(
       confirmedRoas: null,
       costPerOrder: null,
       profit: 0,
+      aiCost: 0,
+      aiCostPerChat: null,
+      roais: null,
     });
   }
 
@@ -761,6 +776,11 @@ export function summarizeRoas(
     row.confirmedRoas = ratio(row.confirmedRevenue, row.investment);
     row.costPerOrder = ratio(row.investment, row.orders);
     row.profit = row.revenue - row.investment;
+    // Gasto IA del agente: llega en USD y se lee en la moneda de la fila. Si la
+    // moneda del agente no tiene tasa, queda 0 (no se inventa una conversión).
+    row.aiCost = convertMoney(aiCostUsdByAgent.get(row.agentId ?? "") ?? 0, "USD", row.currency) ?? 0;
+    row.aiCostPerChat = ratio(row.aiCost, row.chats);
+    row.roais = ratio(row.revenue, row.aiCost);
   }
   rows.sort((a, b) => b.revenue - a.revenue);
 
@@ -775,6 +795,7 @@ export function summarizeRoas(
     const revenue = rows.reduce((s, r) => s + r.revenue, 0);
     const confirmedRevenue = rows.reduce((s, r) => s + r.confirmedRevenue, 0);
     const ordersTotal = rows.reduce((s, r) => s + r.orders, 0);
+    const aiCostTotal = rows.reduce((s, r) => s + r.aiCost, 0);
     total = {
       agentId: null,
       name: "Todos los agentes",
@@ -792,6 +813,9 @@ export function summarizeRoas(
       confirmedRoas: ratio(confirmedRevenue, investment),
       costPerOrder: ratio(investment, ordersTotal),
       profit: revenue - investment,
+      aiCost: aiCostTotal,
+      aiCostPerChat: ratio(aiCostTotal, chatsTotal),
+      roais: ratio(revenue, aiCostTotal),
     };
   }
 
@@ -841,6 +865,160 @@ export function summarizeRoas(
     total,
     perDay,
     configured: rows.some((r) => r.costPerChat != null && r.costPerChat > 0),
+  };
+}
+
+// --- Escala: economía por chat, proyección del mes y crecimiento (ADR-0070) ---
+
+export interface ScalingReport {
+  /**
+   * Economía unitaria del alcance: qué produce y qué cuesta UN chat. null si el
+   * alcance mezcla monedas o no hay chats (no se inventa un promedio).
+   */
+  perChat: {
+    currency: string;
+    /** Pauta por chat (inversión / chats). */
+    adCost: number;
+    /** IA por chat (gasto IA / chats). */
+    aiCost: number;
+    /** Venta generada por chat (ventas / chats). */
+    revenue: number;
+    /** revenue − adCost − aiCost: lo que deja cada chat antes de producto/logística. */
+    margin: number;
+  } | null;
+  /**
+   * Proyección del mes calendario (Bogota) a ritmo actual: MTD ÷ días corridos ×
+   * días del mes. null si el alcance mezcla monedas.
+   */
+  month: {
+    daysElapsed: number;
+    daysInMonth: number;
+    revenueMtd: number;
+    ordersMtd: number;
+    projectedRevenue: number;
+    projectedOrders: number;
+    /** Mes calendario anterior completo, para comparar. */
+    prevRevenue: number;
+    prevOrders: number;
+  } | null;
+  /** Semana contra semana: últimos 7 días vs. los 7 anteriores. */
+  wow: {
+    chats7: number;
+    chatsPrev7: number;
+    /** (chats7 − chatsPrev7) / chatsPrev7. null si la semana anterior fue 0. */
+    chatsGrowth: number | null;
+    /** Montos solo con moneda única en el alcance. */
+    revenue7: number | null;
+    revenuePrev7: number | null;
+    revenueGrowth: number | null;
+  };
+}
+
+/**
+ * Lecturas para ESCALAR: cuánto deja cada chat (pauta + IA vs. venta), a dónde va
+ * el mes si sigue así (run-rate simple, sin estacionalidad — se enuncia como
+ * "a este ritmo") y si la operación crece o se frena semana contra semana. Usa los
+ * MISMOS hechos que el ROAS para que todos los números cuadren entre secciones.
+ */
+export function summarizeScaling(
+  report: RoasReport,
+  chats: ChatFact[],
+  orders: RoasOrderFact[],
+  nowMs: number = Date.now(),
+): ScalingReport {
+  const total = report.total;
+  const inScope = new Set(report.rows.map((r) => r.agentId));
+
+  const perChat =
+    total && total.chats > 0
+      ? {
+          currency: total.currency,
+          adCost: total.investment / total.chats,
+          aiCost: total.aiCost / total.chats,
+          revenue: total.revenue / total.chats,
+          margin: (total.revenue - total.investment - total.aiCost) / total.chats,
+        }
+      : null;
+
+  // Mes calendario en Bogota. El mes anterior se compara COMPLETO (no "mismo día
+  // del mes pasado"): es la vara que el equipo ya usa al hablar de "el mes".
+  let month: ScalingReport["month"] = null;
+  if (total) {
+    const todayKey = bogotaDayKey(nowMs);
+    const [y, m, d] = todayKey.split("-").map(Number);
+    const monthKey = todayKey.slice(0, 7);
+    const prevKey = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+    let revenueMtd = 0;
+    let ordersMtd = 0;
+    let prevRevenue = 0;
+    let prevOrders = 0;
+    for (const o of orders) {
+      if (o.status === "cancelled" || !inScope.has(o.agentId)) continue;
+      const ms = Date.parse(o.createdAt);
+      if (!Number.isFinite(ms)) continue;
+      const key = bogotaDayKey(ms);
+      if (key.startsWith(monthKey)) {
+        revenueMtd += Number(o.total) || 0;
+        ordersMtd += 1;
+      } else if (key.startsWith(prevKey)) {
+        prevRevenue += Number(o.total) || 0;
+        prevOrders += 1;
+      }
+    }
+    month = {
+      daysElapsed: d,
+      daysInMonth,
+      revenueMtd,
+      ordersMtd,
+      projectedRevenue: d > 0 ? (revenueMtd / d) * daysInMonth : 0,
+      projectedOrders: d > 0 ? Math.round((ordersMtd / d) * daysInMonth) : 0,
+      prevRevenue,
+      prevOrders,
+    };
+  }
+
+  // Semana contra semana. Los chats se cuentan siempre (no dependen de moneda).
+  const week = 7 * DAY_MS;
+  let chats7 = 0;
+  let chatsPrev7 = 0;
+  for (const c of chats) {
+    if (!c.isChat || !inScope.has(c.agentId)) continue;
+    const ms = Date.parse(c.createdAt);
+    if (!Number.isFinite(ms)) continue;
+    if (ms >= nowMs - week) chats7 += 1;
+    else if (ms >= nowMs - 2 * week) chatsPrev7 += 1;
+  }
+  let revenue7: number | null = null;
+  let revenuePrev7: number | null = null;
+  if (total) {
+    revenue7 = 0;
+    revenuePrev7 = 0;
+    for (const o of orders) {
+      if (o.status === "cancelled" || !inScope.has(o.agentId)) continue;
+      const ms = Date.parse(o.createdAt);
+      if (!Number.isFinite(ms)) continue;
+      if (ms >= nowMs - week) revenue7 += Number(o.total) || 0;
+      else if (ms >= nowMs - 2 * week) revenuePrev7 += Number(o.total) || 0;
+    }
+  }
+
+  const growth = (cur: number, prev: number): number | null =>
+    prev > 0 ? (cur - prev) / prev : null;
+
+  return {
+    perChat,
+    month,
+    wow: {
+      chats7,
+      chatsPrev7,
+      chatsGrowth: growth(chats7, chatsPrev7),
+      revenue7,
+      revenuePrev7,
+      revenueGrowth:
+        revenue7 != null && revenuePrev7 != null ? growth(revenue7, revenuePrev7) : null,
+    },
   };
 }
 
