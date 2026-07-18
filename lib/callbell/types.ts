@@ -1,4 +1,5 @@
 import { normalizePhone } from "@/lib/messaging/phone";
+import { kindFromUrl } from "@/lib/messaging/media";
 
 /**
  * Tipos y helpers del webhook de Callbell.
@@ -90,6 +91,34 @@ export function getAttachments(payload?: CallbellMessagePayload): string[] {
   const raw = payload?.attachments;
   if (!Array.isArray(raw)) return [];
   return raw.filter((u): u is string => typeof u === "string" && u.trim().length > 0);
+}
+
+/**
+ * Tipo del mensaje (`text` | `image` | `audio` | `video` | `document`).
+ *
+ * OJO — Callbell **no manda `type`** en `message_created`. Se verificó contra los
+ * payloads reales guardados en `events_log`: las claves del payload son
+ * `to, from, text, uuid, status, channel, contact, createdAt` (+ `attachments`
+ * cuando hay adjunto), y `type` no aparece nunca. La doc sugería lo contrario y por
+ * eso el código lo leía directo: el resultado era que TODO mensaje entraba como
+ * `other` y `gatherPendingContent` descartaba el adjunto sin dejar rastro — audios
+ * e imágenes del cliente no se procesaban jamás.
+ *
+ * Se mantiene `payload.type` como primera opción (si Callbell lo agrega algún día,
+ * manda) y se cae a inferirlo por la extensión del adjunto, que sí viene en el path
+ * (`/uploads/<uuid>.mp3`). Sin adjunto es un mensaje de texto.
+ */
+export function getMessageType(payload?: CallbellMessagePayload): string {
+  const declared = payload?.type;
+  if (typeof declared === "string" && declared.trim().length > 0) return declared.trim();
+
+  const attachment = getAttachments(payload)[0];
+  if (!attachment) return "text";
+
+  const kind = kindFromUrl(attachment);
+  // `other` = hay adjunto pero la extensión no lo identifica. Se devuelve tal cual:
+  // la red de seguridad de `gatherPendingContent` lo resuelve por content-type real.
+  return kind;
 }
 
 // ---------------------------------------------------------------------------

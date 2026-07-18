@@ -94,6 +94,22 @@ export function kindFromContentType(contentType: string): MediaKind {
   return "other";
 }
 
+/**
+ * Clasifica el media por la EXTENSIÓN de su URL, sin descargarlo.
+ *
+ * Existe porque Callbell **no manda `type` en el webhook** (confirmado contra
+ * payloads reales de producción: las claves son `to/from/text/uuid/status/channel/
+ * contact/createdAt` + `attachments`). Sin un tipo, todo mensaje caía en `other` y
+ * el adjunto se descartaba en silencio. La extensión sí viene en el path del
+ * adjunto (`/uploads/<uuid>.mp3`), así que alcanza para decidir.
+ *
+ * Devuelve `other` si la extensión no dice nada — el caller decide qué hacer.
+ */
+export function kindFromUrl(url: string): MediaKind {
+  const contentType = EXT_CONTENT_TYPE[extFromUrl(url)];
+  return contentType ? kindFromContentType(contentType) : "other";
+}
+
 /** Nombre de archivo para subir a OpenAI (la extensión ayuda a detectar el formato). */
 export function filenameFor(contentType: string, url: string): string {
   const ext = CONTENT_TYPE_EXT[contentType] || extFromUrl(url) || "bin";

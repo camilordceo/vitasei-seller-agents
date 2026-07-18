@@ -3,6 +3,7 @@ import {
   extFromUrl,
   filenameFor,
   kindFromContentType,
+  kindFromUrl,
   normalizeContentType,
   toDataUrl,
 } from "./media";
@@ -58,5 +59,19 @@ describe("toDataUrl", () => {
   it("arma un data URL base64", () => {
     const bytes = new Uint8Array([104, 105]); // "hi"
     expect(toDataUrl(bytes, "image/png")).toBe("data:image/png;base64,aGk=");
+  });
+});
+
+describe("kindFromUrl", () => {
+  it("clasifica por extensión, ignorando la querystring firmada", () => {
+    expect(kindFromUrl("https://h/uploads/a.mp3?X-Amz-Expires=600")).toBe("audio");
+    expect(kindFromUrl("https://h/uploads/a.jpg?sig=x")).toBe("image");
+    expect(kindFromUrl("https://h/uploads/a.ogg")).toBe("audio");
+    expect(kindFromUrl("https://h/uploads/a.pdf")).toBe("document");
+    expect(kindFromUrl("https://h/uploads/a.mp4")).toBe("video");
+  });
+  it("extensión desconocida o ausente → other", () => {
+    expect(kindFromUrl("https://h/uploads/a")).toBe("other");
+    expect(kindFromUrl("https://h/uploads/a.xyz")).toBe("other");
   });
 });

@@ -5,6 +5,7 @@ import {
   getAttachments,
   getChannelUuid,
   getDestinationNumber,
+  getMessageType,
   isInboundMessageEvent,
   normalizePhone,
 } from "@/lib/callbell/types";
@@ -128,7 +129,8 @@ export async function POST(req: Request) {
       messageUuid,
       agentId,
       text: payload.text ?? null,
-      messageType: payload.type ?? null,
+      // Callbell no manda `type`: se infiere del adjunto. Ver `getMessageType`.
+      messageType: getMessageType(payload),
       mediaUrl,
       contactName: payload.contact?.name ?? null,
       callbellContactUuid: payload.contact?.uuid ?? null,

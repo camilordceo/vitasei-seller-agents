@@ -3,6 +3,7 @@ import {
   classifyInbox,
   getChannelUuid,
   getDestinationNumber,
+  getMessageType,
   isInboundMessageEvent,
   normalizePhone,
 } from "./types";
@@ -72,5 +73,38 @@ describe("isInboundMessageEvent", () => {
   });
   it("rechaza otros eventos", () => {
     expect(isInboundMessageEvent({ event: "message_updated" })).toBe(false);
+  });
+});
+
+// El payload REAL de Callbell (verificado contra producción) no trae `type`: el
+// tipo se infiere del adjunto. Sin esto todo caía en `other` y el audio/imagen del
+// cliente se descartaba en silencio.
+describe("getMessageType", () => {
+  const S3 = "https://zhq.s3-eu-west-3.amazonaws.com/uploads/b7e100f4-ebcc-4697-83ab-ecfdcae0db1c";
+  const signed = "?X-Amz-Expires=600&X-Amz-Algorithm=AWS4-HMAC-SHA256";
+
+  it("sin adjunto → text", () => {
+    expect(getMessageType({ text: "Precio" })).toBe("text");
+  });
+
+  it("nota de voz (.mp3 con querystring firmada) → audio", () => {
+    expect(getMessageType({ attachments: [`${S3}.mp3${signed}`] })).toBe("audio");
+  });
+
+  it("imagen (.jpg) → image", () => {
+    expect(getMessageType({ attachments: [`${S3}.jpg${signed}`] })).toBe("image");
+  });
+
+  it("respeta `type` si Callbell algún día lo manda", () => {
+    expect(getMessageType({ type: "document", attachments: [`${S3}.mp3`] })).toBe("document");
+  });
+
+  it("adjunto sin extensión reconocible → other (lo resuelve la red de seguridad)", () => {
+    expect(getMessageType({ attachments: [`${S3}`] })).toBe("other");
+  });
+
+  it("payload vacío / undefined → text", () => {
+    expect(getMessageType(undefined)).toBe("text");
+    expect(getMessageType({ attachments: [] })).toBe("text");
   });
 });
