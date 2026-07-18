@@ -13,6 +13,35 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Retorno (ROAS): costo por chat por agente** (ADR-0065; migración `0028`, `docs/26`). El
+  dashboard mostraba lo que entra y lo que cuesta la IA, pero no lo que cuesta **conseguir**
+  cada conversación —el gasto grande—, así que las ventas se leían como si fueran ganancia.
+  Ahora cada agente define **cuánto le cuesta traer un chat y en qué moneda** (Colombia: 1.000
+  COP) y Reportes calcula el retorno: tabla por agente con chats, inversión, ventas, **costo por
+  venta (CPA)**, ROAS y ROAS confirmado, más un gráfico de 14 días con inversión vs. ventas.
+  - Un **chat** es una conversación donde el cliente escribió (se lee de `last_inbound_at`, sin
+    barrer `messages`), y el costo se imputa el día en que **llegó** el lead, que es cuando se
+    pagó por él.
+  - **Nunca se suman monedas distintas**: con COP y USD en el mismo alcance la tabla muestra las
+    filas pero no consolida ni grafica, y explica por qué. Un agente sin costo configurado sale
+    con sus chats y ventas pero **sin ROAS** — `NULL` no es `0` (un costo 0 daría retorno
+    infinito). El consolidado usa el costo **ponderado**, no el promedio simple.
+  - Trade-off anotado: el costo es un **valor vigente sin historia**, así que cambiarlo
+    recalcula el pasado. Suficiente para v1 (el dato hoy no existe en ninguna parte); el camino
+    a ROAS histórico exacto queda escrito en el ADR.
+- **Secciones plegables en todo el dashboard** (ADR-0066). Las páginas crecieron por acumulación
+  y había que hacer scroll para llegar a lo de siempre. Ahora se pliegan los filtros de
+  Conversaciones, el editor de WhatsApp y el de voz en Agentes, y los dos bloques de Retargets.
+  Se hizo con `<details>` nativos: sin JS, sin volver client component ninguna página, con
+  teclado y "buscar en la página" gratis. Las secciones cerradas resumen en el encabezado lo que
+  esconden (filtros activos, "Activadas/Apagadas", cuántas filas).
+- **Conversaciones: rango de fechas exacto y filtro "Sin etiqueta"**. Desde/hasta por día
+  calendario de Bogota (extremo "hasta" inclusivo), excluyente con los atajos de 7/30/90 días
+  para que la ventana no quede ambigua. "Sin etiqueta" expone la cola por clasificar.
+- **Órdenes: búsqueda, filtro por producto, resúmenes y paginación**. Se busca por teléfono,
+  nombre o ciudad (sin acentos y tolerante a separadores en el número) y se filtra por producto.
+  Arriba, cuatro tarjetas —órdenes, ventas, confirmadas y ticket promedio— que suman **todo el
+  filtro, no la página visible**. La lista pagina de a 50.
 - **Llamadas con IA por teléfono (Synthflow)** (ADR-0060/0061/0062/0063; migración `0027`,
   `docs/25`). El agente vendía solo por WhatsApp; ahora también **llama**. Cada agente tiene su
   propia IA de voz —prompt de voz **separado del de WhatsApp**, saludo, voz y número saliente— y
