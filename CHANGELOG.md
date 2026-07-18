@@ -29,6 +29,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Fixed
+- **Conversaciones: el último mensaje ya no dice `[other]`.** Cuando lo último fue una
+  llamada con IA, la lista muestra la primera línea de la nota ("Llamada con IA —
+  Completada · 2m 10s") en vez del tipo crudo, que se confundía con un mensaje del
+  cliente. Aplica a todo no-texto con contenido (p. ej. caption de imagen); sin contenido,
+  etiqueta en español: `[imagen]`, `[audio]`, `[video]`, `[documento]`, `[mensaje]`.
 - **Reactivaciones 7/15 días: NINGUNA se estaba enviando** — Callbell exige que los valores
   de `metadata` sean strings y la reactivación mandaba `reactivation_stage` como número →
   HTTP 400 `{"metadata":["must be string"]}` en TODOS los envíos (82 fallidas, 0 enviadas

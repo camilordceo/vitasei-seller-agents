@@ -374,6 +374,30 @@ type ConvoListRow = {
   updated_at: string;
 };
 
+/** Etiqueta en español para el último mensaje cuando no hay texto que mostrar. */
+const LAST_MESSAGE_TYPE_LABEL: Record<string, string> = {
+  image: "[imagen]",
+  audio: "[audio]",
+  video: "[video]",
+  document: "[documento]",
+  other: "[mensaje]",
+};
+
+/**
+ * Vista de UNA línea del último mensaje para la lista de Conversaciones. Los
+ * no-texto CON contenido muestran su primera línea — la nota de llamada IA se
+ * guarda como `type:"other"` pero su contenido empieza con "Llamada con IA — …",
+ * que es exactamente lo que hay que leer (antes salía un "[other]" críptico que
+ * se confundía con un mensaje del cliente). Lo mismo aplica al caption de una
+ * imagen. Sin contenido, cae a una etiqueta en español por tipo.
+ */
+function lastMessagePreview(lm: { content: string | null; type: MessageType }): string | null {
+  if (lm.type === "text") return lm.content;
+  const firstLine = (lm.content ?? "").trim().split(/\r?\n/)[0];
+  if (firstLine) return firstLine;
+  return LAST_MESSAGE_TYPE_LABEL[lm.type] ?? `[${lm.type}]`;
+}
+
 export async function getRecentConversations(
   opts: ConversationFilters = {},
 ): Promise<ConversationRow[]> {
@@ -655,7 +679,7 @@ export async function getRecentConversations(
       method: r.fulfillment_method,
       aiPaused: r.ai_paused,
       lastActivity,
-      lastMessage: lm ? (lm.type === "text" ? lm.content : `[${lm.type}]`) : null,
+      lastMessage: lm ? lastMessagePreview(lm) : null,
       hasOrder: orderStatus != null,
       orderStatus,
       labels: labelsByConvo.get(r.id) ?? [],
