@@ -37,6 +37,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   del assistant) y **verifica releyendo** que el valor quedó. Es un botón explícito —no parte
   del guardado— para no pisarle el webhook a un assistant ajeno por un model_id mal pegado
   (ADR-0060). Queda auditado en `events_log` como `voice_webhook_synced`.
+- **Conversaciones: chip del agente en cada fila.** La lista muestra de qué agente
+  (marca/país: Colombia, USA, …) es cada conversación, como chip neutro junto al estado y
+  con la marca en el tooltip. Se apaga solo cuando ya se filtró por UN agente (sería
+  repetirlo 50 veces) o cuando solo hay un agente. También sale en las conversaciones
+  recientes del Resumen.
 - **Conversaciones: búsqueda por cliente y por palabra clave** (ADR-0071). Dos filtros de
   texto libre en el bloque de Filtros, combinables con todos los existentes y con la
   paginación:

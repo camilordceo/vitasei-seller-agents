@@ -566,13 +566,31 @@ function LabelChip({ name, color }: { name: string; color: string }) {
   );
 }
 
+/**
+ * Chip del agente dueño de la conversación (marca/país: "Colombia", "USA", ...).
+ * Neutro y con borde, para no competir con las etiquetas de color ni los estados.
+ */
+function AgentChip({ name, brand }: { name: string; brand: string | null }) {
+  return (
+    <span
+      className="inline-flex max-w-[10rem] items-center truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+      title={brand ? `${name} · ${brand}` : name}
+    >
+      {name}
+    </span>
+  );
+}
+
 export function ConversationList({
   rows,
   filtered = false,
+  showAgent = true,
 }: {
   rows: ConversationRow[];
   /** Cambia el mensaje de vacío cuando hay filtros activos. */
   filtered?: boolean;
+  /** Chip con el agente de cada fila (se apaga al filtrar por UN agente: sería repetirlo 50 veces). */
+  showAgent?: boolean;
 }) {
   if (rows.length === 0) {
     return (
@@ -602,6 +620,9 @@ export function ConversationList({
                 <span className="truncate text-sm font-medium text-slate-900">
                   {c.contactName || c.phone || "Sin contacto"}
                 </span>
+                {showAgent && c.agentName ? (
+                  <AgentChip name={c.agentName} brand={c.agentBrand} />
+                ) : null}
                 <StatusPill status={c.status} />
                 {c.hasOrder && c.orderStatus ? <OrderBadge status={c.orderStatus} /> : null}
                 {c.aiPaused ? <ManualPill /> : null}

@@ -314,6 +314,10 @@ export interface ConversationRow {
   orderStatus: OrderStatus | null;
   /** Etiquetas de la conversación (para identificarla de un vistazo). */
   labels: ConversationLabelLite[];
+  /** Agente dueño de la conversación (para el chip de marca/país en la lista). */
+  agentId: string | null;
+  agentName: string | null;
+  agentBrand: string | null;
 }
 
 /**
@@ -361,6 +365,7 @@ export interface ConversationFilters {
 type ConvoListRow = {
   id: string;
   contact_id: string;
+  agent_id: string | null;
   status: ConversationStatus;
   fulfillment_method: FulfillmentMethod;
   ai_paused: boolean;
@@ -506,8 +511,8 @@ export async function getRecentConversations(
     const useOutbound = hasOutboundCol && orderBy === "outbound";
     const sortCol = useOutbound ? "last_outbound_at" : "last_inbound_at";
     const cols = hasOutboundCol
-      ? "id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, last_outbound_at, updated_at"
-      : "id, contact_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at";
+      ? "id, contact_id, agent_id, status, fulfillment_method, ai_paused, last_inbound_at, last_outbound_at, updated_at"
+      : "id, contact_id, agent_id, status, fulfillment_method, ai_paused, last_inbound_at, updated_at";
 
     let q = supabase
       .from("conversations")
@@ -564,8 +569,9 @@ export async function getRecentConversations(
 
   const contactIds = [...new Set(rows.map((r) => r.contact_id))];
   const convoIds = rows.map((r) => r.id);
+  const agentIds = [...new Set(rows.map((r) => r.agent_id).filter((id): id is string => !!id))];
 
-  const [contactsRes, msgsRes, ordersRes, labelsRes] = await Promise.all([
+  const [contactsRes, msgsRes, ordersRes, labelsRes, agentsRes] = await Promise.all([
     supabase.from("contacts").select("id, name, phone").in("id", contactIds),
     supabase
       .from("messages")
@@ -583,12 +589,22 @@ export async function getRecentConversations(
       .from("conversation_labels")
       .select("conversation_id, labels(id, name, color)")
       .in("conversation_id", convoIds),
+    // Agente de cada conversación (marca/país) para el chip de la lista. Solo los
+    // agentes de la página (pocos). Resiliente: si falla, la lista sale sin chip.
+    agentIds.length > 0
+      ? supabase.from("agents").select("id, name, brand").in("id", agentIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (contactsRes.error) throw new Error(`getRecentConversations contacts: ${contactsRes.error.message}`);
   if (msgsRes.error) throw new Error(`getRecentConversations messages: ${msgsRes.error.message}`);
   if (ordersRes.error) throw new Error(`getRecentConversations orders: ${ordersRes.error.message}`);
 
   const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
+  const agentById = new Map(
+    ((agentsRes.error ? [] : agentsRes.data) ?? []).map(
+      (a: { id: string; name: string; brand: string | null }) => [a.id, a] as const,
+    ),
+  );
   const lastMsgByConvo = new Map<string, { content: string | null; type: MessageType }>();
   for (const m of msgsRes.data ?? []) {
     if (!lastMsgByConvo.has(m.conversation_id)) {
@@ -643,6 +659,9 @@ export async function getRecentConversations(
       hasOrder: orderStatus != null,
       orderStatus,
       labels: labelsByConvo.get(r.id) ?? [],
+      agentId: r.agent_id ?? null,
+      agentName: (r.agent_id && agentById.get(r.agent_id)?.name) || null,
+      agentBrand: (r.agent_id && agentById.get(r.agent_id)?.brand) || null,
     };
   });
 

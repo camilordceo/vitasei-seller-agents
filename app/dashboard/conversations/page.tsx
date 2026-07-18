@@ -464,7 +464,11 @@ export default async function ConversationsPage({
           </Link>
         </div>
       ) : (
-        <ConversationList rows={convos} filtered={anyFilter} />
+        <ConversationList
+          rows={convos}
+          filtered={anyFilter}
+          showAgent={agents.length > 1 && !agentKey}
+        />
       )}
 
       {hasPrev || hasNext ? (
