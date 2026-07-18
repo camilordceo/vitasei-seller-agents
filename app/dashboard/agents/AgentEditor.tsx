@@ -28,7 +28,7 @@ import type { AgentEditInput } from "./types";
 import type { MessagingProviderId } from "@/lib/messaging/types";
 
 const inputCls =
-  "w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 const monoCls = `${inputCls} font-mono`;
 const labelCls = "mb-1 block text-xs font-medium text-slate-600";
 
@@ -359,7 +359,7 @@ export function AgentEditor({
         dirty();
         setProvider(id);
       }}
-      className={`inline-flex h-11 items-center rounded-md border px-4 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
+      className={`inline-flex h-11 items-center rounded-md border px-4 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
         provider === id
           ? "border-slate-900 bg-slate-900 text-white"
           : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
@@ -379,7 +379,7 @@ export function AgentEditor({
         setCatalogMode(mode);
       }}
       aria-pressed={catalogMode === mode}
-      className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
+      className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
         catalogMode === mode
           ? "border-slate-900 bg-slate-900 text-white"
           : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
@@ -768,7 +768,7 @@ export function AgentEditor({
                           href={r.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="block truncate text-[11px] text-slate-500 underline underline-offset-2 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                          className="block truncate text-[11px] text-slate-500 underline underline-offset-2 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                         >
                           {r.url}
                         </a>
@@ -952,7 +952,7 @@ export function AgentEditor({
                   type="button"
                   onClick={() => removePaymentMethod(i)}
                   aria-label={`Quitar el método ${i + 1}`}
-                  className="inline-flex h-[42px] w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-500 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                  className="inline-flex h-[42px] w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                 >
                   <span aria-hidden="true">×</span>
                 </button>
@@ -965,7 +965,7 @@ export function AgentEditor({
           <button
             type="button"
             onClick={addPaymentMethod}
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             + Agregar método
           </button>
@@ -1110,7 +1110,7 @@ export function AgentEditor({
         <button
           type="submit"
           disabled={locked}
-          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
         >
           {isPending ? "Procesando…" : agentId ? "Guardar cambios" : "Crear agente"}
         </button>

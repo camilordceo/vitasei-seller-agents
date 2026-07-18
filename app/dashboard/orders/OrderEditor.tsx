@@ -42,7 +42,7 @@ const METHOD_OPTIONS: Array<{ value: FulfillmentMethod; label: string }> = [
 ];
 
 const inputCls =
-  "w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 const labelCls = "mb-1 block text-xs font-medium text-slate-600";
 
 function num(s: string): number | null {
@@ -276,7 +276,7 @@ export function OrderEditor({
           <button
             type="button"
             onClick={addItem}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
               <path d="M12 5v14M5 12h14" strokeLinecap="round" />
@@ -343,7 +343,7 @@ export function OrderEditor({
       </div>
 
       {/* Total */}
-      <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="rounded-2xl border border-slate-200 bg-white p-3">
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"
@@ -352,7 +352,7 @@ export function OrderEditor({
               dirty();
               setRecompute(e.target.checked);
             }}
-            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-teal-500"
           />
           Recalcular el total desde los ítems
           {recompute ? (
@@ -417,7 +417,7 @@ export function OrderEditor({
         <button
           type="submit"
           disabled={isPending}
-          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
         >
           {isPending ? "Guardando…" : "Guardar cambios"}
         </button>

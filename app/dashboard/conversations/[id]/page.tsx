@@ -16,6 +16,8 @@ import { ProductCategoryEditor } from "./ProductCategoryEditor";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { VoiceCallsCard } from "./VoiceCallsCard";
 import { getLabels, getConversationLabels } from "../../actions";
+import { Collapsible } from "../../Collapsible";
+import { InitialsAvatar } from "../../ui-kit";
 
 export const dynamic = "force-dynamic";
 
@@ -48,17 +50,18 @@ export default async function ConversationDetailPage({ params }: { params: { id:
   return (
     <div className="space-y-4">
       <Link
-        href="/dashboard"
-        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        href="/dashboard/conversations"
+        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        Volver
+        Conversaciones
       </Link>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <InitialsAvatar name={convo.contact?.name ?? convo.contact?.phone} size="h-10 w-10 text-[13px]" />
+        <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
         <StatusPill status={convo.status} />
         <MethodPill method={convo.method} />
         {convo.aiPaused ? <ManualPill /> : null}
@@ -108,11 +111,14 @@ export default async function ConversationDetailPage({ params }: { params: { id:
           />
         </div>
 
-        {/* Panel lateral */}
-        <aside className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">Contacto</h2>
-            <dl className="mt-2 space-y-1 text-sm">
+        {/* Panel lateral: cada sección se pliega para recuperar espacio. */}
+        <aside className="space-y-3">
+          <Collapsible
+            title="Contacto"
+            subtitle={convo.contact?.phone ? `+${convo.contact.phone}` : undefined}
+            defaultOpen
+          >
+            <dl className="space-y-1.5 text-sm">
               <div className="flex justify-between gap-2">
                 <dt className="text-slate-500">Nombre</dt>
                 <dd className="text-right text-slate-900">{convo.contact?.name ?? "—"}</dd>
@@ -126,30 +132,35 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                 <dd className="text-right text-slate-900">{formatDateTime(convo.createdAt)}</dd>
               </div>
             </dl>
-          </div>
+          </Collapsible>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">Producto / fuente</h2>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Se detecta solo por palabra clave; puedes corregirla o fijarla a mano.
-            </p>
-            <div className="mt-2">
-              <ProductCategoryEditor
-                conversationId={convo.id}
-                initial={convo.productCategory}
-                suggestions={productSuggestions}
-              />
-            </div>
-          </div>
+          <Collapsible
+            title="Producto / fuente"
+            subtitle={
+              convo.productCategory ??
+              "Se detecta por palabra clave; se puede fijar a mano."
+            }
+          >
+            <ProductCategoryEditor
+              conversationId={convo.id}
+              initial={convo.productCategory}
+              suggestions={productSuggestions}
+            />
+          </Collapsible>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">
-              Órdenes{convo.orders.length > 0 ? ` (${convo.orders.length})` : ""}
-            </h2>
+          <Collapsible
+            title={`Órdenes${convo.orders.length > 0 ? ` (${convo.orders.length})` : ""}`}
+            subtitle={
+              convo.orders.length > 0
+                ? undefined
+                : "Sin órdenes todavía."
+            }
+            defaultOpen={convo.orders.length > 0}
+          >
             {convo.orders.length > 0 ? (
-              <ul className="mt-2 space-y-2">
+              <ul className="space-y-2">
                 {convo.orders.map((order) => (
-                  <li key={order.id} className="rounded-md border border-slate-200 p-3">
+                  <li key={order.id} className="rounded-xl border border-slate-200 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <OrderStatusPill status={order.status} />
                       <span className="text-sm font-medium text-slate-900">
@@ -175,7 +186,7 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                     </dl>
                     <Link
                       href={`/dashboard/orders/${order.id}`}
-                      className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                      className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                     >
                       Ver / editar orden
                     </Link>
@@ -183,13 +194,15 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                 ))}
               </ul>
             ) : (
-              <p className="mt-2 text-sm text-slate-400">Sin órdenes todavía.</p>
+              <p className="text-sm text-slate-400">
+                El agente crea la orden al cerrar la compra; también se puede crear a mano.
+              </p>
             )}
             <CreateOrderButton
               conversationId={convo.id}
               label={convo.orders.length > 0 ? "Crear otra orden" : "Crear orden"}
             />
-          </div>
+          </Collapsible>
 
           <VoiceCallsCard conversationId={params.id} rows={voiceCalls} />
 

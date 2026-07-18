@@ -46,7 +46,7 @@ export function ProductCategoryEditor({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="Ej: magnesio"
-          className="h-9 min-w-0 flex-1 rounded-md border border-slate-300 px-2.5 text-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400"
+          className="h-9 min-w-0 flex-1 rounded-md border border-slate-300 px-2.5 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
         />
         <datalist id={listId}>
           {suggestions.map((s) => (
@@ -56,7 +56,7 @@ export function ProductCategoryEditor({
         <button
           onClick={save}
           disabled={isPending || !dirty}
-          className="h-9 shrink-0 rounded-md bg-slate-900 px-3 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+          className="h-9 shrink-0 rounded-md bg-slate-900 px-3 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
         >
           {isPending ? "…" : "Guardar"}
         </button>

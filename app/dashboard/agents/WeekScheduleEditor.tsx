@@ -14,9 +14,9 @@ const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const DAY_NAMES = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 const chipBtn =
-  "rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 const timeCls =
-  "rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 
 /** Nota por franja: vacía (start===end) o cruce de medianoche. */
 function franjaNote(w: ScheduleWindow): string | null {
@@ -72,7 +72,7 @@ export function WeekScheduleEditor({
       {DISPLAY_ORDER.map((d) => {
         const franjas = days[d] ?? [];
         return (
-          <div key={d} className="rounded-lg border border-slate-200 bg-white p-3">
+          <div key={d} className="rounded-2xl border border-slate-200 bg-white p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="w-24 text-sm font-medium text-slate-700">{DAY_NAMES[d]}</span>

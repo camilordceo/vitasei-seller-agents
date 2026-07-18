@@ -29,11 +29,11 @@ interface ExtractorDraft {
 }
 
 const field =
-  "min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "min-h-[40px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 const primary =
-  "min-h-[40px] rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:bg-slate-300";
+  "min-h-[40px] rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300";
 const secondary =
-  "min-h-[40px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60";
+  "min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60";
 
 /** Presets de cadencia: los dos ejemplos que pidió el negocio. */
 const PRESETS: Array<{ label: string; stages: StageDraft[] }> = [
@@ -178,7 +178,7 @@ export function VoiceSettings({
                 setEnabled(e.target.checked);
                 dirty();
               }}
-              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-teal-500"
             />
             Activadas
           </label>
@@ -333,7 +333,7 @@ export function VoiceSettings({
             }}
             rows={8}
             placeholder="Eres Ana, asesora de Vitasei. Hablas claro y corto, una pregunta a la vez…"
-            className={`mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400`}
+            className={`mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500`}
           />
           <span className="mt-1 block text-xs text-slate-500">
             Se le agrega automáticamente el contexto de la conversación de WhatsApp (nombre,
@@ -357,7 +357,7 @@ export function VoiceSettings({
                   setStages(preset.stages.map((s) => ({ ...s })));
                   dirty();
                 }}
-                className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
               >
                 {preset.label}
               </button>
@@ -469,7 +469,7 @@ export function VoiceSettings({
                 setStopWhenAnswered(e.target.checked);
                 dirty();
               }}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-teal-500"
             />
             <span>
               Dejar de llamar si ya contestó

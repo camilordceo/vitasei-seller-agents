@@ -89,7 +89,7 @@ function CallDetail({ row }: { row: VoiceCallRow }) {
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             Transcripción
           </h4>
-          <pre className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-3 text-sm leading-relaxed text-slate-700">
+          <pre className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-200 bg-white p-3 text-sm leading-relaxed text-slate-700">
             {row.transcript}
           </pre>
         </div>
@@ -142,7 +142,7 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
 
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p className="text-sm text-slate-500">No hay llamadas con IA que coincidan.</p>
       </div>
     );
@@ -152,13 +152,13 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
     <div className="space-y-3">
       {/* Barra de acción masiva: aparece solo cuando hay algo cancelable. */}
       {cancellable.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-2.5">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
             <input
               type="checkbox"
               checked={allSelected}
               onChange={toggleAll}
-              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-teal-500"
             />
             Seleccionar las {cancellable.length} programadas
           </label>
@@ -169,7 +169,7 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
             type="button"
             onClick={cancelSelected}
             disabled={selected.size === 0 || pending}
-            className="ml-auto min-h-[36px] rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="ml-auto min-h-[36px] rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {pending ? "Cancelando…" : "Cancelar seleccionadas"}
           </button>
@@ -182,7 +182,7 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
         </p>
       ) : null}
 
-      <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <ul className="divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white">
         {rows.map((row) => {
           const canCancel = CANCELLABLE.has(row.status);
           const isOpen = open === row.id;
@@ -201,7 +201,7 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
                   onChange={() => toggle(row.id)}
                   disabled={!canCancel}
                   aria-label={`Seleccionar llamada a ${row.phone}`}
-                  className="h-4 w-4 shrink-0 rounded border-slate-300 text-slate-900 focus:ring-slate-400 disabled:opacity-30"
+                  className="h-4 w-4 shrink-0 rounded border-slate-300 text-slate-900 focus:ring-teal-500 disabled:opacity-30"
                 />
 
                 <div className="min-w-0 flex-1">
@@ -243,7 +243,7 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
                     type="button"
                     onClick={() => setOpen(isOpen ? null : row.id)}
                     aria-expanded={isOpen}
-                    className="min-h-[36px] shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                    className="min-h-[36px] shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                   >
                     {isOpen ? "Ocultar" : "Ver detalle"}
                   </button>

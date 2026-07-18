@@ -6,7 +6,7 @@ import { updateReactivationSettings } from "../actions";
 import type { AgentReactivationConfig } from "@/lib/dashboard/queries";
 
 const inputCls =
-  "w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 font-mono text-sm text-slate-900 shadow-sm placeholder:font-sans placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 font-mono text-sm text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 const labelCls = "mb-1 block text-xs font-medium text-slate-600";
 
 /**
@@ -66,7 +66,7 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
 
   if (agents.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
         No hay agentes configurados. Crea uno en <span className="font-medium">Agentes</span> para
         configurar sus reactivaciones.
       </div>
@@ -74,7 +74,7 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
   }
 
   return (
-    <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+    <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
       {/* Selector de agente */}
       <div>
         <label htmlFor="react-agent" className={labelCls}>
@@ -84,7 +84,7 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
           id="react-agent"
           value={selectedId}
           onChange={(e) => selectAgent(e.target.value)}
-          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 sm:w-auto"
+          className="w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:w-auto"
         >
           {agents.map((a) => (
             <option key={a.agentId} value={a.agentId}>
@@ -182,7 +182,7 @@ export function ReactivationSettings({ agents }: { agents: AgentReactivationConf
           type="button"
           onClick={save}
           disabled={isPending}
-          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
         >
           {isPending ? "Guardando…" : "Guardar"}
         </button>

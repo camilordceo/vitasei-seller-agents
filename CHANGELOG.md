@@ -12,6 +12,22 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > un envío real por Callbell con gate de `#ID` (S4) y una compra completa con orden +
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
+### Changed
+- **Rediseño UX/UI completo del dashboard — sistema "Silent Sensei"** (ADR-0067, `docs/27`,
+  `docs/vitasei-software-design.md`). Solo presentación; cero cambios en queries, actions o
+  esquema. Nuevo shell con **sidebar navy** (grupos Operación / Automatización / Análisis,
+  top bar en móvil), tipografía **Geist + Inter**, acento teal, cards hairline de 16px y
+  chips desaturados. Por sección: Resumen y Órdenes con KPIs del sistema (tile de ícono +
+  valor display + barra real) y segmented control de estados; Conversaciones con avatares y
+  detalle de **panel lateral 100% plegable** (contacto, producto, órdenes, llamadas,
+  diagnóstico) + chat con burbujas navy/blanco; **Inventario rediseñado como vista de
+  administrador** (KPIs de calidad del catálogo, filtros sin imagen / sin stock, grid de
+  cards con foto grande y edición de link inline); Reportes conserva todo el contenido
+  re-vestido con horarios plegables; Agentes como grid de cards con checklist de
+  configuración; **Hotmart** con el flujo explicado en 3 pasos. Decisiones donde el mockup
+  cedió ante la realidad (un solo nav, sin datos ficticios, sin búsqueda muerta) en
+  `docs/vitasei-software-design.md` §8.
+
 ### Added
 - **Retorno (ROAS): costo por chat por agente** (ADR-0065; migración `0028`, `docs/26`). El
   dashboard mostraba lo que entra y lo que cuesta la IA, pero no lo que cuesta **conseguir**

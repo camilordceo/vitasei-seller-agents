@@ -13,6 +13,7 @@ import {
   RetargetStatsBar,
 } from "../ui";
 import { Collapsible } from "../Collapsible";
+import { PageHeader } from "../ui-kit";
 import { ReactivationSettings } from "./ReactivationSettings";
 import { RetargetSettings } from "./RetargetSettings";
 
@@ -30,13 +31,10 @@ export default async function RetargetsPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Seguimientos</h1>
-        <p className="text-sm text-slate-500">
-          Los dos automatismos que recuperan conversaciones: retargets (el cliente dejó de
-          responder) y reactivaciones (plantillas a los 7 y 15 días). Abre el que vayas a tocar.
-        </p>
-      </div>
+      <PageHeader
+        title="Seguimientos"
+        description="Los dos automatismos que recuperan conversaciones: retargets (el cliente dejó de responder) y reactivaciones (plantillas a los 7 y 15 días). Abre el que vayas a tocar."
+      />
 
       {/*
         Cada bloque va en el mismo orden: CONFIGURACIÓN (lo que se edita) → NÚMEROS

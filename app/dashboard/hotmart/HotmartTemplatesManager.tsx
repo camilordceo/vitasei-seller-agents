@@ -20,7 +20,7 @@ export type AgentOption = {
 };
 
 const inputCls =
-  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400";
+  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500";
 const labelCls = "text-xs font-medium text-slate-600";
 
 type FormState = {
@@ -268,7 +268,7 @@ export function HotmartTemplatesManager({
   return (
     <div className="space-y-6">
       {/* Crear */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-700">Agregar plantilla</h2>
         <p className="mt-0.5 text-xs text-slate-400">
           Al recibir un carrito abandonado, se envía la plantilla de Callbell que coincida con la
@@ -286,7 +286,7 @@ export function HotmartTemplatesManager({
           <button
             onClick={handleCreate}
             disabled={isPending || !form.name.trim()}
-            className="h-11 rounded-md bg-slate-900 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+            className="h-11 rounded-md bg-slate-900 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
           >
             {isPending ? "Guardando…" : "Agregar"}
           </button>
@@ -295,7 +295,7 @@ export function HotmartTemplatesManager({
       </section>
 
       {/* Lista */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-semibold text-slate-700">
           Plantillas configuradas{" "}
           <span className="font-normal text-slate-400">({rows.length})</span>
@@ -321,14 +321,14 @@ export function HotmartTemplatesManager({
                     <button
                       onClick={() => setEditingId(null)}
                       disabled={isPending}
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       Cancelar
                     </button>
                     <button
                       onClick={() => handleSaveEdit(t.id)}
                       disabled={isPending || !editForm.name.trim()}
-                      className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       {isPending ? "Guardando…" : "Guardar"}
                     </button>
@@ -367,14 +367,14 @@ export function HotmartTemplatesManager({
                     <button
                       onClick={() => startEdit(t)}
                       disabled={isPending}
-                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       Editar
                     </button>
                     <button
                       onClick={() => handleToggle(t)}
                       disabled={isPending}
-                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       {t.enabled ? "Desactivar" : "Activar"}
                     </button>

@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 html {
@@ -14,4 +14,18 @@ html {
 body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Scrollbar sobria acorde al sistema (webkit). */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d3dae0;
+  border-radius: 8px;
+  border: 3px solid #f8fafc;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b9c2ca;
 }

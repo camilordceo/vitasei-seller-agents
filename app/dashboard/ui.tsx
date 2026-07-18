@@ -18,6 +18,7 @@ import {
   relativeTime,
 } from "@/lib/dashboard/format";
 import { setCallRequestStatus, setConversationManual } from "./actions";
+import { InitialsAvatar, Kpi, type KpiTone } from "./ui-kit";
 import type {
   CallRequestStatus,
   ConversationStatus,
@@ -29,16 +30,16 @@ import type {
 /** Píldoras de estado y método, y tarjeta KPI. Presentacional puro. */
 
 const STATUS: Record<ConversationStatus, { label: string; cls: string }> = {
-  active: { label: "Activa", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
-  handed_off: { label: "Con logística", cls: "bg-amber-50 text-amber-700 ring-amber-600/20" },
-  closed: { label: "Cerrada", cls: "bg-slate-100 text-slate-600 ring-slate-500/20" },
+  active: { label: "Activa", cls: "bg-emerald-50 text-emerald-700" },
+  handed_off: { label: "Con logística", cls: "bg-amber-50 text-amber-700" },
+  closed: { label: "Cerrada", cls: "bg-slate-100 text-slate-600" },
 };
 
 export function StatusPill({ status }: { status: ConversationStatus }) {
   const s = STATUS[status] ?? STATUS.closed;
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${s.cls}`}
     >
       {s.label}
     </span>
@@ -53,7 +54,7 @@ const METHOD: Record<FulfillmentMethod, string> = {
 
 export function MethodPill({ method }: { method: FulfillmentMethod }) {
   return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20">
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
       {METHOD[method] ?? METHOD.undecided}
     </span>
   );
@@ -62,7 +63,7 @@ export function MethodPill({ method }: { method: FulfillmentMethod }) {
 /** Píldora "Manual": la IA está pausada y un humano atiende la conversación. */
 export function ManualPill() {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700 ring-1 ring-inset ring-purple-600/20">
+    <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-1 text-[11px] font-semibold text-purple-700">
       <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
         <path d="M8 6v12M16 6v12" strokeLinecap="round" />
       </svg>
@@ -91,7 +92,7 @@ export function ManualToggle({
         className={
           paused
             ? "inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-            : "inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            : "inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
         }
       >
         {paused ? (
@@ -117,11 +118,11 @@ export function ManualToggle({
 const ORDER_STATUS: Record<OrderStatus, { label: string; cls: string }> = {
   pending_handoff: {
     label: "Pendiente de handoff",
-    cls: "bg-amber-50 text-amber-700 ring-amber-600/20",
+    cls: "bg-amber-50 text-amber-700",
   },
-  handed_off: { label: "Con logística", cls: "bg-indigo-50 text-indigo-700 ring-indigo-600/20" },
-  confirmed: { label: "Confirmada", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
-  cancelled: { label: "Cancelada", cls: "bg-rose-50 text-rose-700 ring-rose-600/20" },
+  handed_off: { label: "Con logística", cls: "bg-indigo-50 text-indigo-700" },
+  confirmed: { label: "Confirmada", cls: "bg-emerald-50 text-emerald-700" },
+  cancelled: { label: "Cancelada", cls: "bg-rose-50 text-rose-700" },
 };
 
 export function orderStatusLabel(status: OrderStatus): string {
@@ -129,10 +130,10 @@ export function orderStatusLabel(status: OrderStatus): string {
 }
 
 export function OrderStatusPill({ status }: { status: OrderStatus }) {
-  const s = ORDER_STATUS[status] ?? { label: status, cls: "bg-slate-100 text-slate-600 ring-slate-500/20" };
+  const s = ORDER_STATUS[status] ?? { label: status, cls: "bg-slate-100 text-slate-600" };
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${s.cls}`}
     >
       {s.label}
     </span>
@@ -147,10 +148,10 @@ export function OrderBadge({ status }: { status: OrderStatus }) {
   const cancelled = status === "cancelled";
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
         cancelled
-          ? "bg-slate-100 text-slate-500 ring-slate-400/20"
-          : "bg-indigo-50 text-indigo-700 ring-indigo-600/20"
+          ? "bg-slate-100 text-slate-500"
+          : "bg-indigo-50 text-indigo-700"
       }`}
     >
       <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -166,7 +167,7 @@ export function OrderBadge({ status }: { status: OrderStatus }) {
 export function OrderList({ rows }: { rows: OrderRow[] }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p className="text-sm text-slate-500">No hay órdenes con este filtro.</p>
         <p className="mt-1 text-xs text-slate-400">
           El agente crea una orden cuando el cliente cierra la compra en WhatsApp.
@@ -175,13 +176,14 @@ export function OrderList({ rows }: { rows: OrderRow[] }) {
     );
   }
   return (
-    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
       {rows.map((o) => (
         <li key={o.id}>
           <Link
             href={`/dashboard/orders/${o.id}`}
-            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+            className="flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
           >
+            <InitialsAvatar name={o.contactName || o.phone} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="truncate text-sm font-medium text-slate-900">
@@ -211,39 +213,30 @@ export function KpiCard({
   value,
   sub,
   icon,
+  tone = "navy",
 }: {
   label: string;
   value: string;
   sub?: string;
   icon: ReactNode;
+  tone?: KpiTone;
 }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-500">{label}</p>
-        <span className="text-slate-400" aria-hidden="true">
-          {icon}
-        </span>
-      </div>
-      <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
-      {sub ? <p className="mt-1 text-xs text-slate-500">{sub}</p> : null}
-    </div>
-  );
+  return <Kpi label={label} value={value} sub={sub} icon={icon} tone={tone} />;
 }
 
 // --- Solicitudes de llamada (#llamada) -------------------------------------
 
 const CALL_REQUEST_STATUS: Record<CallRequestStatus, { label: string; cls: string }> = {
-  pending: { label: "Pendiente", cls: "bg-amber-50 text-amber-700 ring-amber-600/20" },
-  done: { label: "Llamado", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
-  cancelled: { label: "Descartada", cls: "bg-slate-100 text-slate-500 ring-slate-400/20" },
+  pending: { label: "Pendiente", cls: "bg-amber-50 text-amber-700" },
+  done: { label: "Llamado", cls: "bg-emerald-50 text-emerald-700" },
+  cancelled: { label: "Descartada", cls: "bg-slate-100 text-slate-500" },
 };
 
 export function CallRequestStatusPill({ status }: { status: CallRequestStatus }) {
   const s = CALL_REQUEST_STATUS[status] ?? CALL_REQUEST_STATUS.cancelled;
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${s.cls}`}
     >
       {s.label}
     </span>
@@ -273,7 +266,7 @@ function CallRequestActions({ id, status }: { id: string; status: CallRequestSta
         <form action={discard}>
           <button
             type="submit"
-            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            className="inline-flex items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             Descartar
           </button>
@@ -285,7 +278,7 @@ function CallRequestActions({ id, status }: { id: string; status: CallRequestSta
     <form action={reopen}>
       <button
         type="submit"
-        className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        className="inline-flex items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       >
         Reabrir
       </button>
@@ -296,7 +289,7 @@ function CallRequestActions({ id, status }: { id: string; status: CallRequestSta
 export function CallRequestList({ rows }: { rows: CallRequestRow[] }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p className="text-sm text-slate-500">No hay solicitudes de llamada con este filtro.</p>
         <p className="mt-1 text-xs text-slate-400">
           Aparecen aquí cuando el agente detecta que el cliente pidió que lo llamen.
@@ -305,12 +298,12 @@ export function CallRequestList({ rows }: { rows: CallRequestRow[] }) {
     );
   }
   return (
-    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
       {rows.map((r) => (
         <li key={r.id} className="flex items-center gap-3 px-4 py-3">
           <Link
             href={`/dashboard/conversations/${r.conversationId}`}
-            className="-mx-2 min-w-0 flex-1 rounded-md px-2 py-1 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+            className="-mx-2 min-w-0 flex-1 rounded-md px-2 py-1 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className="truncate text-sm font-medium text-slate-900">
@@ -338,19 +331,19 @@ export function CallRequestList({ rows }: { rows: CallRequestRow[] }) {
 // --- Retargets (seguimientos automáticos) ----------------------------------
 
 const RETARGET_STATUS: Record<RetargetStatus, { label: string; cls: string }> = {
-  scheduled: { label: "Programado", cls: "bg-sky-50 text-sky-700 ring-sky-600/20" },
-  processing: { label: "Procesando", cls: "bg-indigo-50 text-indigo-700 ring-indigo-600/20" },
-  sent: { label: "Enviado", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
-  skipped: { label: "Saltado", cls: "bg-slate-100 text-slate-600 ring-slate-500/20" },
-  cancelled: { label: "Cancelado", cls: "bg-slate-100 text-slate-500 ring-slate-400/20" },
-  failed: { label: "Falló", cls: "bg-rose-50 text-rose-700 ring-rose-600/20" },
+  scheduled: { label: "Programado", cls: "bg-sky-50 text-sky-700" },
+  processing: { label: "Procesando", cls: "bg-indigo-50 text-indigo-700" },
+  sent: { label: "Enviado", cls: "bg-emerald-50 text-emerald-700" },
+  skipped: { label: "Saltado", cls: "bg-slate-100 text-slate-600" },
+  cancelled: { label: "Cancelado", cls: "bg-slate-100 text-slate-500" },
+  failed: { label: "Falló", cls: "bg-rose-50 text-rose-700" },
 };
 
 export function RetargetStatusPill({ status }: { status: RetargetStatus }) {
   const s = RETARGET_STATUS[status] ?? RETARGET_STATUS.skipped;
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${s.cls}`}
     >
       {s.label}
     </span>
@@ -369,7 +362,7 @@ export function StagePill({ stage, delayMinutes }: { stage: number; delayMinutes
   const delay = formatDelayShort(delayMinutes);
   const label = delay ? `${stage}ª · ~${delay}` : `${stage}ª etapa`;
   return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20">
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
       {label}
     </span>
   );
@@ -399,9 +392,9 @@ export function RetargetStatsBar({ stats }: { stats: RetargetStats }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       {items.map((it) => (
-        <div key={it.label} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div key={it.label} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-xs font-medium text-slate-500">{it.label}</p>
-          <p className={`mt-1 text-xl font-semibold tracking-tight ${it.cls}`}>
+          <p className={`mt-1 font-display text-xl font-semibold tracking-tight ${it.cls}`}>
             {formatNumber(it.value)}
           </p>
         </div>
@@ -413,7 +406,7 @@ export function RetargetStatsBar({ stats }: { stats: RetargetStats }) {
 export function RetargetList({ rows }: { rows: RetargetRow[] }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p className="text-sm text-slate-500">Aún no hay seguimientos.</p>
         <p className="mt-1 text-xs text-slate-400">
           Se agendan solos cuando un cliente deja de responder tras la respuesta del agente.
@@ -422,12 +415,12 @@ export function RetargetList({ rows }: { rows: RetargetRow[] }) {
     );
   }
   return (
-    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
       {rows.map((r) => (
         <li key={r.id}>
           <Link
             href={`/dashboard/conversations/${r.conversationId}`}
-            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
           >
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -456,7 +449,7 @@ export function RetargetList({ rows }: { rows: RetargetRow[] }) {
 export function ReactivationStagePill({ stage }: { stage: number }) {
   const label = stage === 1 ? "Día 7" : stage === 2 ? "Día 15" : `Etapa ${stage}`;
   return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20">
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
       {label}
     </span>
   );
@@ -481,9 +474,9 @@ export function ReactivationStatsBar({ stats }: { stats: ReactivationStats }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       {items.map((it) => (
-        <div key={it.label} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div key={it.label} className="rounded-2xl border border-slate-200 bg-white p-3">
           <p className="text-xs font-medium text-slate-500">{it.label}</p>
-          <p className={`mt-1 text-xl font-semibold tracking-tight ${it.cls}`}>{it.value}</p>
+          <p className={`mt-1 font-display text-xl font-semibold tracking-tight ${it.cls}`}>{it.value}</p>
         </div>
       ))}
     </div>
@@ -505,7 +498,7 @@ function reactivationDetail(r: ReactivationRow): string {
 export function ReactivationList({ rows }: { rows: ReactivationRow[] }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p className="text-sm text-slate-500">Aún no hay reactivaciones.</p>
         <p className="mt-1 text-xs text-slate-400">
           Se agendan al primer contacto cuando el feature está encendido.
@@ -514,12 +507,12 @@ export function ReactivationList({ rows }: { rows: ReactivationRow[] }) {
     );
   }
   return (
-    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
       {rows.map((r) => (
         <li key={r.id}>
           <Link
             href={`/dashboard/conversations/${r.conversationId}`}
-            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
           >
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -575,7 +568,7 @@ export function ConversationList({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p className="text-sm text-slate-500">
           {filtered ? "No hay conversaciones con este filtro." : "Aún no hay conversaciones."}
         </p>
@@ -588,13 +581,14 @@ export function ConversationList({
     );
   }
   return (
-    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
       {rows.map((c) => (
         <li key={c.id}>
           <Link
             href={`/dashboard/conversations/${c.id}`}
-            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+            className="flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
           >
+            <InitialsAvatar name={c.contactName || c.phone} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="truncate text-sm font-medium text-slate-900">

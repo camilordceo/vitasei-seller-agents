@@ -52,7 +52,7 @@ export function RetryButton({
             ? disabledReason
             : "Volver a generar y enviar la respuesta de la IA para los mensajes pendientes"
         }
-        className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <svg
           className={`h-4 w-4 ${isPending ? "animate-spin" : ""}`}

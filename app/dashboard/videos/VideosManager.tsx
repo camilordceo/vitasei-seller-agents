@@ -5,7 +5,7 @@ import { createVideo, updateVideo, deleteVideo, setVideoEnabled } from "../actio
 import type { VideoRow } from "@/lib/dashboard/queries";
 
 const inputCls =
-  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400";
+  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500";
 const selectCls = `${inputCls} bg-white`;
 
 export type AgentMarketOption = {
@@ -221,7 +221,7 @@ export function VideosManager({
   return (
     <div className="space-y-6">
       {/* Formulario: agregar palabra → video (+ mercado + caption opcional) */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-700">Agregar video</h2>
         <p className="mt-0.5 text-xs text-slate-400">
           Cuando la respuesta del bot mencione la palabra, enviará este video después del mensaje.
@@ -289,7 +289,7 @@ export function VideosManager({
           <button
             onClick={handleCreate}
             disabled={isPending || !keyword.trim() || !url.trim()}
-            className="h-11 rounded-md bg-slate-900 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+            className="h-11 rounded-md bg-slate-900 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
           >
             {isPending ? "Guardando…" : "Agregar"}
           </button>
@@ -298,7 +298,7 @@ export function VideosManager({
       </section>
 
       {/* Lista de reglas */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-700">
             Videos configurados{" "}
@@ -313,7 +313,7 @@ export function VideosManager({
               id="filter"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
             >
               <option value="all">Todos</option>
               <option value="global">Global</option>
@@ -380,14 +380,14 @@ export function VideosManager({
                     <button
                       onClick={cancelEdit}
                       disabled={isPending}
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       Cancelar
                     </button>
                     <button
                       onClick={() => handleSaveEdit(v.id)}
                       disabled={isPending || !editKeyword.trim() || !editUrl.trim()}
-                      className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       {isPending ? "Guardando…" : "Guardar"}
                     </button>
@@ -417,7 +417,7 @@ export function VideosManager({
                       href={v.videoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="block truncate text-sm text-indigo-600 underline decoration-slate-300 underline-offset-2 hover:decoration-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                      className="block truncate text-sm text-indigo-600 underline decoration-slate-300 underline-offset-2 hover:decoration-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                       title={v.videoUrl}
                     >
                       {v.videoUrl}
@@ -435,14 +435,14 @@ export function VideosManager({
                     <button
                       onClick={() => startEdit(v)}
                       disabled={isPending}
-                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       Editar
                     </button>
                     <button
                       onClick={() => handleToggle(v)}
                       disabled={isPending}
-                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
                     >
                       {v.enabled ? "Desactivar" : "Activar"}
                     </button>

@@ -46,7 +46,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
     <div className="space-y-4">
       <Link
         href="/dashboard/orders"
-        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
@@ -55,7 +55,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       </Link>
 
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-[-0.03em] text-slate-900">{title}</h1>
         <OrderStatusPill status={order.status} />
         <MethodPill method={order.method} />
         <span className="ml-auto text-lg font-semibold text-slate-900">
@@ -66,7 +66,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Editor */}
         <div className="lg:col-span-2">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="mb-4 text-sm font-semibold text-slate-700">Editar orden</h2>
             <OrderEditor orderId={order.id} initial={initial} />
           </div>
@@ -74,7 +74,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
 
         {/* Meta */}
         <aside className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-semibold text-slate-700">Datos</h2>
             <dl className="mt-2 space-y-1 text-sm">
               <div className="flex justify-between gap-2">
@@ -121,7 +121,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
             <p className="mt-1 text-[11px] text-slate-400">Horas en hora Colombia.</p>
             <Link
               href={`/dashboard/conversations/${order.conversationId}`}
-              className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
                 <path d="M4 5h16v11H8l-4 4V5Z" strokeLinejoin="round" />

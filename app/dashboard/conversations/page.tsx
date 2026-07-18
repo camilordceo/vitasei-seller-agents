@@ -8,6 +8,7 @@ import {
 import { isDayKey } from "@/lib/dashboard/report";
 import { ConversationList } from "../ui";
 import { Collapsible } from "../Collapsible";
+import { PageHeader } from "../ui-kit";
 import type { ConversationStatus } from "@/lib/supabase/types";
 import { AgentFilter } from "./AgentFilter";
 import { DateRangeFilter } from "./DateRangeFilter";
@@ -67,9 +68,9 @@ const SORT_FILTERS: Array<{ value: string; label: string }> = [
 const VALID_STATUS = new Set<string>(["active", "handed_off", "closed"]);
 
 const activeCls =
-  "rounded-full bg-slate-900 px-3 py-1.5 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "rounded-full bg-slate-900 px-3 py-1.5 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 const idleCls =
-  "rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
+  "rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
 
 function FilterRow({
   label,
@@ -309,21 +310,19 @@ export default async function ConversationsPage({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Conversaciones</h1>
-          <p className="text-sm text-slate-500">
-            {agentScope ? (
-              <>
-                Conversaciones de <span className="font-medium text-slate-700">{agentScope}</span>.
-              </>
-            ) : (
-              <>Todas las conversaciones del agente.</>
-            )}
-          </p>
-        </div>
-        <span className="text-sm text-slate-400">{convos.length}</span>
-      </div>
+      <PageHeader
+        title="Conversaciones"
+        description={
+          agentScope ? (
+            <>
+              Conversaciones de <span className="font-medium text-slate-700">{agentScope}</span>.
+            </>
+          ) : (
+            <>Todas las conversaciones del agente.</>
+          )
+        }
+        actions={<span className="text-sm tabular-nums text-slate-400">{convos.length}</span>}
+      />
 
       <Collapsible
         title="Filtros"
@@ -408,7 +407,7 @@ export default async function ConversationsPage({
             <div className="pt-1">
               <Link
                 href="/dashboard/conversations"
-                className="text-sm text-slate-500 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                className="text-sm text-slate-500 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
               >
                 Limpiar filtros
               </Link>
@@ -418,11 +417,11 @@ export default async function ConversationsPage({
       </Collapsible>
 
       {convos.length === 0 && hasPrev ? (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
           <p className="text-sm text-slate-500">No hay más conversaciones en esta página.</p>
           <Link
             href={hrefWithPage(pageNum - 1)}
-            className="mt-2 inline-block text-sm text-slate-600 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            className="mt-2 inline-block text-sm text-slate-600 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             ‹ Volver a la página anterior
           </Link>

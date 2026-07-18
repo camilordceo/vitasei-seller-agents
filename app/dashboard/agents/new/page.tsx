@@ -45,7 +45,7 @@ export default function NewAgentPage() {
     <div className="space-y-4">
       <Link
         href="/dashboard/agents"
-        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
@@ -53,14 +53,14 @@ export default function NewAgentPage() {
         Agentes
       </Link>
 
-      <h1 className="text-xl font-semibold tracking-tight">Nuevo agente</h1>
+      <h1 className="font-display text-2xl font-semibold tracking-[-0.03em] text-slate-900">Nuevo agente</h1>
       <p className="text-sm text-slate-500">
         Configura la nueva marca/número. En <strong>Catálogo</strong> puedes crear el vector store
         y subir los productos (JSON) de una vez, o conectar uno que ya tengas en OpenAI. Al guardar,
         ese número empieza a responder con su IA.
       </p>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
         <AgentEditor initial={BLANK} />
       </div>
     </div>

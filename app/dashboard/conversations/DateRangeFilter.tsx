@@ -45,7 +45,7 @@ export function DateRangeFilter({
   const dirty = fromValue !== from || toValue !== to;
   const hasRange = Boolean(from || to);
   const inputCls =
-    "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60";
+    "rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -80,7 +80,7 @@ export function DateRangeFilter({
         type="button"
         disabled={isPending || !dirty}
         onClick={() => apply(fromValue, toValue)}
-        className="min-h-[36px] rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-40"
+        className="min-h-[36px] rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-40"
       >
         Aplicar
       </button>
@@ -93,7 +93,7 @@ export function DateRangeFilter({
             setToValue("");
             apply("", "");
           }}
-          className="rounded-md px-2 py-1.5 text-sm text-slate-500 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          className="rounded-md px-2 py-1.5 text-sm text-slate-500 underline-offset-2 transition-colors hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
         >
           Quitar rango
         </button>

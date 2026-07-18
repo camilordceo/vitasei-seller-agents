@@ -1,6 +1,7 @@
 import { describeEvent, type EventTone } from "@/lib/dashboard/events";
 import { formatBogotaDateTime } from "@/lib/dashboard/format";
 import type { ConversationEvent } from "@/lib/dashboard/queries";
+import { Collapsible } from "../../Collapsible";
 
 const DOT: Record<EventTone, string> = {
   neutral: "bg-slate-300",
@@ -23,17 +24,15 @@ const TEXT: Record<EventTone, string> = {
  */
 export function DiagnosticsPanel({ events }: { events: ConversationEvent[] }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-slate-700">¿Por qué (no) respondió?</h2>
-      <p className="mt-0.5 text-xs text-slate-400">
-        Rastro de decisiones del bot en esta conversación (lo más reciente arriba). Si tras
-        &ldquo;Mensaje recibido&rdquo; no hay respuesta ni un motivo, la tarea en segundo plano no
-        alcanzó a completarse.
-      </p>
+    <Collapsible
+      title="¿Por qué (no) respondió?"
+      subtitle="Rastro de decisiones del bot (lo más reciente arriba)."
+      badge={events.length > 0 ? `${events.length}` : undefined}
+    >
       {events.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-400">Sin eventos registrados todavía.</p>
+        <p className="text-sm text-slate-400">Sin eventos registrados todavía.</p>
       ) : (
-        <ol className="mt-3 space-y-2.5">
+        <ol className="space-y-2.5">
           {events.map((e) => {
             const v = describeEvent(e.type, e.payload);
             return (
@@ -54,6 +53,6 @@ export function DiagnosticsPanel({ events }: { events: ConversationEvent[] }) {
           })}
         </ol>
       )}
-    </div>
+    </Collapsible>
   );
 }

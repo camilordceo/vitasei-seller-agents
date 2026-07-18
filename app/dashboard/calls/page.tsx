@@ -8,6 +8,7 @@ import {
 } from "@/lib/dashboard/queries";
 
 import { CallRequestList, KpiCard } from "../ui";
+import { PageHeader } from "../ui-kit";
 import { VoiceCallsPanel } from "./VoiceCallsPanel";
 import { PhoneSearch } from "./PhoneSearch";
 import type { CallRequestStatus, VoiceCallStatus } from "@/lib/supabase/types";
@@ -97,8 +98,8 @@ function Pill({ href, active, children }: { href: string; active: boolean; child
       href={href}
       className={
         active
-          ? "rounded-full bg-slate-900 px-3 py-1.5 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-          : "rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          ? "rounded-full bg-slate-900 px-3 py-1.5 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          : "rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       }
     >
       {children}
@@ -165,19 +166,21 @@ export default async function CallsPage({ searchParams }: { searchParams: Search
       <Tabs tab={tab} />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard label="Programadas" value={String(stats.scheduled)} icon={IconClock} />
+        <KpiCard label="Programadas" value={String(stats.scheduled)} icon={IconClock} tone="amber" />
         <KpiCard
           label="Contestadas"
           value={String(stats.completed)}
           sub={`${stats.noAnswer} sin respuesta`}
           icon={IconPhone}
+          tone="teal"
         />
-        <KpiCard label="Minutos" value={String(stats.totalMinutes)} icon={IconTimer} />
+        <KpiCard label="Minutos" value={String(stats.totalMinutes)} icon={IconTimer} tone="navy" />
         <KpiCard
           label="Costo estimado"
           value={`US$ ${stats.totalCostUsd.toFixed(2)}`}
-          sub="segun tarifa por minuto"
+          sub="según tarifa por minuto"
           icon={IconMoney}
+          tone="neutral"
         />
       </div>
 
@@ -226,15 +229,11 @@ export default async function CallsPage({ searchParams }: { searchParams: Search
 
 function Header({ count }: { count: number }) {
   return (
-    <div className="flex items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Llamadas</h1>
-        <p className="text-sm text-slate-500">
-          Llamadas con IA (realizadas y programadas) y solicitudes de los clientes.
-        </p>
-      </div>
-      <span className="shrink-0 text-sm text-slate-400">{count}</span>
-    </div>
+    <PageHeader
+      title="Llamadas"
+      description="Llamadas con IA (realizadas y programadas) y solicitudes de los clientes."
+      actions={<span className="text-sm tabular-nums text-slate-400">{count}</span>}
+    />
   );
 }
 
@@ -265,7 +264,7 @@ function TabLink({
       href={href}
       className={
         active
-          ? "-mb-px border-b-2 border-slate-900 px-4 py-2 text-sm font-medium text-slate-900"
+          ? "-mb-px border-b-2 border-teal-600 px-4 py-2 text-sm font-semibold text-slate-900"
           : "-mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-800"
       }
     >

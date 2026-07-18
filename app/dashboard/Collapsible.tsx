@@ -31,9 +31,9 @@ export function Collapsible({
   return (
     <details
       open={defaultOpen}
-      className="group overflow-hidden rounded-lg border border-slate-200 bg-white"
+      className="group overflow-hidden rounded-2xl border border-slate-200 bg-white"
     >
-      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400 [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden">
         <svg
           className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-90"
           viewBox="0 0 24 24"

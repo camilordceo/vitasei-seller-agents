@@ -44,7 +44,7 @@ export function AgentFilter({
             router.push(s ? `/dashboard/conversations?${s}` : "/dashboard/conversations"),
           );
         }}
-        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
       >
         <option value="">Todos los agentes</option>
         {agents.map((a) => (

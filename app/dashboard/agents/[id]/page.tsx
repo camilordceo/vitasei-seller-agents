@@ -47,7 +47,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
     <div className="space-y-4">
       <Link
         href="/dashboard/agents"
-        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        className="inline-flex items-center gap-1 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
@@ -56,7 +56,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
       </Link>
 
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-semibold tracking-tight">{agent.name}</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-[-0.03em] text-slate-900">{agent.name}</h1>
         <span className="text-xs text-slate-400">
           {[agent.brand, agent.country].filter(Boolean).join(" · ")}
         </span>

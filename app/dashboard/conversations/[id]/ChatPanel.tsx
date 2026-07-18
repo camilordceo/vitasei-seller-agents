@@ -76,9 +76,9 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex h-[calc(100vh-13rem)] min-h-[24rem] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <div className="flex h-[calc(100vh-13rem)] min-h-[24rem] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
       {/* Hilo con scroll propio */}
-      <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto p-4">
+      <div ref={scrollRef} className="flex-1 space-y-2.5 overflow-y-auto bg-slate-50/60 p-4">
         {messages.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-400">Sin mensajes.</p>
         ) : (
@@ -124,8 +124,10 @@ export function ChatPanel({
             return (
               <div key={m.id} className={`flex ${out ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
-                    out ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-900"
+                  className={`max-w-[80%] px-3.5 py-2.5 text-sm leading-relaxed ${
+                    out
+                      ? "rounded-2xl rounded-br-md bg-slate-900 text-slate-100"
+                      : "rounded-2xl rounded-bl-md border border-slate-200 bg-white text-slate-800"
                   }`}
                 >
                   {m.type === "image" && m.mediaUrl ? (
@@ -143,7 +145,7 @@ export function ChatPanel({
                         <span
                           key={i}
                           className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                            out ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
+                            out ? "bg-white/15 text-slate-200" : "bg-slate-100 text-slate-600"
                           }`}
                         >
                           {t}
@@ -153,7 +155,7 @@ export function ChatPanel({
                   ) : null}
                   <span
                     className={`mt-1 flex items-center gap-1 text-[10px] ${
-                      out ? "text-emerald-100" : "text-slate-400"
+                      out ? "text-slate-400" : "text-slate-400"
                     }`}
                   >
                     {isManual ? <span className="font-medium">Manual ·</span> : null}
@@ -185,12 +187,12 @@ export function ChatPanel({
             rows={1}
             placeholder="Escribe un mensaje para el cliente…"
             aria-label="Mensaje para el cliente"
-            className="max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            className="max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-[10px] border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           />
           <button
             type="submit"
             disabled={isPending || text.trim().length === 0}
-            className="inline-flex h-11 items-center gap-1.5 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white transition-colors hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:opacity-50"
+            className="inline-flex h-11 items-center gap-1.5 rounded-[10px] bg-teal-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 disabled:opacity-50"
           >
             {isPending ? (
               "Enviando…"

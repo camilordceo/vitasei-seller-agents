@@ -111,7 +111,7 @@ export function ConversationLabels({
             setIsCreating(false);
           }}
           disabled={isPending}
-          className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500 transition-colors hover:border-slate-400 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500 transition-colors hover:border-slate-400 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
         >
           <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
             <path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" />
@@ -121,7 +121,7 @@ export function ConversationLabels({
 
         {/* Dropdown */}
         {isOpen && (
-          <div className="absolute left-0 top-full z-10 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+          <div className="absolute left-0 top-full z-10 mt-1 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
             {!isCreating ? (
               <>
                 {/* Lista de etiquetas disponibles */}
@@ -169,7 +169,7 @@ export function ConversationLabels({
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Ej: No interesado"
-                    className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
                     autoFocus
                   />
                 </div>

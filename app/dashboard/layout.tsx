@@ -1,89 +1,23 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { SidebarNav } from "./SidebarNav";
 
 export const metadata = {
-  title: "Vitasei · Panel",
+  title: "Vitasei · AI Studio",
 };
 
+/**
+ * Shell del dashboard (docs/vitasei-software-design.md §5): sidebar navy fija
+ * en desktop, top bar en móvil, workspace claro con ancho máximo 1440px.
+ */
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-          <div className="flex items-center gap-4">
-            <Link
-              href="/dashboard"
-              className="rounded-md text-sm font-semibold tracking-tight focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-            >
-              Vitasei · Panel
-            </Link>
-            <nav className="flex items-center gap-1 text-sm">
-              <Link
-                href="/dashboard"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Resumen
-              </Link>
-              <Link
-                href="/dashboard/conversations"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Conversaciones
-              </Link>
-              <Link
-                href="/dashboard/orders"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Órdenes
-              </Link>
-              <Link
-                href="/dashboard/inventory"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Inventario
-              </Link>
-              <Link
-                href="/dashboard/calls"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Llamadas
-              </Link>
-              <Link
-                href="/dashboard/reports"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Reportes
-              </Link>
-              <Link
-                href="/dashboard/videos"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Videos
-              </Link>
-              <Link
-                href="/dashboard/hotmart"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Hotmart
-              </Link>
-              <Link
-                href="/dashboard/retargets"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Retargets
-              </Link>
-              <Link
-                href="/dashboard/agents"
-                className="rounded-md px-3 py-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-              >
-                Agentes
-              </Link>
-            </nav>
-          </div>
-          <span className="text-xs text-slate-400">Interno</span>
-        </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+    <div className="min-h-screen bg-slate-50 text-slate-900 lg:flex">
+      <SidebarNav />
+      <div className="min-w-0 flex-1">
+        <main className="mx-auto w-full max-w-[1440px] animate-fadeUp px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { formatDateTime, relativeTime } from "@/lib/dashboard/format";
 import { describeCallStatus, describeDelay } from "@/lib/agent/voiceCallPlan";
 import { formatDuration } from "@/lib/synthflow/pricing";
 import { formatExtractedValue, humanizeIdentifier } from "@/lib/synthflow/extractors";
+import { Collapsible } from "../../Collapsible";
 
 const TONE: Record<string, string> = {
   scheduled: "bg-amber-50 text-amber-700 ring-amber-200",
@@ -61,14 +62,18 @@ export function VoiceCallsCard({
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-900">Llamadas con IA</h2>
+    <Collapsible
+      title="Llamadas con IA"
+      subtitle={rows.length === 0 ? "Sin llamadas todavía." : undefined}
+      badge={rows.length > 0 ? `${rows.length}` : undefined}
+      defaultOpen={rows.length > 0}
+    >
+      <div className="flex items-center justify-end">
         <button
           type="button"
           onClick={call}
           disabled={pending}
-          className="min-h-[36px] rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="min-h-[36px] rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           {pending ? "Llamando…" : "Llamar ahora"}
         </button>
@@ -87,7 +92,9 @@ export function VoiceCallsCard({
       ) : null}
 
       {rows.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-500">Sin llamadas todavía.</p>
+        <p className="mt-3 text-sm text-slate-500">
+          Las llamadas programadas y realizadas a este cliente aparecen aquí.
+        </p>
       ) : (
         <ul className="mt-3 space-y-2.5">
           {rows.map((row) => {
@@ -144,6 +151,6 @@ export function VoiceCallsCard({
           })}
         </ul>
       )}
-    </section>
+    </Collapsible>
   );
 }

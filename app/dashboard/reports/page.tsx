@@ -24,6 +24,8 @@ import {
   formatUsd4,
 } from "@/lib/dashboard/format";
 import { orderStatusLabel } from "../ui";
+import { Collapsible } from "../Collapsible";
+import { Kpi, PageHeader } from "../ui-kit";
 import { CopySummaryButton } from "./CopySummaryButton";
 import { AgentFilter } from "./AgentFilter";
 
@@ -47,15 +49,7 @@ function ReportCard({
   sub: string;
   accent?: string;
 }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-sm font-medium text-slate-500">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tracking-tight ${accent ?? "text-slate-900"}`}>
-        {value}
-      </p>
-      <p className="mt-1 text-xs text-slate-500">{sub}</p>
-    </div>
-  );
+  return <Kpi label={label} value={value} sub={sub} valueClassName={accent} />;
 }
 
 function buildSummary(
@@ -143,10 +137,10 @@ function RoasSection({ roas }: { roas: RoasReport }) {
   const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-700">Retorno (ROAS)</h2>
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Retorno (ROAS)</h2>
           <p className="max-w-prose text-xs text-slate-400">
             Ventas generadas ÷ lo que costó traer los chats. Un <strong>chat</strong> es una
             conversación en la que el cliente escribió; el costo por chat lo define cada agente en
@@ -322,22 +316,20 @@ export default async function ReportsPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Reportes</h1>
-          <p className="text-sm text-slate-500">
-            {selected ? (
-              <>
-                Ventas y actividad de <span className="font-medium text-slate-700">{scope}</span>.
-                Comparte el resumen con el equipo.
-              </>
-            ) : (
-              <>Ventas generadas por el agente. Comparte el resumen con el equipo.</>
-            )}
-          </p>
-        </div>
-        <CopySummaryButton summary={buildSummary(r, conv, roas, scope)} />
-      </div>
+      <PageHeader
+        title="Reportes"
+        description={
+          selected ? (
+            <>
+              Ventas y actividad de <span className="font-medium text-slate-700">{scope}</span>.
+              Comparte el resumen con el equipo.
+            </>
+          ) : (
+            <>Ventas generadas por el agente. Comparte el resumen con el equipo.</>
+          )
+        }
+        actions={<CopySummaryButton summary={buildSummary(r, conv, roas, scope)} />}
+      />
 
       {agents.length > 1 && (
         <AgentFilter
@@ -380,9 +372,9 @@ export default async function ReportsPage({
           { label: "Últimos 7 días", b: r.last7 },
           { label: "Últimos 30 días", b: r.last30 },
         ].map((w) => (
-          <div key={w.label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div key={w.label} className="rounded-2xl border border-slate-200 bg-white p-5">
             <p className="text-xs font-medium text-slate-500">{w.label}</p>
-            <p className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
+            <p className="mt-1 font-display text-xl font-semibold tracking-tight text-slate-900">
               {formatCOP(w.b.revenue)}
             </p>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -395,7 +387,7 @@ export default async function ReportsPage({
       {/* Costo IA: las tres fuentes que consume el agente + total */}
       <section>
         <div className="mb-3">
-          <h2 className="text-sm font-semibold text-slate-700">Costo IA</h2>
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Costo IA</h2>
           <p className="text-xs text-slate-400">
             Consumo real del agente con gpt-5-mini. El costo de imágenes (visión) es estimado
             (sus tokens vienen dentro de los del modelo); el total es exacto.
@@ -435,10 +427,10 @@ export default async function ReportsPage({
       <RoasSection roas={roas} />
 
       {/* Conversión: conversaciones → transacciones */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-slate-700">Conversión</h2>
+            <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Conversión</h2>
             <p className="text-xs text-slate-400">
               Conversaciones activas (el cliente escribió) vs. transacciones (órdenes no
               canceladas, por su fecha de creación — misma base que &quot;Órdenes generadas&quot;).
@@ -529,8 +521,8 @@ export default async function ReportsPage({
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Por estado */}
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-700">Por estado</h2>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="mb-3 font-display text-[15px] font-semibold tracking-tight text-slate-900">Por estado</h2>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500">
@@ -556,8 +548,8 @@ export default async function ReportsPage({
         </section>
 
         {/* Por método */}
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="mb-1 text-sm font-semibold text-slate-700">Por método</h2>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="mb-1 font-display text-[15px] font-semibold tracking-tight text-slate-900">Por método</h2>
           <p className="mb-3 text-xs text-slate-400">Órdenes activas (sin canceladas).</p>
           <table className="w-full text-sm">
             <thead>
@@ -585,8 +577,8 @@ export default async function ReportsPage({
       </div>
 
       {/* Últimos 14 días */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-700">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <h2 className="mb-3 font-display text-[15px] font-semibold tracking-tight text-slate-900">
           Órdenes generadas · últimos 14 días
         </h2>
         <ul className="space-y-1.5">
@@ -613,9 +605,13 @@ export default async function ReportsPage({
       </section>
 
       {/* Analítica de horarios: día de la semana + hora del día (hora Colombia) */}
+      <Collapsible
+        title="Horarios de venta"
+        subtitle="Órdenes generadas por día de la semana y por hora (hora Colombia)."
+      >
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="mb-1 text-sm font-semibold text-slate-700">Por día de la semana</h2>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="mb-1 font-display text-[15px] font-semibold tracking-tight text-slate-900">Por día de la semana</h2>
           <p className="mb-3 text-xs text-slate-400">Órdenes generadas · hora Colombia.</p>
           <ul className="space-y-1.5">
             {WEEKDAYS.map(({ i, l }) => {
@@ -625,7 +621,7 @@ export default async function ReportsPage({
                   <span className="w-10 shrink-0 text-xs text-slate-500">{l}</span>
                   <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
                     <div
-                      className="h-full rounded bg-indigo-500/80"
+                      className="h-full rounded bg-teal-600/80"
                       style={{ width: `${Math.round((b.revenue / maxWeekdayRev) * 100)}%` }}
                     />
                   </div>
@@ -641,8 +637,8 @@ export default async function ReportsPage({
           </ul>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="mb-1 text-sm font-semibold text-slate-700">Por hora del día</h2>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="mb-1 font-display text-[15px] font-semibold tracking-tight text-slate-900">Por hora del día</h2>
           <p className="mb-3 text-xs text-slate-400">Órdenes generadas · hora Colombia.</p>
           <ul className="space-y-1">
             {r.byHour.map((b, h) => (
@@ -652,7 +648,7 @@ export default async function ReportsPage({
                 </span>
                 <div className="h-3.5 flex-1 overflow-hidden rounded bg-slate-100">
                   <div
-                    className="h-full rounded bg-indigo-500/80"
+                    className="h-full rounded bg-teal-600/80"
                     style={{ width: `${Math.round((b.revenue / maxHourRev) * 100)}%` }}
                   />
                 </div>
@@ -664,11 +660,12 @@ export default async function ReportsPage({
           </ul>
         </section>
       </div>
+      </Collapsible>
 
       {/* Conversión por producto */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-3">
-          <h2 className="text-sm font-semibold text-slate-700">Conversión por producto</h2>
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Conversión por producto</h2>
           <p className="text-xs text-slate-400">
             Conversaciones agrupadas por su producto/fuente y cuántas terminaron en venta. Se
             autocategoriza por palabra clave; también se ajusta a mano en cada conversación.

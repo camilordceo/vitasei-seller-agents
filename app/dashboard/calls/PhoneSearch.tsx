@@ -43,12 +43,12 @@ export function PhoneSearch({
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder="Buscar por teléfono…"
-        className="min-h-[40px] w-56 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        className="min-h-[40px] w-56 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
       />
       <button
         type="submit"
         disabled={pending}
-        className="min-h-[40px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-60"
+        className="min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
       >
         {pending ? "Buscando…" : "Buscar"}
       </button>
