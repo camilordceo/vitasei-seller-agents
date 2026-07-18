@@ -29,6 +29,23 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Reportes: rendimiento por producto con plata y velocidad de cierre** (ADR-0069). Tres
+  lecturas nuevas para ver qué productos rinden de verdad y qué tan rápido cierra la IA:
+  - **Rendimiento por producto** (antes "Conversión por producto"): a la tasa se suman
+    **órdenes**, **ventas** y **valor/chat** (ventas ÷ conversaciones) por categoría, ordenado
+    por plata y homologado a una moneda (criterio ADR-0068). Debajo, gráfico de **% de
+    conversaciones vs. % de ventas**: un producto con mucha barra de chats y poca de ventas es
+    atención que no se vuelve plata.
+  - **Productos más vendidos**: ranking por SKU desde los ítems de las órdenes (`order_items`,
+    que ningún reporte explotaba) — unidades, órdenes, ventas, ticket por orden y **tasa de
+    cancelación** por producto (en rojo cuando ≥25%).
+  - **Velocidad de cierre**: mediana de minutos entre el primer mensaje del cliente y su
+    **primera** orden, distribución en 6 buckets (≤15 min … >3 días), % en la primera hora /
+    24 h, y **recompras** (clientes que ordenaron más de una vez). Entra también al resumen
+    copiable.
+- **Fix — gráfico del ROAS al derecho:** la serie por día iba del más viejo al más nuevo
+  mientras todos los demás gráficos de Reportes ponen hoy arriba. Ahora va igual que el resto
+  (más reciente primero).
 - **Órdenes en varias monedas: por agente o todo homologado** (ADR-0068; migración `0029`).
   Vitasei vende en COP, USD y MXN, pero Órdenes pintaba **todo con formato colombiano** y el
   resumen sumaba pesos con dólares. Ahora: **filtro por agente** (nuevo) → los totales se leen

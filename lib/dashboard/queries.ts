@@ -11,13 +11,17 @@ import {
   bogotaDayKey,
   bogotaDayStartIso,
   summarizeConversationActivity,
+  summarizeCloseSpeed,
   summarizeOrders,
   summarizeProductConversion,
   summarizeRoas,
+  summarizeTopProducts,
   matchesSearch,
   searchKey,
   type AgentCostConfig,
   type ChatFact,
+  type CloseSpeedFact,
+  type CloseSpeedReport,
   type RoasOrderFact,
   type RoasReport,
   type ConversationActivityFact,
@@ -25,7 +29,9 @@ import {
   type OrderFact,
   type ProductConversionFact,
   type ProductConversionRow,
+  type ProductSalesFact,
   type SalesReport,
+  type TopProductRow,
   type TransactionFact,
 } from "@/lib/dashboard/report";
 import type {
@@ -1495,21 +1501,33 @@ export async function getRoasReport(agentId?: string): Promise<RoasReport> {
   return summarizeRoas(agents, chats, orderFacts);
 }
 
+export interface ProductConversionReport {
+  rows: ProductConversionRow[];
+  /** Moneda en la que están homologadas las ventas de las filas. */
+  currency: CurrencyCode;
+  /** true si hubo que convertir montos de otra moneda (los totales son equivalencias). */
+  converted: boolean;
+}
+
 /**
  * Conversión por PRODUCTO: agrupa las conversaciones por `product_category` y
- * cuenta cuántas convirtieron (orden no cancelada). Sirve para ver qué productos
- * rinden mejor. Resiliente: si falta la migración 0018 (columna), todo cae en
+ * cuenta cuántas convirtieron (orden no cancelada), cuántas órdenes y cuánta
+ * plata trajo cada categoría. Los montos se homologan a UNA moneda de lectura
+ * (la del agente filtrado, o COP consolidado — mismo criterio que Órdenes,
+ * ADR-0068). Resiliente: si falta la migración 0018 (columna), todo cae en
  * "Sin categoría". Lógica pura en report.ts. Ver docs/21. Paginado.
  */
-export async function getProductConversion(agentId?: string): Promise<ProductConversionRow[]> {
+export async function getProductConversion(agentId?: string): Promise<ProductConversionReport> {
   const supabase = createServiceClient();
 
-  const orders = await fetchAllRows(
-    (from, to) => supabase.from("orders").select("conversation_id, status").range(from, to),
-    "getProductConversion orders",
-  );
-  const converting = new Set<string>();
-  for (const o of orders) if (o.status !== "cancelled") converting.add(o.conversation_id);
+  const [orders, agents] = await Promise.all([
+    fetchAllRows(
+      (from, to) =>
+        supabase.from("orders").select("conversation_id, status, total, currency").range(from, to),
+      "getProductConversion orders",
+    ),
+    getAgents(),
+  ]);
 
   // Conversaciones con su categoría y agente. Si falta la columna de categoría
   // (0018), se cae al set con `agent_id` pero sin categoría (todo "Sin categoría")
@@ -1529,13 +1547,150 @@ export async function getProductConversion(agentId?: string): Promise<ProductCon
     convos = ids.map((c) => ({ id: c.id, product_category: null, agent_id: c.agent_id }));
   }
 
+  const agentById = new Map(agents.map((a) => [a.id, a]));
+  const agentByConvo = new Map(convos.map((c) => [c.id, c.agent_id]));
+  const display: CurrencyCode = agentId
+    ? (agentById.get(agentId)?.currency ?? DEFAULT_CURRENCY)
+    : DEFAULT_CURRENCY;
+
+  // Órdenes no canceladas por conversación, con el monto ya homologado. La moneda
+  // nativa es la del AGENTE (no `orders.currency`, envenenada con 'COP' — ADR-0068).
+  let anyConverted = false;
+  const statsByConvo = new Map<string, { orders: number; revenue: number }>();
+  for (const o of orders) {
+    if (o.status === "cancelled") continue;
+    const aId = agentByConvo.get(o.conversation_id);
+    const native = aId
+      ? (agentById.get(aId)?.currency ?? normalizeCurrency(o.currency))
+      : normalizeCurrency(o.currency);
+    const s = statsByConvo.get(o.conversation_id) ?? { orders: 0, revenue: 0 };
+    s.orders += 1;
+    const value = convertMoney(o.total, native, display);
+    if (value != null) {
+      s.revenue += value;
+      if (native !== display) anyConverted = true;
+    }
+    statsByConvo.set(o.conversation_id, s);
+  }
+
   const facts: ProductConversionFact[] = convos
     .filter((c) => !agentId || c.agent_id === agentId)
-    .map((c) => ({
-      productCategory: c.product_category,
-      converted: converting.has(c.id),
-    }));
-  return summarizeProductConversion(facts);
+    .map((c) => {
+      const s = statsByConvo.get(c.id);
+      return {
+        productCategory: c.product_category,
+        converted: (s?.orders ?? 0) > 0,
+        orders: s?.orders ?? 0,
+        revenue: s?.revenue ?? null,
+      };
+    });
+  return { rows: summarizeProductConversion(facts), currency: display, converted: anyConverted };
+}
+
+export interface TopProductsReport {
+  rows: TopProductRow[];
+  /** Moneda en la que están homologadas las ventas. */
+  currency: CurrencyCode;
+  /** true si hubo que convertir montos de otra moneda. */
+  converted: boolean;
+  /** Ítems sin precio unitario: cuentan unidades/órdenes pero no suman ventas. */
+  unpriced: number;
+}
+
+/**
+ * Productos MÁS VENDIDOS: ranking por SKU desde los ítems de las órdenes
+ * (`order_items`) — lo que de verdad se vendió, no lo que se preguntó. Montos
+ * homologados a una moneda de lectura (mismo criterio que Órdenes, ADR-0068).
+ * Lógica pura en report.ts. Paginado.
+ */
+export async function getTopProducts(agentId?: string): Promise<TopProductsReport> {
+  const supabase = createServiceClient();
+
+  const [orders, items, convos, agents] = await Promise.all([
+    fetchAllRows(
+      (from, to) =>
+        supabase.from("orders").select("id, conversation_id, status, currency").range(from, to),
+      "getTopProducts orders",
+    ),
+    fetchAllRows(
+      (from, to) =>
+        supabase.from("order_items").select("order_id, sku, name, qty, unit_price").range(from, to),
+      "getTopProducts items",
+    ),
+    fetchAllRows(
+      (from, to) => supabase.from("conversations").select("id, agent_id").range(from, to),
+      "getTopProducts conversations",
+    ),
+    getAgents(),
+  ]);
+
+  const agentById = new Map(agents.map((a) => [a.id, a]));
+  const agentByConvo = new Map(convos.map((c) => [c.id, c.agent_id as string | null]));
+  const orderById = new Map(orders.map((o) => [o.id, o]));
+  const display: CurrencyCode = agentId
+    ? (agentById.get(agentId)?.currency ?? DEFAULT_CURRENCY)
+    : DEFAULT_CURRENCY;
+
+  let converted = false;
+  let unpriced = 0;
+  const facts: ProductSalesFact[] = [];
+  for (const it of items) {
+    const o = orderById.get(it.order_id);
+    if (!o) continue;
+    const aId = agentByConvo.get(o.conversation_id) ?? null;
+    if (agentId && aId !== agentId) continue;
+    const native = aId
+      ? (agentById.get(aId)?.currency ?? normalizeCurrency(o.currency))
+      : normalizeCurrency(o.currency);
+    const qty = Number(it.qty) || 0;
+    const cancelled = o.status === "cancelled";
+    let revenue: number | null = null;
+    if (it.unit_price != null && Number.isFinite(Number(it.unit_price))) {
+      revenue = convertMoney(qty * Number(it.unit_price), native, display);
+      if (revenue != null && native !== display) converted = true;
+    } else if (!cancelled) {
+      unpriced += 1;
+    }
+    facts.push({ sku: it.sku, name: it.name, qty, revenue, orderId: it.order_id, cancelled });
+  }
+  return { rows: summarizeTopProducts(facts), currency: display, converted, unpriced };
+}
+
+/**
+ * Velocidad de cierre: minutos entre el primer contacto (creación de la
+ * conversación) y su PRIMERA orden no cancelada, + recompras. Lógica pura en
+ * report.ts. Paginado.
+ */
+export async function getCloseSpeed(agentId?: string): Promise<CloseSpeedReport> {
+  const supabase = createServiceClient();
+
+  const [orders, convos] = await Promise.all([
+    fetchAllRows(
+      (from, to) =>
+        supabase.from("orders").select("conversation_id, status, created_at").range(from, to),
+      "getCloseSpeed orders",
+    ),
+    fetchAllRows(
+      (from, to) =>
+        supabase.from("conversations").select("id, agent_id, created_at").range(from, to),
+      "getCloseSpeed conversations",
+    ),
+  ]);
+
+  const convoById = new Map(convos.map((c) => [c.id, c]));
+  const facts: CloseSpeedFact[] = [];
+  for (const o of orders) {
+    if (o.status === "cancelled") continue;
+    const c = convoById.get(o.conversation_id);
+    if (!c) continue;
+    if (agentId && c.agent_id !== agentId) continue;
+    facts.push({
+      conversationId: o.conversation_id,
+      conversationCreatedAt: c.created_at,
+      orderCreatedAt: o.created_at,
+    });
+  }
+  return summarizeCloseSpeed(facts);
 }
 
 // --- Videos por palabra clave (ver docs/20, ADR-0038) -----------------------

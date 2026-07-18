@@ -6,14 +6,18 @@ import {
   bogotaWeekdayHour,
   isDayKey,
   matchesSearch,
+  summarizeCloseSpeed,
   summarizeConversationActivity,
   summarizeOrders,
   summarizeProductConversion,
   summarizeRoas,
+  summarizeTopProducts,
   type AgentCostConfig,
   type ChatFact,
+  type CloseSpeedFact,
   type ConversationActivityFact,
   type OrderFact,
+  type ProductSalesFact,
   type RoasOrderFact,
   type TransactionFact,
 } from "./report";
@@ -119,32 +123,150 @@ describe("bogotaWeekdayHour", () => {
 
 describe("summarizeProductConversion", () => {
   const rows = summarizeProductConversion([
-    { productCategory: "magnesio", converted: true },
-    { productCategory: "magnesio", converted: false },
-    { productCategory: "colageno", converted: true },
-    { productCategory: null, converted: false },
-    { productCategory: "  ", converted: true }, // vacío → Sin categoría (null)
+    { productCategory: "magnesio", converted: true, orders: 2, revenue: 150_000 },
+    { productCategory: "magnesio", converted: false, orders: 0, revenue: null },
+    { productCategory: "colageno", converted: true, orders: 1, revenue: 90_000 },
+    { productCategory: null, converted: false, orders: 0, revenue: null },
+    { productCategory: "  ", converted: true, orders: 1, revenue: 40_000 }, // vacío → Sin categoría
   ]);
 
-  it("agrupa por producto y calcula conversión", () => {
+  it("agrupa por producto: conversión, órdenes, ventas y valor por chat", () => {
     expect(rows.find((x) => x.category === "magnesio")).toEqual({
       category: "magnesio",
       conversations: 2,
       transactions: 1,
       rate: 0.5,
+      orders: 2,
+      revenue: 150_000,
+      revenuePerConversation: 75_000,
     });
     expect(rows.find((x) => x.category === "colageno")).toEqual({
       category: "colageno",
       conversations: 1,
       transactions: 1,
       rate: 1,
+      orders: 1,
+      revenue: 90_000,
+      revenuePerConversation: 90_000,
     });
   });
 
-  it("agrupa null + vacío como 'Sin categoría' y lo deja al final", () => {
+  it("ordena por ventas desc con 'Sin categoría' (null + vacío) al final", () => {
+    expect(rows.map((x) => x.category)).toEqual(["magnesio", "colageno", null]);
     const none = rows.find((x) => x.category === null);
-    expect(none).toEqual({ category: null, conversations: 2, transactions: 1, rate: 0.5 });
-    expect(rows[rows.length - 1].category).toBe(null);
+    expect(none).toEqual({
+      category: null,
+      conversations: 2,
+      transactions: 1,
+      rate: 0.5,
+      orders: 1,
+      revenue: 40_000,
+      revenuePerConversation: 20_000,
+    });
+  });
+});
+
+describe("summarizeTopProducts", () => {
+  const item = (
+    sku: string,
+    orderId: string,
+    over: Partial<ProductSalesFact> = {},
+  ): ProductSalesFact => ({
+    sku,
+    name: `Producto ${sku}`,
+    qty: 1,
+    revenue: 50_000,
+    orderId,
+    cancelled: false,
+    ...over,
+  });
+
+  it("agrupa por SKU: unidades, órdenes distintas, ventas y ticket por orden", () => {
+    const rows = summarizeTopProducts([
+      item("MAG-1", "o1", { qty: 2, revenue: 100_000 }),
+      item("MAG-1", "o2"),
+      item("COL-1", "o2", { revenue: 90_000 }),
+    ]);
+    expect(rows[0]).toMatchObject({
+      sku: "MAG-1",
+      units: 3,
+      orders: 2,
+      revenue: 150_000,
+      perOrder: 75_000,
+      cancelRate: 0,
+    });
+    // Ordena por ventas desc.
+    expect(rows.map((r) => r.sku)).toEqual(["MAG-1", "COL-1"]);
+  });
+
+  it("las canceladas no suman ventas/unidades pero sí a la tasa de cancelación", () => {
+    const rows = summarizeTopProducts([
+      item("MAG-1", "o1"),
+      item("MAG-1", "o2", { cancelled: true, revenue: null }),
+    ]);
+    expect(rows[0]).toMatchObject({
+      units: 1,
+      orders: 1,
+      revenue: 50_000,
+      cancelledOrders: 1,
+      cancelRate: 0.5,
+    });
+  });
+
+  it("ítems sin precio (revenue null) cuentan unidades pero no plata; sin nombre usa el SKU", () => {
+    const rows = summarizeTopProducts([item("MAG-1", "o1", { name: null, revenue: null })]);
+    expect(rows[0]).toMatchObject({ name: "MAG-1", units: 1, revenue: 0, perOrder: 0 });
+  });
+
+  it("ignora ítems con SKU vacío", () => {
+    expect(summarizeTopProducts([item("  ", "o1")])).toEqual([]);
+  });
+});
+
+describe("summarizeCloseSpeed", () => {
+  const fact = (
+    conversationId: string,
+    conversationCreatedAt: string,
+    orderCreatedAt: string,
+  ): CloseSpeedFact => ({ conversationId, conversationCreatedAt, orderCreatedAt });
+
+  it("mide la PRIMERA orden por conversación y ubica los buckets", () => {
+    const r = summarizeCloseSpeed([
+      // A: cierra en 10 min (≤ 15 min). Su segunda orden es recompra, no cierre.
+      fact("A", "2026-07-02T10:00:00Z", "2026-07-02T10:10:00Z"),
+      fact("A", "2026-07-02T10:00:00Z", "2026-07-03T10:00:00Z"),
+      // B: cierra en 30 min (15–60 min).
+      fact("B", "2026-07-02T10:00:00Z", "2026-07-02T10:30:00Z"),
+      // C: cierra en 2 días (1–3 días).
+      fact("C", "2026-07-01T10:00:00Z", "2026-07-03T10:00:00Z"),
+    ]);
+    expect(r.closes).toBe(3);
+    expect(r.medianMinutes).toBe(30);
+    expect(r.buckets.map((b) => b.count)).toEqual([1, 1, 0, 0, 1, 0]);
+    expect(r.withinHourRate).toBeCloseTo(2 / 3, 5);
+    expect(r.withinDayRate).toBeCloseTo(2 / 3, 5);
+  });
+
+  it("cuenta recompras: conversaciones con más de una orden y sus órdenes extra", () => {
+    const r = summarizeCloseSpeed([
+      fact("A", "2026-07-02T10:00:00Z", "2026-07-02T10:10:00Z"),
+      fact("A", "2026-07-02T10:00:00Z", "2026-07-03T10:00:00Z"),
+      fact("A", "2026-07-02T10:00:00Z", "2026-07-04T10:00:00Z"),
+      fact("B", "2026-07-02T10:00:00Z", "2026-07-02T10:30:00Z"),
+    ]);
+    expect(r.repeatConversations).toBe(1);
+    expect(r.repeatOrders).toBe(2);
+  });
+
+  it("una orden 'antes' de la conversación (desfase de relojes) cuenta como 0 min", () => {
+    const r = summarizeCloseSpeed([fact("A", "2026-07-02T10:00:05Z", "2026-07-02T10:00:00Z")]);
+    expect(r.medianMinutes).toBe(0);
+    expect(r.buckets[0].count).toBe(1);
+  });
+
+  it("vacío: mediana null y tasas en 0", () => {
+    const r = summarizeCloseSpeed([]);
+    expect(r).toMatchObject({ closes: 0, medianMinutes: null, withinHourRate: 0, withinDayRate: 0 });
   });
 });
 
@@ -348,10 +470,12 @@ describe("summarizeRoas", () => {
     expect(r.rows[0].revenue).toBe(0);
   });
 
-  it("la serie por día trae 14 días, del más viejo al más nuevo", () => {
+  it("la serie por día trae 14 días, MÁS RECIENTE primero (como los demás gráficos)", () => {
     const r = summarizeRoas([agent("a", 1000)], [chat("a")], []);
     expect(r.perDay).toHaveLength(14);
-    expect(r.perDay[0].date < r.perDay[13].date).toBe(true);
+    expect(r.perDay[0].date > r.perDay[13].date).toBe(true);
+    // Misma orientación que summarizeOrders/summarizeConversationActivity: hoy arriba.
+    expect(r.perDay[0].date).toBe(bogotaDayKey(Date.now()));
   });
 });
 

@@ -98,6 +98,20 @@ export function formatDayKeyShort(dayKey: string): string {
   );
 }
 
+/**
+ * Minutos → "18 min", "5,4 h" o "2,3 días". Para la velocidad de cierre: la
+ * unidad crece con la magnitud para no leer "4.320 min".
+ */
+export function formatMinutes(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(minutes)) return "—";
+  const fmt = (n: number) =>
+    new Intl.NumberFormat("es-CO", { maximumFractionDigits: 1 }).format(n);
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${fmt(hours)} h`;
+  return `${fmt(hours / 24)} días`;
+}
+
 export function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const diff = Math.max(0, Date.now() - new Date(iso).getTime());

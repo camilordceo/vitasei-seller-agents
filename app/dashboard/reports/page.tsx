@@ -2,21 +2,26 @@ import Link from "next/link";
 import {
   getAgents,
   getAiCostReport,
+  getCloseSpeed,
   getVoiceCallStats,
   getConversionReport,
   getProductConversion,
   getRoasReport,
   getSalesReport,
+  getTopProducts,
 } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
+  type CloseSpeedReport,
   type ConversionReport,
   type RoasReport,
   type RoasRow,
   type SalesReport,
 } from "@/lib/dashboard/report";
+import { rateNote } from "@/lib/dashboard/currency";
 import {
   formatCOP,
+  formatMinutes,
   formatMoney,
   formatNumber,
   formatDayKeyShort,
@@ -56,6 +61,7 @@ function buildSummary(
   r: SalesReport,
   c: ConversionReport,
   roas: RoasReport,
+  speed: CloseSpeedReport,
   scope: string,
 ): string {
   // El retorno solo entra al resumen si hay una lectura consolidable (una moneda
@@ -66,6 +72,12 @@ function buildSummary(
           `Retorno (ROAS): ${new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 }).format(roas.total.roas)}× · ${formatMoney(roas.total.revenue, roas.total.currency)} sobre ${formatMoney(roas.total.investment, roas.total.currency)} de pauta (${formatNumber(roas.total.chats)} chats)`,
         ]
       : [];
+  const speedLine =
+    speed.closes > 0
+      ? [
+          `Cierre mediano: ${formatMinutes(speed.medianMinutes)} · ${formatPercent(speed.withinHourRate)} en la primera hora`,
+        ]
+      : [];
   return [
     `Reporte de ventas — ${scope}`,
     `Ventas confirmadas: ${r.confirmed.count} · ${formatCOP(r.confirmed.revenue)}`,
@@ -74,6 +86,7 @@ function buildSummary(
     `Canceladas: ${r.cancelled.count}`,
     `Conversión: ${formatPercent(c.total.rate)} (${c.total.transactions}/${c.total.conversations} conversaciones)`,
     ...roasLine,
+    ...speedLine,
     `Hoy: ${r.today.count} (${formatCOP(r.today.revenue)}) · 7 días: ${r.last7.count} (${formatCOP(r.last7.revenue)}) · 30 días: ${r.last30.count} (${formatCOP(r.last30.revenue)})`,
   ].join("\n");
 }
@@ -295,13 +308,15 @@ export default async function ReportsPage({
     ? `${selected.name}${selected.brand ? ` · ${selected.brand}` : ""}`
     : "Todos los agentes";
 
-  const [r, conv, ai, products, voice, roas] = await Promise.all([
+  const [r, conv, ai, products, voice, roas, topProducts, speed] = await Promise.all([
     getSalesReport(agentId),
     getConversionReport(agentId),
     getAiCostReport(agentId),
     getProductConversion(agentId),
     getVoiceCallStats(agentId),
     getRoasReport(agentId),
+    getTopProducts(agentId),
+    getCloseSpeed(agentId),
   ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
@@ -313,6 +328,16 @@ export default async function ReportsPage({
     { label: "Últimos 30 días", w: conv.last30 },
     { label: "Total", w: conv.total },
   ];
+
+  // Participación por producto (chats vs. plata): misma unidad (%) para poder
+  // compararlas en un solo gráfico. Solo categorías reales (sin "Sin categoría").
+  const prodShareRows = products.rows.filter((p) => p.category !== null).slice(0, 8);
+  const totalProdConvs = Math.max(1, prodShareRows.reduce((s, p) => s + p.conversations, 0));
+  const totalProdRevenue = Math.max(1, prodShareRows.reduce((s, p) => s + p.revenue, 0));
+
+  const topRows = topProducts.rows.slice(0, 12);
+  const maxTopRevenue = Math.max(1, ...topRows.map((p) => p.revenue));
+  const maxSpeedBucket = Math.max(1, ...speed.buckets.map((b) => b.count));
 
   return (
     <div className="space-y-6">
@@ -328,7 +353,7 @@ export default async function ReportsPage({
             <>Ventas generadas por el agente. Comparte el resumen con el equipo.</>
           )
         }
-        actions={<CopySummaryButton summary={buildSummary(r, conv, roas, scope)} />}
+        actions={<CopySummaryButton summary={buildSummary(r, conv, roas, speed, scope)} />}
       />
 
       {agents.length > 1 && (
@@ -519,6 +544,83 @@ export default async function ReportsPage({
         </div>
       </section>
 
+      {/* Velocidad de cierre: primer contacto → primera orden (+ recompras) */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">
+              Velocidad de cierre
+            </h2>
+            <p className="max-w-prose text-xs text-slate-400">
+              Tiempo entre el primer mensaje del cliente y su <strong>primera orden</strong> (sin
+              canceladas). La mediana dice en cuánto cierra la mitad de las ventas; las órdenes
+              siguientes de un mismo cliente cuentan como recompra, no como cierre.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-semibold tracking-tight text-slate-900">
+              {formatMinutes(speed.medianMinutes)}
+            </p>
+            <p className="text-xs text-slate-500">
+              mediana de {formatNumber(speed.closes)} {speed.closes === 1 ? "cierre" : "cierres"}
+            </p>
+          </div>
+        </div>
+
+        {speed.closes === 0 ? (
+          <p className="py-2 text-sm text-slate-400">Aún no hay órdenes para medir.</p>
+        ) : (
+          <div className="grid gap-6 lg:grid-cols-[1fr_16rem]">
+            <ul className="space-y-1.5">
+              {speed.buckets.map((b) => (
+                <li key={b.label} className="flex items-center gap-3">
+                  <span className="w-20 shrink-0 text-xs tabular-nums text-slate-500">
+                    {b.label}
+                  </span>
+                  <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                    <div
+                      className="h-full rounded bg-indigo-500/80"
+                      style={{ width: `${Math.round((b.count / maxSpeedBucket) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-8 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                    {b.count}
+                  </span>
+                  <span className="w-12 shrink-0 text-right text-xs tabular-nums text-slate-700">
+                    {formatPercent(speed.closes > 0 ? b.count / speed.closes : 0)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                <p className="text-xs font-medium text-slate-500">En la primera hora</p>
+                <p className="mt-0.5 text-lg font-semibold tracking-tight text-emerald-700">
+                  {formatPercent(speed.withinHourRate)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                <p className="text-xs font-medium text-slate-500">En las primeras 24 h</p>
+                <p className="mt-0.5 text-lg font-semibold tracking-tight text-slate-900">
+                  {formatPercent(speed.withinDayRate)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                <p className="text-xs font-medium text-slate-500">Recompras</p>
+                <p className="mt-0.5 text-lg font-semibold tracking-tight text-slate-900">
+                  {formatNumber(speed.repeatConversations)}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {speed.repeatConversations === 1 ? "cliente volvió" : "clientes volvieron"} a
+                  comprar · {formatNumber(speed.repeatOrders)}{" "}
+                  {speed.repeatOrders === 1 ? "orden extra" : "órdenes extra"}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Por estado */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -662,34 +764,42 @@ export default async function ReportsPage({
       </div>
       </Collapsible>
 
-      {/* Conversión por producto */}
+      {/* Rendimiento por producto (conversaciones → órdenes → plata) */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-3">
-          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Conversión por producto</h2>
-          <p className="text-xs text-slate-400">
-            Conversaciones agrupadas por su producto/fuente y cuántas terminaron en venta. Se
-            autocategoriza por palabra clave; también se ajusta a mano en cada conversación.
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Rendimiento por producto</h2>
+          <p className="max-w-prose text-xs text-slate-400">
+            Conversaciones agrupadas por su producto/fuente: cuántas terminaron en venta, cuántas
+            órdenes y cuánta plata trajo cada una. <strong>Valor/chat</strong> = ventas ÷
+            conversaciones: lo que vale un chat de ese producto. Se autocategoriza por palabra
+            clave; también se ajusta a mano en cada conversación.
+            {products.converted
+              ? ` Montos homologados a ${products.currency} (${rateNote(products.currency)}).`
+              : ""}
           </p>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[42rem] text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500">
                 <th className="pb-2 font-medium">Producto</th>
                 <th className="pb-2 text-right font-medium">Conversaciones</th>
                 <th className="pb-2 text-right font-medium">Transacciones</th>
+                <th className="pb-2 text-right font-medium">Órdenes</th>
+                <th className="pb-2 text-right font-medium">Ventas</th>
+                <th className="pb-2 text-right font-medium">Valor/chat</th>
                 <th className="pb-2 text-right font-medium">Conversión</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {products.length === 0 ? (
+              {products.rows.length === 0 ? (
                 <tr>
-                  <td className="py-3 text-slate-400" colSpan={4}>
+                  <td className="py-3 text-slate-400" colSpan={7}>
                     Aún no hay conversaciones categorizadas.
                   </td>
                 </tr>
               ) : (
-                products.map((p) => (
+                products.rows.map((p) => (
                   <tr key={p.category ?? "__none__"}>
                     <td className="py-2 text-slate-700">
                       {p.category ?? <span className="text-slate-400">Sin categoría</span>}
@@ -700,6 +810,15 @@ export default async function ReportsPage({
                     <td className="py-2 text-right tabular-nums text-slate-900">
                       {formatNumber(p.transactions)}
                     </td>
+                    <td className="py-2 text-right tabular-nums text-slate-900">
+                      {formatNumber(p.orders)}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-900">
+                      {formatMoney(p.revenue, products.currency)}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-700">
+                      {formatMoney(p.revenuePerConversation, products.currency)}
+                    </td>
                     <td className="py-2 text-right font-medium tabular-nums text-emerald-700">
                       {formatPercent(p.rate)}
                     </td>
@@ -709,6 +828,140 @@ export default async function ReportsPage({
             </tbody>
           </table>
         </div>
+
+        {/* Atención vs. plata: % de chats vs. % de ventas de cada producto. Misma
+            unidad (%), así que las dos barras SÍ son comparables: un producto con
+            mucha barra gris y poca verde consume chats que no se vuelven plata. */}
+        {prodShareRows.length > 1 ? (
+          <div className="mt-5">
+            <div className="mb-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-sm bg-slate-300" aria-hidden="true" />
+                % de conversaciones
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" aria-hidden="true" />
+                % de ventas
+              </span>
+              <span className="ml-auto">¿Qué producto se lleva los chats… y cuál la plata?</span>
+            </div>
+            <ul className="space-y-2">
+              {prodShareRows.map((p) => {
+                const convShare = p.conversations / totalProdConvs;
+                const revShare = p.revenue / totalProdRevenue;
+                return (
+                  <li key={p.category} className="flex items-center gap-3">
+                    <span className="w-28 shrink-0 truncate text-xs text-slate-500" title={p.category ?? undefined}>
+                      {p.category}
+                    </span>
+                    <div className="flex-1 space-y-1">
+                      <div className="h-2.5 overflow-hidden rounded bg-slate-100">
+                        <div
+                          className="h-full rounded bg-slate-300"
+                          style={{ width: `${Math.round(convShare * 100)}%` }}
+                        />
+                      </div>
+                      <div className="h-2.5 overflow-hidden rounded bg-slate-100">
+                        <div
+                          className="h-full rounded bg-emerald-500"
+                          style={{ width: `${Math.round(revShare * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="w-12 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                      {formatPercent(convShare)}
+                    </span>
+                    <span className="w-12 shrink-0 text-right text-xs font-medium tabular-nums text-emerald-700">
+                      {formatPercent(revShare)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
+      {/* Productos más vendidos: lo que salió en las órdenes (por SKU) */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mb-3">
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Productos más vendidos</h2>
+          <p className="max-w-prose text-xs text-slate-400">
+            Lo que de verdad salió en las órdenes (ítems por referencia), no lo que se preguntó.
+            <strong> Cancelación</strong> = órdenes canceladas que incluían el producto.
+            {topProducts.converted
+              ? ` Montos homologados a ${topProducts.currency} (${rateNote(topProducts.currency)}).`
+              : ""}
+            {topProducts.unpriced > 0
+              ? ` ${formatNumber(topProducts.unpriced)} ${topProducts.unpriced === 1 ? "ítem no tiene" : "ítems no tienen"} precio: cuentan unidades pero no suman ventas.`
+              : ""}
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[42rem] text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500">
+                <th className="pb-2 font-medium">Producto</th>
+                <th className="pb-2 text-right font-medium">Unidades</th>
+                <th className="pb-2 text-right font-medium">Órdenes</th>
+                <th className="pb-2 text-right font-medium">Ventas</th>
+                <th className="pb-2 text-right font-medium">Por orden</th>
+                <th className="pb-2 text-right font-medium">Cancelación</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {topRows.length === 0 ? (
+                <tr>
+                  <td className="py-3 text-slate-400" colSpan={6}>
+                    Aún no hay ítems en las órdenes.
+                  </td>
+                </tr>
+              ) : (
+                topRows.map((p) => (
+                  <tr key={p.sku}>
+                    <td className="py-2 pr-4">
+                      <p className="text-slate-700">
+                        {p.name}
+                        <span className="ml-1.5 text-xs text-slate-400">{p.sku}</span>
+                      </p>
+                      <div className="mt-1 h-1.5 max-w-[16rem] overflow-hidden rounded bg-slate-100">
+                        <div
+                          className="h-full rounded bg-emerald-500/80"
+                          style={{ width: `${Math.round((p.revenue / maxTopRevenue) * 100)}%` }}
+                        />
+                      </div>
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-900">
+                      {formatNumber(p.units)}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-900">
+                      {formatNumber(p.orders)}
+                    </td>
+                    <td className="py-2 text-right font-medium tabular-nums text-slate-900">
+                      {formatMoney(p.revenue, topProducts.currency)}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-700">
+                      {p.perOrder != null ? formatMoney(p.perOrder, topProducts.currency) : "—"}
+                    </td>
+                    <td
+                      className={`py-2 text-right tabular-nums ${
+                        p.cancelRate >= 0.25 ? "font-medium text-rose-700" : "text-slate-500"
+                      }`}
+                    >
+                      {formatPercent(p.cancelRate)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        {topProducts.rows.length > topRows.length ? (
+          <p className="mt-2 text-xs text-slate-400">
+            Mostrando los {topRows.length} con más ventas de {formatNumber(topProducts.rows.length)}{" "}
+            referencias.
+          </p>
+        ) : null}
       </section>
     </div>
   );

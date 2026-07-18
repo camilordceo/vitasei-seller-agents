@@ -249,6 +249,10 @@ export interface ProductConversionFact {
   productCategory: string | null;
   /** true si la conversación tiene al menos una orden NO cancelada. */
   converted: boolean;
+  /** Órdenes NO canceladas de la conversación. */
+  orders: number;
+  /** Ventas de la conversación YA homologadas a la moneda de lectura (null = nada sumable). */
+  revenue: number | null;
 }
 
 export interface ProductConversionRow {
@@ -257,19 +261,32 @@ export interface ProductConversionRow {
   conversations: number;
   transactions: number;
   rate: number;
+  /** Órdenes no canceladas atribuidas a la categoría. */
+  orders: number;
+  /** Ventas homologadas (misma moneda para todas las filas). */
+  revenue: number;
+  /** revenue / conversations: cuánta plata vale un chat de este producto. */
+  revenuePerConversation: number;
 }
 
 /**
- * Agrupa las conversaciones por producto y calcula cuántas convirtieron. Ordena
- * por # de conversaciones desc; "Sin categoría" (null) va al final. Puro/testeable.
+ * Agrupa las conversaciones por producto y calcula cuántas convirtieron, cuántas
+ * órdenes y cuánta plata trajo cada categoría (los montos llegan YA homologados a
+ * una sola moneda). Ordena por ventas desc, luego por conversaciones; "Sin
+ * categoría" (null) va al final. Puro/testeable.
  */
 export function summarizeProductConversion(facts: ProductConversionFact[]): ProductConversionRow[] {
-  const byCat = new Map<string | null, { conversations: number; transactions: number }>();
+  const byCat = new Map<
+    string | null,
+    { conversations: number; transactions: number; orders: number; revenue: number }
+  >();
   for (const f of facts) {
     const key = f.productCategory && f.productCategory.trim() ? f.productCategory.trim() : null;
-    const t = byCat.get(key) ?? { conversations: 0, transactions: 0 };
+    const t = byCat.get(key) ?? { conversations: 0, transactions: 0, orders: 0, revenue: 0 };
     t.conversations += 1;
     if (f.converted) t.transactions += 1;
+    t.orders += f.orders;
+    t.revenue += f.revenue ?? 0;
     byCat.set(key, t);
   }
   return [...byCat.entries()]
@@ -278,12 +295,201 @@ export function summarizeProductConversion(facts: ProductConversionFact[]): Prod
       conversations: t.conversations,
       transactions: t.transactions,
       rate: t.conversations > 0 ? t.transactions / t.conversations : 0,
+      orders: t.orders,
+      revenue: t.revenue,
+      revenuePerConversation: t.conversations > 0 ? t.revenue / t.conversations : 0,
     }))
     .sort((a, b) => {
       if (a.category === null) return 1; // "Sin categoría" al final
       if (b.category === null) return -1;
-      return b.conversations - a.conversations;
+      return b.revenue - a.revenue || b.conversations - a.conversations;
     });
+}
+
+// --- Productos más vendidos (ítems de las órdenes) ---------------------------
+
+export interface ProductSalesFact {
+  sku: string;
+  name: string | null;
+  qty: number;
+  /** qty × precio unitario, YA homologado a la moneda de lectura (null = ítem sin precio). */
+  revenue: number | null;
+  /** Orden a la que pertenece el ítem (para contar órdenes distintas). */
+  orderId: string;
+  /** true si la orden está cancelada: no suma ventas, pero sí a la tasa de cancelación. */
+  cancelled: boolean;
+}
+
+export interface TopProductRow {
+  sku: string;
+  name: string;
+  /** Unidades vendidas (órdenes no canceladas). */
+  units: number;
+  /** Órdenes distintas no canceladas en las que aparece. */
+  orders: number;
+  /** Ventas homologadas del producto (suma de sus ítems no cancelados). */
+  revenue: number;
+  /** revenue / orders: cuánto factura una orden típica de este producto. null sin órdenes. */
+  perOrder: number | null;
+  /** Órdenes distintas CANCELADAS en las que aparecía. */
+  cancelledOrders: number;
+  /** canceladas / (activas + canceladas): qué tanto se cae este producto. */
+  cancelRate: number;
+}
+
+/**
+ * Ranking de productos por lo que de verdad se vendió (ítems de las órdenes), no
+ * por lo que se preguntó. Los montos llegan YA homologados a una moneda. Ordena
+ * por ventas desc y luego unidades. Puro/testeable.
+ */
+export function summarizeTopProducts(facts: ProductSalesFact[]): TopProductRow[] {
+  const bySku = new Map<
+    string,
+    {
+      name: string;
+      units: number;
+      revenue: number;
+      orders: Set<string>;
+      cancelledOrders: Set<string>;
+    }
+  >();
+  for (const f of facts) {
+    const sku = f.sku.trim();
+    if (!sku) continue;
+    const t =
+      bySku.get(sku) ??
+      { name: "", units: 0, revenue: 0, orders: new Set<string>(), cancelledOrders: new Set<string>() };
+    // El nombre más reciente que se haya visto gana (los ítems viejos pueden traer null).
+    if (f.name && f.name.trim()) t.name = f.name.trim();
+    if (f.cancelled) {
+      t.cancelledOrders.add(f.orderId);
+    } else {
+      t.units += Number(f.qty) || 0;
+      t.revenue += f.revenue ?? 0;
+      t.orders.add(f.orderId);
+    }
+    bySku.set(sku, t);
+  }
+  return [...bySku.entries()]
+    .map(([sku, t]) => {
+      const orders = t.orders.size;
+      const cancelledOrders = t.cancelledOrders.size;
+      return {
+        sku,
+        name: t.name || sku,
+        units: t.units,
+        orders,
+        revenue: t.revenue,
+        perOrder: orders > 0 ? t.revenue / orders : null,
+        cancelledOrders,
+        cancelRate: orders + cancelledOrders > 0 ? cancelledOrders / (orders + cancelledOrders) : 0,
+      };
+    })
+    .sort((a, b) => b.revenue - a.revenue || b.units - a.units);
+}
+
+// --- Velocidad de cierre (lead → primera orden) ------------------------------
+
+/** Una orden NO cancelada atada a la conversación que la originó. */
+export interface CloseSpeedFact {
+  conversationId: string;
+  /** ISO del `created_at` de la conversación = primer contacto del cliente. */
+  conversationCreatedAt: string;
+  /** ISO del `created_at` de la orden. */
+  orderCreatedAt: string;
+}
+
+export interface CloseSpeedBucket {
+  label: string;
+  count: number;
+}
+
+export interface CloseSpeedReport {
+  /** Conversaciones que cerraron al menos una orden (con delta medible). */
+  closes: number;
+  /** Mediana de minutos entre el primer contacto y la PRIMERA orden. null sin cierres. */
+  medianMinutes: number | null;
+  /** Fracción de cierres dentro de la primera hora. */
+  withinHourRate: number;
+  /** Fracción de cierres dentro de las primeras 24 h. */
+  withinDayRate: number;
+  /** Distribución fija: ≤15 min · 15–60 min · 1–6 h · 6–24 h · 1–3 días · >3 días. */
+  buckets: CloseSpeedBucket[];
+  /** Conversaciones con MÁS de una orden (clientes que recompraron). */
+  repeatConversations: number;
+  /** Órdenes adicionales más allá de la primera (volumen de recompra). */
+  repeatOrders: number;
+}
+
+const CLOSE_SPEED_BUCKETS: Array<{ label: string; maxMin: number }> = [
+  { label: "≤ 15 min", maxMin: 15 },
+  { label: "15–60 min", maxMin: 60 },
+  { label: "1–6 h", maxMin: 6 * 60 },
+  { label: "6–24 h", maxMin: 24 * 60 },
+  { label: "1–3 días", maxMin: 3 * 24 * 60 },
+  { label: "> 3 días", maxMin: Infinity },
+];
+
+/**
+ * ¿Qué tan rápido cierra la IA? Mide, por conversación, los minutos entre el
+ * primer contacto (`created_at` de la conversación) y su PRIMERA orden no
+ * cancelada. Solo la primera: las órdenes siguientes son recompras (se cuentan
+ * aparte), y medirlas desde el primer contacto inflaría el tiempo. Mediana en vez
+ * de promedio: un lead que volvió a los 20 días no debe tapar que el resto cierra
+ * en minutos. Puro/testeable.
+ */
+export function summarizeCloseSpeed(facts: CloseSpeedFact[]): CloseSpeedReport {
+  // Primera orden y # de órdenes por conversación.
+  const byConvo = new Map<string, { firstOrderMs: number; orders: number; convoMs: number }>();
+  for (const f of facts) {
+    const orderMs = Date.parse(f.orderCreatedAt);
+    const convoMs = Date.parse(f.conversationCreatedAt);
+    if (!Number.isFinite(orderMs) || !Number.isFinite(convoMs)) continue;
+    const t = byConvo.get(f.conversationId);
+    if (!t) {
+      byConvo.set(f.conversationId, { firstOrderMs: orderMs, orders: 1, convoMs });
+    } else {
+      t.orders += 1;
+      if (orderMs < t.firstOrderMs) t.firstOrderMs = orderMs;
+    }
+  }
+
+  const deltas: number[] = [];
+  let repeatConversations = 0;
+  let repeatOrders = 0;
+  for (const t of byConvo.values()) {
+    // Relojes/ingesta pueden dejar la orden "antes" de la conversación por segundos.
+    deltas.push(Math.max(0, (t.firstOrderMs - t.convoMs) / 60000));
+    if (t.orders > 1) {
+      repeatConversations += 1;
+      repeatOrders += t.orders - 1;
+    }
+  }
+  deltas.sort((a, b) => a - b);
+
+  const buckets = CLOSE_SPEED_BUCKETS.map((b) => ({ label: b.label, count: 0 }));
+  let withinHour = 0;
+  let withinDay = 0;
+  for (const d of deltas) {
+    const i = CLOSE_SPEED_BUCKETS.findIndex((b) => d <= b.maxMin);
+    buckets[i === -1 ? buckets.length - 1 : i].count += 1;
+    if (d <= 60) withinHour += 1;
+    if (d <= 24 * 60) withinDay += 1;
+  }
+
+  const n = deltas.length;
+  const medianMinutes =
+    n === 0 ? null : n % 2 === 1 ? deltas[(n - 1) / 2] : (deltas[n / 2 - 1] + deltas[n / 2]) / 2;
+
+  return {
+    closes: n,
+    medianMinutes,
+    withinHourRate: n > 0 ? withinHour / n : 0,
+    withinDayRate: n > 0 ? withinDay / n : 0,
+    buckets,
+    repeatConversations,
+    repeatOrders,
+  };
 }
 
 // --- Conversión (conversaciones ACTIVAS → transacciones) --------------------
@@ -589,8 +795,8 @@ export function summarizeRoas(
     };
   }
 
-  // Serie de 14 días (hoy primero al construir, se devuelve del más viejo al más
-  // nuevo para que el gráfico se lea de izquierda a derecha).
+  // Serie de 14 días, MÁS RECIENTE PRIMERO: el gráfico es una lista vertical de
+  // filas (igual que "Órdenes generadas" y "Conversión") y todas ponen hoy arriba.
   const perDay: RoasDay[] = [];
   if (singleCurrency) {
     const costById = new Map(agents.map((a) => [a.id, a.costPerChat ?? 0]));
@@ -600,7 +806,7 @@ export function summarizeRoas(
 
     const dayKeys: string[] = [];
     const now = Date.now();
-    for (let i = 13; i >= 0; i--) dayKeys.push(bogotaDayKey(now - i * DAY_MS));
+    for (let i = 0; i < 14; i++) dayKeys.push(bogotaDayKey(now - i * DAY_MS));
     const window = new Set(dayKeys);
 
     for (const c of chats) {
