@@ -136,47 +136,52 @@ export default async function ConversationDetailPage({ params }: { params: { id:
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">Orden</h2>
-            {convo.order ? (
-              <>
-                <dl className="mt-2 space-y-1 text-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <dt className="text-slate-500">Estado</dt>
-                    <dd className="text-right">
-                      <OrderStatusPill status={convo.order.status} />
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">Total</dt>
-                    <dd className="text-right font-medium text-slate-900">
-                      {formatCOP(convo.order.total)}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">Ítems</dt>
-                    <dd className="text-right text-slate-900">{convo.order.itemsCount}</dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">Envío a</dt>
-                    <dd className="text-right text-slate-900">
-                      {convo.order.shippingName ?? "—"}
-                      {convo.order.shippingCity ? `, ${convo.order.shippingCity}` : ""}
-                    </dd>
-                  </div>
-                </dl>
-                <Link
-                  href={`/dashboard/orders/${convo.order.id}`}
-                  className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                >
-                  Ver / editar orden
-                </Link>
-              </>
+            <h2 className="text-sm font-semibold text-slate-700">
+              Órdenes{convo.orders.length > 0 ? ` (${convo.orders.length})` : ""}
+            </h2>
+            {convo.orders.length > 0 ? (
+              <ul className="mt-2 space-y-2">
+                {convo.orders.map((order) => (
+                  <li key={order.id} className="rounded-md border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <OrderStatusPill status={order.status} />
+                      <span className="text-sm font-medium text-slate-900">
+                        {formatCOP(order.total)}
+                      </span>
+                    </div>
+                    <dl className="mt-2 space-y-1 text-xs text-slate-600">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-400">Creada</dt>
+                        <dd className="text-right">{formatDateTime(order.createdAt)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-400">Ítems</dt>
+                        <dd className="text-right">{order.itemsCount}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-400">Envío a</dt>
+                        <dd className="text-right">
+                          {order.shippingName ?? "—"}
+                          {order.shippingCity ? `, ${order.shippingCity}` : ""}
+                        </dd>
+                      </div>
+                    </dl>
+                    <Link
+                      href={`/dashboard/orders/${order.id}`}
+                      className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                    >
+                      Ver / editar orden
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <>
-                <p className="mt-2 text-sm text-slate-400">Sin orden todavía.</p>
-                <CreateOrderButton conversationId={convo.id} />
-              </>
+              <p className="mt-2 text-sm text-slate-400">Sin órdenes todavía.</p>
             )}
+            <CreateOrderButton
+              conversationId={convo.id}
+              label={convo.orders.length > 0 ? "Crear otra orden" : "Crear orden"}
+            />
           </div>
 
           <DiagnosticsPanel events={events} />

@@ -584,6 +584,8 @@ export interface ConversationOrder {
   shippingName: string | null;
   shippingCity: string | null;
   method: FulfillmentMethod;
+  /** Fecha de creación (para ordenar las órdenes de la conversación, más nueva primero). */
+  createdAt: string;
 }
 
 export interface ConversationDetail {
@@ -599,7 +601,9 @@ export interface ConversationDetail {
   hotmartFlow: boolean;
   contact: { name: string | null; phone: string } | null;
   messages: ConversationMessage[];
-  order: ConversationOrder | null;
+  /** Todas las órdenes de la conversación, de la más nueva a la más vieja (puede haber
+   *  varias: canceladas + activa). El panel las lista y permite crear otra. Ver ADR-0059. */
+  orders: ConversationOrder[];
 }
 
 export async function getConversation(id: string): Promise<ConversationDetail | null> {
@@ -621,11 +625,9 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
       .order("created_at", { ascending: true }),
     supabase
       .from("orders")
-      .select("id, status, total, fulfillment_method, shipping_name, shipping_city")
+      .select("id, status, total, fulfillment_method, shipping_name, shipping_city, created_at")
       .eq("conversation_id", id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .order("created_at", { ascending: false }),
     // Fuente de producto en consulta aparte: si falta la migración 0018 (columna),
     // esta falla y se ignora sin romper el detalle. Ver docs/21.
     supabase.from("conversations").select("product_category").eq("id", id).maybeSingle(),
@@ -637,22 +639,30 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   const productCategory = pcRes.error ? null : pcRes.data?.product_category ?? null;
   const hotmartFlow = hfRes.error ? false : hfRes.data?.hotmart_flow === true;
 
-  let order: ConversationOrder | null = null;
-  if (orderRes.data) {
-    const { count } = await supabase
+  // Todas las órdenes de la conversación (más nueva primero), con su conteo de ítems.
+  // Puede haber varias (p. ej. una cancelada + una nueva); el panel las lista todas.
+  const orderRows = orderRes.error ? [] : orderRes.data ?? [];
+  const itemsByOrder = new Map<string, number>();
+  if (orderRows.length > 0) {
+    const orderIds = orderRows.map((o) => o.id);
+    const { data: itemRows } = await supabase
       .from("order_items")
-      .select("id", { count: "exact", head: true })
-      .eq("order_id", orderRes.data.id);
-    order = {
-      id: orderRes.data.id,
-      status: orderRes.data.status,
-      total: orderRes.data.total,
-      itemsCount: count ?? 0,
-      shippingName: orderRes.data.shipping_name,
-      shippingCity: orderRes.data.shipping_city,
-      method: orderRes.data.fulfillment_method,
-    };
+      .select("order_id")
+      .in("order_id", orderIds);
+    for (const it of itemRows ?? []) {
+      itemsByOrder.set(it.order_id, (itemsByOrder.get(it.order_id) ?? 0) + 1);
+    }
   }
+  const orders: ConversationOrder[] = orderRows.map((o) => ({
+    id: o.id,
+    status: o.status,
+    total: o.total,
+    itemsCount: itemsByOrder.get(o.id) ?? 0,
+    shippingName: o.shipping_name,
+    shippingCity: o.shipping_city,
+    method: o.fulfillment_method,
+    createdAt: o.created_at,
+  }));
 
   return {
     id: convo.id,
@@ -675,7 +685,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
       tags: Array.isArray(m.tags) ? (m.tags as string[]) : [],
       createdAt: m.created_at,
     })),
-    order,
+    orders,
   };
 }
 

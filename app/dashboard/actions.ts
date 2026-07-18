@@ -195,11 +195,13 @@ export async function saveOrder(orderId: string, input: OrderEditInput): Promise
 /**
  * Crea una orden EN BLANCO para una conversación existente y devuelve su id para
  * que el dashboard abra el editor. Sirve para registrar a mano una venta que el
- * agente no cerró (p. ej. cerró sin `#orden-lista`). **Idempotente por orden
- * ACTIVA**: si la conversación ya tiene una orden NO cancelada, devuelve esa (no
- * duplica); si solo tiene canceladas (el cliente canceló y vuelve a pedir), crea una
- * nueva. Nace en `pending_handoff` con el método de la conversación; ítems/envío/total
- * se completan en el editor. Ver ADR-0059.
+ * agente no cerró (p. ej. cerró sin `#orden-lista`) o para crear una **nueva** orden
+ * cuando la anterior quedó cancelada. Es una acción HUMANA explícita: **siempre crea
+ * una orden nueva** asociada a esta conversación (una conversación puede tener varias;
+ * el panel las lista todas). No deduplica: el usuario decide cuándo crear otra. Nace
+ * en `pending_handoff` con el método de la conversación; ítems/envío/total se completan
+ * en el editor. La idempotencia por "orden activa" vive solo en el bot (que crea
+ * automáticamente y no debe duplicar por ráfaga). Ver ADR-0059.
  * Cuenta en métricas apenas exista (salvo que se marque Cancelada). Ver docs/12, ADR-0032.
  */
 export async function createOrderForConversation(conversationId: string): Promise<string> {
@@ -212,20 +214,6 @@ export async function createOrderForConversation(conversationId: string): Promis
     .maybeSingle();
   if (convoErr) throw new Error(`createOrderForConversation convo: ${convoErr.message}`);
   if (!convo) throw new Error("La conversación no existe.");
-
-  // Idempotencia por orden ACTIVA: si ya hay una orden NO cancelada, abre esa (no se
-  // duplica). Si la conversación solo tiene canceladas (el cliente canceló y vuelve a
-  // pedir), sigue de largo y crea una nueva en blanco. Ver ADR-0059.
-  const { data: existing, error: existErr } = await supabase
-    .from("orders")
-    .select("id")
-    .eq("conversation_id", conversationId)
-    .neq("status", "cancelled")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (existErr) throw new Error(`createOrderForConversation existing: ${existErr.message}`);
-  if (existing) return existing.id;
 
   const { data: order, error: ordErr } = await supabase
     .from("orders")
