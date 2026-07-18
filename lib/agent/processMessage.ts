@@ -10,7 +10,7 @@ import type { OrderDraft } from "@/lib/openai/extractOrder";
 import { parseReply } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { prependContactContext } from "@/lib/agent/contactContext";
-import { toDataUrl } from "@/lib/messaging/media";
+import { kindFromUrl, toDataUrl } from "@/lib/messaging/media";
 import { fetchMedia, type MediaAuth } from "@/lib/messaging/mediaFetch";
 import type { MessagingProvider } from "@/lib/messaging/types";
 import {
@@ -96,6 +96,24 @@ function toMessageType(type: string | null): MessageType {
     default:
       return "other";
   }
+}
+
+/**
+ * Tipo REAL de un mensaje ya guardado, para decidir cómo procesarlo.
+ *
+ * Red de seguridad contra la deriva de proveedores: si el mensaje quedó como
+ * `other` pero tiene adjunto, el `type` del webhook no sirvió (Callbell no manda
+ * `type`; Kapso podría mandar `voice`/`ptt`/lo que sea mañana) y sin esto el
+ * adjunto se descarta en silencio — que es exactamente el bug que teníamos. La
+ * extensión de la URL manda en ese caso.
+ *
+ * Solo corrige hacia arriba: un `type` que ya es útil nunca se pisa, y un `other`
+ * sin adjunto (un texto mal tipado) se queda igual.
+ */
+function effectiveType(stored: MessageType, mediaUrl: string | null): MessageType {
+  if (stored !== "other" || !mediaUrl) return stored;
+  const kind = kindFromUrl(mediaUrl);
+  return kind === "other" ? stored : kind;
 }
 
 /**
@@ -503,7 +521,7 @@ async function gatherPendingContent(
   const imageDataUrls: string[] = [];
 
   for (const m of data ?? []) {
-    const type = m.type as MessageType;
+    const type = effectiveType(m.type as MessageType, m.media_url);
     const content = (m.content ?? "").trim();
 
     if (type === "audio") {
