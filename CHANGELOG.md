@@ -28,6 +28,20 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   cedió ante la realidad (un solo nav, sin datos ficticios, sin búsqueda muerta) en
   `docs/vitasei-software-design.md` §8.
 
+### Fixed
+- **Reactivaciones 7/15 días: NINGUNA se estaba enviando** — Callbell exige que los valores
+  de `metadata` sean strings y la reactivación mandaba `reactivation_stage` como número →
+  HTTP 400 `{"metadata":["must be string"]}` en TODOS los envíos (82 fallidas, 0 enviadas
+  desde el estreno del feature). El sender de Callbell ahora **normaliza `metadata` a
+  strings en el único punto de salida** (con test), así ningún call site puede repetirlo
+  (los avisos de venta/llamada al dueño mandaban booleanos). Además, el mensaje de
+  confirmación que la reactivación deja en el hilo ("Reactivación automática enviada
+  (plantilla día 7/15)") ahora **verifica el error del insert** y lo loguea a `events_log`
+  en vez de fallar en silencio; ese mensaje sube `last_outbound_at` (trigger 0023), así la
+  conversación refleja cuándo fue la última interacción. Las 82 fallidas se re-agendaron:
+  las guardas existentes (compró → cancela, activo reciente → salta, >3 días → salta)
+  deciden cuáles todavía tiene sentido enviar.
+
 ### Added
 - **Llamadas con IA: webhook post-llamada configurable desde el dashboard.** Nuevo campo
   "Webhook post-llamada" en la sección Conexión de Llamadas con IA, **prellenado con la URL

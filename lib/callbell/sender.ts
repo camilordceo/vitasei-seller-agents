@@ -66,6 +66,25 @@ interface SendBody {
   optin_contact?: boolean;
 }
 
+/**
+ * Callbell exige que TODOS los valores de `metadata` sean strings: un número o
+ * booleano devuelve HTTP 400 `{"error":{"metadata":["must be string"]}}` y el
+ * envío NO sale (así fallaron en silencio todas las reactivaciones y varios
+ * avisos al dueño). Se normaliza aquí — el único punto de salida — para que
+ * ningún call site pueda volver a romperlo.
+ */
+function stringifyMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!metadata) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(metadata)) {
+    if (v == null) continue;
+    out[k] = typeof v === "string" ? v : String(v);
+  }
+  return out;
+}
+
 async function send(creds: CallbellCreds, body: SendBody): Promise<SentMessage> {
   const res = await fetch(`${BASE}/messages/send`, {
     method: "POST",
@@ -73,7 +92,7 @@ async function send(creds: CallbellCreds, body: SendBody): Promise<SentMessage> 
       Authorization: `Bearer ${creds.apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, metadata: stringifyMetadata(body.metadata) }),
   });
 
   if (!res.ok) {

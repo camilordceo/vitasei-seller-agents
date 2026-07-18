@@ -275,21 +275,41 @@ async function processReactivationRow(
   const sent = await messaging.sendTemplate(row.phone, templateUuid as string, {
     text: firstName,
     imageUrl,
-    metadata: { conversation_id: row.conversation_id, reactivation_stage: row.stage },
+    // Solo strings: Callbell rechaza números/booleanos en metadata (HTTP 400).
+    metadata: { conversation_id: row.conversation_id, reactivation_stage: String(row.stage) },
   });
 
-  // Registrar el outbound para que se vea en el hilo. Si la plantilla lleva imagen,
-  // se guarda como `image` con su URL para que el hilo la muestre.
-  await supabase.from("messages").insert({
+  // Registrar el outbound para que se vea en el hilo (la confirmación de que la
+  // reactivación SÍ salió y cuándo). Si la plantilla lleva imagen, se guarda como
+  // `image` con su URL para que el hilo la muestre. El insert también sube
+  // `last_outbound_at` vía trigger (migración 0023). Si falla, se loguea a
+  // `events_log` — la plantilla YA salió, así que no se revierte el envío, pero
+  // el hueco en el hilo tiene que quedar visible en el diagnóstico.
+  const { error: msgErr } = await supabase.from("messages").insert({
     conversation_id: row.conversation_id,
     direction: "outbound",
     role: "assistant",
     type: imageUrl ? "image" : "text",
-    content: `Plantilla de reactivación (día ${row.stage === 1 ? 7 : 15})${imageUrl ? " · con imagen" : ""}`,
+    content: `Reactivación automática enviada (plantilla día ${row.stage === 1 ? 7 : 15})${imageUrl ? " · con imagen" : ""}`,
     media_url: imageUrl,
     tags: [`reactivacion-${row.stage}`] as unknown as Json,
     callbell_message_uuid: sent.uuid,
   });
+  if (msgErr) {
+    console.error("[processReactivationRow] thread message insert failed:", msgErr.message);
+    await supabase
+      .from("events_log")
+      .insert({
+        conversation_id: row.conversation_id,
+        type: "reactivation_error",
+        payload: {
+          reactivationId: row.id,
+          stage: row.stage,
+          error: `thread-message-insert: ${msgErr.message}`,
+        } as unknown as Json,
+      })
+      .then(() => undefined, () => undefined);
+  }
 
   await supabase
     .from("reactivations")

@@ -83,3 +83,33 @@ describe("sendTemplate — plantilla con imagen (header)", () => {
     expect(body.template_values).toBeUndefined();
   });
 });
+
+describe("metadata — Callbell solo acepta valores string", () => {
+  // Un número o booleano en metadata devuelve HTTP 400 {"metadata":["must be string"]}
+  // y el envío NO sale (así fallaron todas las reactivaciones). El sender normaliza.
+  it("convierte números y booleanos a string y omite null/undefined", async () => {
+    const fetchMock = mockFetchOk();
+    await sendTemplate(creds, "573001112233", "tmpl_7", {
+      text: "Ana",
+      metadata: {
+        conversation_id: "c1",
+        reactivation_stage: 1,
+        sales_notification: true,
+        vacio: null,
+      },
+    });
+
+    const body = bodyOf(fetchMock);
+    expect(body.metadata).toEqual({
+      conversation_id: "c1",
+      reactivation_stage: "1",
+      sales_notification: "true",
+    });
+  });
+
+  it("sin metadata no agrega el campo", async () => {
+    const fetchMock = mockFetchOk();
+    await sendTemplate(creds, "573001112233", "tmpl_7", { text: "Ana" });
+    expect(bodyOf(fetchMock)).not.toHaveProperty("metadata");
+  });
+});
