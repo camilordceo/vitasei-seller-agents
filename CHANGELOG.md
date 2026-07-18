@@ -29,6 +29,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Conversaciones: búsqueda por cliente y por palabra clave** (ADR-0071). Dos filtros de
+  texto libre en el bloque de Filtros, combinables con todos los existentes y con la
+  paginación:
+  - **Cliente** (`?q=`): por nombre o teléfono del contacto; si el término trae dígitos
+    también busca por solo-dígitos, así `+57 300…` encuentra el E.164 sin `+`.
+  - **Palabras** (`?kw=`): conversaciones con algún mensaje que contenga el término
+    (más recientes primero, tope ~200 conversaciones — dicho en el ADR).
+  Se aplican con Enter o el botón (no letra a letra) y el término queda en la URL, así que
+  una búsqueda se puede compartir como link.
 - **Reportes: Costo IA/chat, ROAIS y lecturas de escala** (ADR-0070). El gasto de IA ahora se
   atribuye **por agente** (tokens y audios de `events_log` vía su conversación; llamadas de
   `voice_calls`) y entra al cuadro de retorno:

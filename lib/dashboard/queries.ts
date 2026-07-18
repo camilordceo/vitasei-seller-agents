@@ -351,6 +351,10 @@ export interface ConversationFilters {
   toDate?: string;
   /** Filtra por producto/fuente (`product_category` exacto). undefined = todos. */
   productCategory?: string;
+  /** Búsqueda por contacto: nombre o teléfono, coincidencia parcial sin mayúsculas. */
+  contactSearch?: string;
+  /** Palabra clave: solo conversaciones con algún mensaje cuyo texto la contenga. */
+  keyword?: string;
 }
 
 /** Fila cruda de `conversations` para la lista (last_outbound_at opcional: migración 0023). */
@@ -425,6 +429,69 @@ export async function getRecentConversations(
   }
 
   /**
+   * Búsqueda por contacto (nombre o teléfono): se resuelven los `contacts.id` que
+   * coinciden y se acota con `.in("contact_id", ...)`. El término se limpia de los
+   * caracteres reservados del `or()` de PostgREST y se cita, y si trae dígitos se
+   * busca ADEMÁS por esos dígitos en el teléfono — que se guarda E.164 sin `+`,
+   * así "+57 300 123" encuentra "57300123…". Tope 200 contactos para que la URL
+   * del `.in` no explote (miles de UUIDs → 400); una búsqueda razonable no lo
+   * alcanza. Sin coincidencias → lista vacía, no error. Ver ADR-0071.
+   */
+  let searchContactIds: string[] | null = null;
+  if (opts.contactSearch) {
+    const term = opts.contactSearch.replace(/[,()"\\]/g, " ").trim();
+    const digits = term.replace(/\D/g, "");
+    const ors: string[] = [];
+    if (term) ors.push(`name.ilike."*${term}*"`);
+    if (digits.length >= 3) ors.push(`phone.ilike."*${digits}*"`);
+    if (ors.length > 0) {
+      const { data, error: searchErr } = await supabase
+        .from("contacts")
+        .select("id")
+        .or(ors.join(","))
+        .limit(200);
+      if (searchErr) {
+        throw new Error(`getRecentConversations contact search: ${searchErr.message}`);
+      }
+      searchContactIds = (data ?? []).map((r) => r.id);
+      if (searchContactIds.length === 0) return [];
+    }
+  }
+
+  /**
+   * Filtro por palabra clave: conversaciones con ALGÚN mensaje cuyo texto contenga
+   * el término (`messages.content ilike`, sin mayúsculas; `%`/`_` del usuario se
+   * escapan para que sean literales). Se leen los mensajes coincidentes MÁS
+   * RECIENTES (tope 1000, el máximo de PostgREST), se dedupe a máximo 200
+   * conversaciones y se intersecta con los conjuntos de etiqueta/llamada, igual
+   * que arriba. Con un término genérico ("hola") se ven las ~200 conversaciones
+   * con coincidencia más reciente — volumen v1 bajo → aceptable; si crece, mover
+   * a una RPC con full-text. Ver ADR-0071.
+   */
+  if (opts.keyword) {
+    const pattern = `%${opts.keyword.replace(/([%_\\])/g, "\\$1")}%`;
+    const { data, error: kwErr } = await supabase
+      .from("messages")
+      .select("conversation_id")
+      .ilike("content", pattern)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (kwErr) throw new Error(`getRecentConversations keyword: ${kwErr.message}`);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const r of data ?? []) {
+      if (seen.has(r.conversation_id)) continue;
+      seen.add(r.conversation_id);
+      ids.push(r.conversation_id);
+      if (ids.length >= 200) break;
+    }
+    if (ids.length === 0) return [];
+    const kwIdSet = new Set(ids);
+    labelConvoIds = labelConvoIds ? labelConvoIds.filter((id) => kwIdSet.has(id)) : ids;
+    if (labelConvoIds.length === 0) return [];
+  }
+
+  /**
    * Corre la consulta de conversaciones. `hasOutboundCol` = false reintenta sin
    * `last_outbound_at` (resiliencia a que falte la migración 0023): en ese caso
    * SIEMPRE se ordena por `last_inbound_at`, así la página no se cae entre el
@@ -454,6 +521,8 @@ export async function getRecentConversations(
     if (opts.status) q = q.eq("status", opts.status);
     // `agent_id` vive en `conversations` desde la migración 0010 (columna base).
     if (opts.agentId) q = q.eq("agent_id", opts.agentId);
+    // Búsqueda por contacto: ids ya resueltos arriba (nombre o teléfono).
+    if (searchContactIds) q = q.in("contact_id", searchContactIds);
     // Etiqueta: conversaciones ya resueltas arriba (ids con ese `label_id`).
     if (labelConvoIds) q = q.in("id", labelConvoIds);
     // Producto/fuente (`product_category`, migración 0018). La página solo lo aplica

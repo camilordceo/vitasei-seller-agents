@@ -13,6 +13,7 @@ import type { ConversationStatus } from "@/lib/supabase/types";
 import { AgentFilter } from "./AgentFilter";
 import { DateRangeFilter } from "./DateRangeFilter";
 import { SelectFilter } from "./SelectFilter";
+import { TextFilter } from "./TextFilter";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,8 @@ type SearchParams = {
   tag?: string;
   product?: string;
   call?: string;
+  q?: string;
+  kw?: string;
   page?: string;
 };
 
@@ -165,6 +168,12 @@ export default async function ConversationsPage({
   // igual que los demás filtros). Ver docs/25.
   const callKey = searchParams.call === "with" ? "with" : undefined;
 
+  // Búsquedas de texto libre: cliente (nombre o teléfono) y palabra clave en los
+  // mensajes. Se recortan a 60 caracteres (mismo tope que el input) para que una
+  // URL manipulada no mande un término kilométrico a la consulta. Ver ADR-0071.
+  const searchKey = searchParams.q?.trim().slice(0, 60) || undefined;
+  const keywordKey = searchParams.kw?.trim().slice(0, 60) || undefined;
+
   // Pedimos UNA de más (PAGE_SIZE + 1) para saber si hay página siguiente sin un
   // count aparte: si vuelven más de PAGE_SIZE, hay "más antiguas".
   const fetched = await getRecentConversations({
@@ -181,6 +190,8 @@ export default async function ConversationsPage({
     withoutLabel: tagKey === TAG_NONE,
     productCategory: productKey,
     hasVoiceCall: callKey === "with" ? true : undefined,
+    contactSearch: searchKey,
+    keyword: keywordKey,
   });
   const hasNext = fetched.length > PAGE_SIZE;
   const convos = fetched.slice(0, PAGE_SIZE);
@@ -202,6 +213,8 @@ export default async function ConversationsPage({
     tag: tagKey,
     product: productKey,
     call: callKey,
+    q: searchKey,
+    kw: keywordKey,
   };
 
   /** Serializa un juego de filtros a la URL de la lista (omite los vacíos). */
@@ -217,6 +230,8 @@ export default async function ConversationsPage({
     if (next.tag) qs.set("tag", next.tag);
     if (next.product) qs.set("product", next.product);
     if (next.call) qs.set("call", next.call);
+    if (next.q) qs.set("q", next.q);
+    if (next.kw) qs.set("kw", next.kw);
     if (next.page && next.page > 1) qs.set("page", String(next.page));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
@@ -255,6 +270,8 @@ export default async function ConversationsPage({
     if (tagKey && omit !== "tag") p.tag = tagKey;
     if (productKey && omit !== "product") p.product = productKey;
     if (callKey && omit !== "call") p.call = callKey;
+    if (searchKey && omit !== "q") p.q = searchKey;
+    if (keywordKey && omit !== "kw") p.kw = keywordKey;
     return p;
   }
 
@@ -267,7 +284,9 @@ export default async function ConversationsPage({
       agentKey ||
       tagKey ||
       productKey ||
-      callKey,
+      callKey ||
+      searchKey ||
+      keywordKey,
   );
 
   // El filtro de fechas reemplaza la VENTANA entera, así que preserva todo lo
@@ -288,6 +307,8 @@ export default async function ConversationsPage({
   // Resumen de lo que está filtrando, para leerlo con el bloque plegado.
   const activeSummary: string[] = [];
   if (agentScope) activeSummary.push(agentScope);
+  if (searchKey) activeSummary.push(`Cliente: “${searchKey}”`);
+  if (keywordKey) activeSummary.push(`Texto: “${keywordKey}”`);
   if (hasDateRange) {
     activeSummary.push(
       fromKey && toKey ? `${fromKey} → ${toKey}` : fromKey ? `desde ${fromKey}` : `hasta ${toKey}`,
@@ -329,7 +350,7 @@ export default async function ConversationsPage({
         subtitle={
           activeSummary.length > 0
             ? activeSummary.join(" · ")
-            : "Agente, fechas, etiqueta, producto, estado y orden."
+            : "Cliente, palabras clave, agente, fechas, etiqueta, producto, estado y orden."
         }
         badge={activeSummary.length > 0 ? `${activeSummary.length} activo(s)` : undefined}
       >
@@ -341,6 +362,22 @@ export default async function ConversationsPage({
               preserved={preservedExcept("agent")}
             />
           )}
+          <TextFilter
+            label="Cliente"
+            ariaLabel="Buscar por nombre o teléfono"
+            paramName="q"
+            placeholder="Nombre o teléfono…"
+            current={searchKey ?? ""}
+            preserved={preservedExcept("q")}
+          />
+          <TextFilter
+            label="Palabras"
+            ariaLabel="Buscar por palabras clave en los mensajes"
+            paramName="kw"
+            placeholder="Palabra clave en los mensajes…"
+            current={keywordKey ?? ""}
+            preserved={preservedExcept("kw")}
+          />
           <SelectFilter
             label="Etiqueta"
             ariaLabel="Filtrar por etiqueta"
