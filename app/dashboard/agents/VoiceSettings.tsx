@@ -2,7 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { saveVoiceConfig, listSynthflowVoices, syncVoiceToSynthflow } from "../actions";
+import {
+  saveVoiceConfig,
+  listSynthflowVoices,
+  syncVoiceToSynthflow,
+  syncWebhookToSynthflow,
+} from "../actions";
 import type { VoiceConfigInput } from "./types";
 import type { SynthflowVoice } from "@/lib/synthflow/types";
 import { describeDelay, MAX_VOICE_STAGES, normalizeIdentifier } from "@/lib/agent/voiceCallPlan";
@@ -51,9 +56,11 @@ const PRESETS: Array<{ label: string; stages: StageDraft[] }> = [
 export function VoiceSettings({
   agentId,
   initial,
+  defaultWebhookUrl,
 }: {
   agentId: string;
   initial: VoiceConfigInput;
+  defaultWebhookUrl: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -62,6 +69,8 @@ export function VoiceSettings({
   const [modelId, setModelId] = useState(initial.modelId);
   const [fromNumber, setFromNumber] = useState(initial.fromNumber);
   const [apiKey, setApiKey] = useState("");
+  // Prellenado con la URL de esta app: lo normal es solo pulsar "Apuntar".
+  const [webhookUrl, setWebhookUrl] = useState(defaultWebhookUrl);
   const [voiceId, setVoiceId] = useState(initial.voiceId);
   const [voiceName, setVoiceName] = useState(initial.voiceName);
   const [prompt, setPrompt] = useState(initial.prompt);
@@ -140,6 +149,18 @@ export function VoiceSettings({
       } catch (e) {
         setStatus({ kind: "error", text: e instanceof Error ? e.message : String(e) });
       }
+    });
+  }
+
+  function syncWebhook() {
+    setStatus(null);
+    startTransition(async () => {
+      const result = await syncWebhookToSynthflow(agentId, webhookUrl);
+      setStatus(
+        result.ok
+          ? { kind: "ok", text: `Webhook del assistant apuntado a ${result.url}.` }
+          : { kind: "error", text: result.error ?? "No se pudo apuntar el webhook." },
+      );
     });
   }
 
@@ -234,6 +255,30 @@ export function VoiceSettings({
             Opcional: si se deja vacía se usa la del entorno.
           </span>
         </label>
+        <div className="sm:col-span-2">
+          <span className="text-sm font-medium text-slate-700">Webhook post-llamada</span>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <input
+              value={webhookUrl}
+              onChange={(e) => {
+                setWebhookUrl(e.target.value);
+                dirty();
+              }}
+              placeholder={defaultWebhookUrl}
+              className={`${field} min-w-0 flex-1 font-mono`}
+            />
+            <button type="button" onClick={syncWebhook} disabled={pending} className={secondary}>
+              {pending ? "Apuntando…" : "Apuntar assistant aquí"}
+            </button>
+          </div>
+          <span className="mt-1 block text-xs text-slate-500">
+            Escribe el <code>external_webhook_url</code> del assistant en Synthflow para que nos
+            avise apenas termina cada llamada. Ya viene con la URL correcta de esta app: solo
+            pulsa el botón. Usa el assistant <strong>guardado</strong> (si cambiaste el model_id,
+            guarda primero). Es opcional: sin webhook el sistema se entera igual por el cron,
+            solo con más latencia.
+          </span>
+        </div>
       </div>
 
       {/* --- Voz --------------------------------------------------------- */}

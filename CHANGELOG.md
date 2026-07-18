@@ -29,6 +29,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Llamadas con IA: webhook post-llamada configurable desde el dashboard.** Nuevo campo
+  "Webhook post-llamada" en la sección Conexión de Llamadas con IA, **prellenado con la URL
+  de producción** (`https://ai-seller-vitasei.vercel.app/api/webhooks/synthflow`, derivada de
+  `VERCEL_PROJECT_PRODUCTION_URL`), y botón "Apuntar assistant aquí" que escribe el
+  `external_webhook_url` del assistant en Synthflow con read-modify-write (no pisa el resto
+  del assistant) y **verifica releyendo** que el valor quedó. Es un botón explícito —no parte
+  del guardado— para no pisarle el webhook a un assistant ajeno por un model_id mal pegado
+  (ADR-0060). Queda auditado en `events_log` como `voice_webhook_synced`.
 - **Conversaciones: búsqueda por cliente y por palabra clave** (ADR-0071). Dos filtros de
   texto libre en el bloque de Filtros, combinables con todos los existentes y con la
   paginación:

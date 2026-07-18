@@ -92,6 +92,16 @@ export async function loadAgentVoiceConfig(
   };
 }
 
+/**
+ * URL de nuestro webhook post-llamada, la que debe quedar en el
+ * `external_webhook_url` del assistant. En Vercel se arma con el dominio de
+ * producción del proyecto; el fallback fijo cubre entornos locales.
+ */
+export function defaultSynthflowWebhookUrl(): string {
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL || "ai-seller-vitasei.vercel.app";
+  return `https://${host}/api/webhooks/synthflow`;
+}
+
 /** Credenciales efectivas: las del agente tapan las del entorno. */
 export function credsFor(agent: AgentVoiceConfig): SynthflowCreds {
   const apiKey = agent.apiKey ?? env.SYNTHFLOW_API_KEY;

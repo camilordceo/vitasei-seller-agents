@@ -313,3 +313,43 @@ export async function syncAssistantVoice(
     },
   });
 }
+
+/**
+ * Apunta el webhook post-llamada (`external_webhook_url`) del assistant a la URL
+ * dada, con el mismo read-modify-write que la voz (ver arriba). Como el PUT de
+ * assistants no está verificado campo a campo contra la cuenta real, después de
+ * escribir se relee y se confirma que el valor quedó; si no, se lanza error para
+ * que el operador lo configure a mano en el panel de Synthflow.
+ */
+export async function syncAssistantWebhook(
+  creds: SynthflowCreds,
+  modelId: string,
+  webhookUrl: string,
+): Promise<void> {
+  const assistant = await getAssistant(creds, modelId);
+  if (!assistant) throw new Error(`No se encontró el assistant ${modelId} en Synthflow.`);
+
+  const agent = isRecord(assistant.agent) ? { ...assistant.agent } : {};
+
+  await call(creds, `/assistants/${encodeURIComponent(modelId)}`, {
+    method: "PUT",
+    body: {
+      type: assistant.type ?? "outbound",
+      name: assistant.name ?? "agente",
+      external_webhook_url: webhookUrl,
+      agent,
+    },
+  });
+
+  const after = await getAssistant(creds, modelId);
+  const applied =
+    after != null &&
+    (after.external_webhook_url === webhookUrl ||
+      (isRecord(after.agent) && after.agent.external_webhook_url === webhookUrl));
+  if (!applied) {
+    throw new Error(
+      "Synthflow aceptó el cambio pero al releer el assistant el webhook no quedó guardado. " +
+        "Configúralo a mano en el panel de Synthflow (external_webhook_url del assistant).",
+    );
+  }
+}

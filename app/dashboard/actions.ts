@@ -17,6 +17,7 @@ import type { OrderEditInput } from "./orders/types";
 import type { AgentEditInput, AgentCatalogInput, VoiceConfigInput } from "./agents/types";
 import {
   credsFor,
+  defaultSynthflowWebhookUrl,
   loadAgentVoiceConfig,
   triggerVoiceCallNow,
 } from "@/lib/agent/voiceCall";
@@ -30,6 +31,7 @@ import {
   createExtractor,
   listVoices,
   syncAssistantVoice,
+  syncAssistantWebhook,
   updateExtractor,
 } from "@/lib/synthflow/client";
 import type { SynthflowVoice, VoiceExtractor } from "@/lib/synthflow/types";
@@ -1406,6 +1408,49 @@ export async function listSynthflowVoices(
     return { voices };
   } catch (e) {
     return { voices: [], error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Apunta el `external_webhook_url` del assistant del agente a nuestro endpoint
+ * post-llamada. Es un botón explícito (no parte del guardado) a propósito: un
+ * model_id mal pegado podría ser el assistant de otro producto del workspace y
+ * esto le pisaría su webhook (ADR-0060).
+ */
+export async function syncWebhookToSynthflow(
+  agentId: string,
+  webhookUrl?: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  try {
+    const supabase = createServiceClient();
+    const agent = await loadAgentVoiceConfig(supabase, agentId);
+    if (!agent) return { ok: false, error: "Falta aplicar la migración 0027." };
+    if (!agent.modelId) {
+      return { ok: false, error: "Primero guarda el model_id del assistant de Synthflow." };
+    }
+
+    const url = (webhookUrl ?? "").trim() || defaultSynthflowWebhookUrl();
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { ok: false, error: `La URL del webhook no es válida: ${url}` };
+    }
+    if (parsed.protocol !== "https:") {
+      return { ok: false, error: "El webhook debe ser https." };
+    }
+
+    await syncAssistantWebhook(credsFor(agent), agent.modelId, url);
+
+    await supabase.from("events_log").insert({
+      conversation_id: null,
+      type: "voice_webhook_synced",
+      payload: { agentId, modelId: agent.modelId, url } as unknown as Json,
+    });
+
+    return { ok: true, url };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 

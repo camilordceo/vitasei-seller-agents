@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getAgent, getAgentVoiceSettings } from "@/lib/dashboard/queries";
+import { defaultSynthflowWebhookUrl } from "@/lib/agent/voiceCall";
 import { formatDateTime } from "@/lib/dashboard/format";
 import { AgentEditor, type AgentEditorInitial } from "../AgentEditor";
 import { VoiceSettings } from "../VoiceSettings";
@@ -77,7 +78,11 @@ export default async function AgentDetailPage({ params }: { params: { id: string
         <AgentEditor agentId={agent.id} initial={initial} />
       </Collapsible>
 
-      <VoiceSettings agentId={agent.id} initial={voice} />
+      <VoiceSettings
+        agentId={agent.id}
+        initial={voice}
+        defaultWebhookUrl={defaultSynthflowWebhookUrl()}
+      />
 
       <p className="px-1 text-xs text-slate-400">
         El número entra por Callbell y se enruta a este agente por su channel_uuid (o número). Si
