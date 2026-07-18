@@ -76,16 +76,30 @@ muta ningún assistant y no se depende del webhook.
   cadencia clonada de retargets, sin ventana de 24h.
 
 ## Pendientes / deuda técnica
+**Ya hecho (2026-07-18):**
+- Código desplegado a `main` → producción. La feature queda **inerte** hasta los pasos de abajo.
+- **Assistant `outbound` de Vitasei creado por API**, sin tocar los de Rentmies:
+  `model_id = 8ec0c2da-822c-4294-a4d8-63fdc9ad39ed`
+  (*Vitasei Ventas Outbound (ai-seller)* · español · `America/Bogota` · grabación ON ·
+  máx. 7 min · `gpt-4.1-mini`). Verificado después de crearlo que los dos assistants de
+  Rentmies siguen `inbound`, con sus webhooks a Bubble y sus prompts intactos.
+  > Gotcha encontrado al crearlo: `POST /v2/assistants` devuelve **500** si el `name` trae
+  > caracteres no-ASCII (una raya `—` bastó). Con nombre ASCII, 200.
+
 **Para prender (manual, en orden):**
 1. Aplicar la migración `0027` en Supabase.
 2. Envs en Vercel: `SYNTHFLOW_API_KEY`, `SYNTHFLOW_WORKSPACE_ID`, `SYNTHFLOW_WEBHOOK_SECRET`,
    `SYNTHFLOW_USD_PER_MINUTE` y `VOICE_CALLS_ENABLED=true`.
-3. Crear en Synthflow un assistant **`outbound` dedicado** a este agente (los dos actuales son
-   `inbound` y son de Rentmies: **no reutilizarlos**) y pegar su `model_id` en el dashboard.
-4. Apuntar el `external_webhook_url` de **ese** assistant a `/api/webhooks/synthflow` (opcional:
+3. **BLOQUEANTE — número saliente.** El assistant nuevo **no tiene número** (`phone_number: null`)
+   y los dos que hay (`+576015110375`, `+576015148837`) están tomados por los assistants
+   **inbound de Rentmies**: moverlos rompería ese flujo, así que **no se tocaron**. Hay que
+   conseguirle un número propio a Vitasei (comprarlo en el panel de Synthflow o importarlo con
+   `POST /v2/custom-numbers`) y ponerlo en *Número saliente* en el dashboard.
+4. Pegar el `model_id` de arriba en el editor del agente (*Assistant de Synthflow*).
+5. Apuntar el `external_webhook_url` de **ese** assistant a `/api/webhooks/synthflow` (opcional:
    sin él, el cron reconcilia igual, solo con más latencia).
-5. Configurar cadencia, prompt de voz, voz y extractores; prender `voice_enabled`.
-6. **Hacer una llamada de prueba a un número propio** y confirmar la nota en la conversación.
+6. Configurar cadencia, prompt de voz, voz y extractores; prender `voice_enabled`.
+7. **Hacer una llamada de prueba a un número propio** y confirmar la nota en la conversación.
 
 **Deuda / a revisar:**
 - La tarifa por minuto es una estimación (`0.20`): ajustarla con la factura real de Synthflow.
