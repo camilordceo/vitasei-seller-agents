@@ -4,6 +4,7 @@ import { getAgent, getAgentVoiceSettings } from "@/lib/dashboard/queries";
 import { formatDateTime } from "@/lib/dashboard/format";
 import { AgentEditor, type AgentEditorInitial } from "../AgentEditor";
 import { VoiceSettings } from "../VoiceSettings";
+import { Collapsible } from "../../Collapsible";
 
 export const dynamic = "force-dynamic";
 // Recargar el catálogo (polling del vector store) puede tardar; damos margen.
@@ -38,6 +39,8 @@ export default async function AgentDetailPage({ params }: { params: { id: string
     scheduleTimezone: agent.scheduleTimezone,
     schedule: agent.schedule,
     paymentMethods: agent.paymentMethods,
+    costPerChat: agent.costPerChat != null ? String(agent.costPerChat) : "",
+    costCurrency: agent.costCurrency,
   };
 
   return (
@@ -62,9 +65,16 @@ export default async function AgentDetailPage({ params }: { params: { id: string
         </span>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
+      {/* Las dos mitades del agente (WhatsApp y voz) son plegables: juntas no caben
+          en pantalla. WhatsApp abre por defecto porque es lo que más se edita. */}
+      <Collapsible
+        title="WhatsApp"
+        subtitle="Proveedor y enrutamiento, catálogo, horario, métodos de pago y prompt."
+        badge={agent.enabled ? "Encendido" : "Apagado"}
+        defaultOpen
+      >
         <AgentEditor agentId={agent.id} initial={initial} />
-      </div>
+      </Collapsible>
 
       <VoiceSettings agentId={agent.id} initial={voice} />
 

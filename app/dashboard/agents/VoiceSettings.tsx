@@ -6,6 +6,7 @@ import { saveVoiceConfig, listSynthflowVoices, syncVoiceToSynthflow } from "../a
 import type { VoiceConfigInput } from "./types";
 import type { SynthflowVoice } from "@/lib/synthflow/types";
 import { describeDelay, MAX_VOICE_STAGES, normalizeIdentifier } from "@/lib/agent/voiceCallPlan";
+import { Collapsible } from "../Collapsible";
 
 /**
  * Editor de la IA de llamadas de un agente (docs/25, ADR-0060..0063):
@@ -155,29 +156,33 @@ export function VoiceSettings({
   }
 
   return (
-    <section className="space-y-5 rounded-lg border border-slate-200 bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900">Llamadas con IA</h2>
-          <p className="mt-0.5 text-sm text-slate-500">
+    // Plegable y CERRADA por defecto: la config de voz es larga y en el día a día
+    // se toca poco. El badge del encabezado dice si está activada sin abrirla.
+    <Collapsible
+      title="Llamadas con IA"
+      subtitle="Synthflow. El prompt de voz es independiente del de WhatsApp y viaja en cada llamada."
+      badge={enabled ? "Activadas" : "Apagadas"}
+    >
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <p className="max-w-prose text-sm text-slate-500">
             El agente llama por teléfono con Synthflow. El prompt de voz es{" "}
             <strong>independiente</strong> del de WhatsApp y se envía en cada llamada, así que el
             prompt que se ve en el panel de Synthflow no es el que corre.
           </p>
+          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => {
+                setEnabled(e.target.checked);
+                dirty();
+              }}
+              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+            />
+            Activadas
+          </label>
         </div>
-        <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => {
-              setEnabled(e.target.checked);
-              dirty();
-            }}
-            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-          />
-          Activadas
-        </label>
-      </div>
 
       {/* --- Conexión --------------------------------------------------- */}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -620,7 +625,8 @@ export function VoiceSettings({
             {status.text}
           </p>
         ) : null}
+        </div>
       </div>
-    </section>
+    </Collapsible>
   );
 }
