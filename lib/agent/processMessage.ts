@@ -19,6 +19,7 @@ import {
   agentMediaAuth,
   agentTeamUuid,
   agentVectorStoreId,
+  agentCurrency,
   providerForAgent,
   type Agent,
 } from "@/lib/agent/agents";
@@ -1013,6 +1014,9 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
           shipping_phone: draft.shipping.phone,
           notes: draft.notes,
           total,
+          // Sin esto la orden hereda el default 'COP' de la tabla y una venta en
+          // dólares queda guardada como pesos. Ver ADR-0068.
+          currency: agentCurrency(agent),
         })
         .select("id")
         .single();

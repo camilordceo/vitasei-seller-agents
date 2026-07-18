@@ -41,6 +41,12 @@ export interface AgentEditInput {
   costPerChat: string;
   /** Moneda ISO del costo por chat y de la lectura de retorno (COP, USD…). */
   costCurrency: string;
+  /**
+   * Moneda en la que este agente VENDE (COP · USD · MXN). Manda en Órdenes al
+   * filtrar por él y se sella en cada orden nueva. Distinta de `costCurrency`,
+   * que es la moneda de la pauta. Ver ADR-0068.
+   */
+  currency: string;
 }
 
 /** Carga de catálogo desde el editor de agente (server action `loadAgentCatalog`). */

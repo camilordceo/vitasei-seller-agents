@@ -10,9 +10,9 @@ import type {
   RetargetStats,
 } from "@/lib/dashboard/queries";
 import {
-  formatCOP,
   formatDate,
   formatDateTime,
+  formatMoney,
   formatNumber,
   formatUsd,
   relativeTime,
@@ -198,8 +198,16 @@ export function OrderList({ rows }: { rows: OrderRow[] }) {
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
-              <span className="text-sm font-semibold text-slate-900">{formatCOP(o.total)}</span>
-              <span className="text-xs text-slate-400">{relativeTime(o.createdAt)}</span>
+              {/* El monto va en la moneda de lectura; si es una conversión, debajo
+                  queda el importe real que se cobró. Ver ADR-0068. */}
+              <span className="text-sm font-semibold text-slate-900">
+                {formatMoney(o.displayTotal ?? o.total, o.displayCurrency ?? o.currency)}
+              </span>
+              {o.displayCurrency && o.displayCurrency !== o.currency && o.total != null ? (
+                <span className="text-xs text-slate-400">{formatMoney(o.total, o.currency)}</span>
+              ) : (
+                <span className="text-xs text-slate-400">{relativeTime(o.createdAt)}</span>
+              )}
             </div>
           </Link>
         </li>

@@ -19,6 +19,7 @@ import { DEFAULT_TEMPLATE_LANGUAGE } from "@/lib/kapso/templates";
 import type { MediaAuth } from "@/lib/messaging/mediaFetch";
 import { parseRetargetConfig, type RetargetStageConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
+import { normalizeCurrency, type CurrencyCode } from "@/lib/dashboard/currency";
 import type { Database } from "@/lib/supabase/types";
 
 /**
@@ -238,6 +239,15 @@ export function agentTeamUuid(agent: Agent): string | null {
 /** Vector store del catálogo del agente con fallback a env. */
 export function agentVectorStoreId(agent: Agent): string | null {
   return agent.vector_store_id ?? env.OPENAI_VECTOR_STORE_ID ?? null;
+}
+
+/**
+ * Moneda en la que VENDE el agente. Se sella en cada orden que nace, porque
+ * `orders.currency` tiene default 'COP' y sin esto una venta en dólares queda
+ * guardada como pesos. Tolera que falte la migración 0029. Ver ADR-0068.
+ */
+export function agentCurrency(agent: Agent): CurrencyCode {
+  return normalizeCurrency((agent as { currency?: string | null }).currency);
 }
 
 export interface AgentReactivationSettings {

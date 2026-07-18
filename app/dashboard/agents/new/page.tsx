@@ -38,6 +38,9 @@ const BLANK: AgentEditorInitial = {
   // heredado saldría en el reporte de retorno como si fuera un dato real.
   costPerChat: "",
   costCurrency: "COP",
+  // Moneda de venta: COP = mercado original. Se cambia a USD/MXN al crear el
+  // agente de ese mercado; queda sellada en cada orden que genere. Ver ADR-0068.
+  currency: "COP",
 };
 
 export default function NewAgentPage() {

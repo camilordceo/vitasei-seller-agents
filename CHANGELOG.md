@@ -29,6 +29,24 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Órdenes en varias monedas: por agente o todo homologado** (ADR-0068; migración `0029`).
+  Vitasei vende en COP, USD y MXN, pero Órdenes pintaba **todo con formato colombiano** y el
+  resumen sumaba pesos con dólares. Ahora: **filtro por agente** (nuevo) → los totales se leen
+  en la moneda de ese mercado; y viendo **todos los agentes**, un selector "Ver en" que
+  homologa la mezcla completa a **COP, USD o MXN** y la suma. Tasas fijas con el dólar como
+  pivote — **1 USD = 3.500 COP**, **1 USD = 20 MXN**, y de ahí **1 MXN = 175 COP** derivada,
+  no guardada aparte. La moneda de venta se configura por agente en su editor, al lado de
+  Costo por chat.
+  - **Causa raíz corregida:** `orders.currency` tiene `default 'COP'` y **ningún** punto de
+    creación la escribía, así que toda orden en la base decía "COP" —incluidas las de México—.
+    Los tres sitios que crean órdenes ahora sellan la moneda del agente. Para el histórico, la
+    lectura resuelve la moneda **por el agente** y no por esa columna envenenada.
+  - **Números honestos:** convierte antes de sumar y redondea una sola vez al final (no fila
+    por fila); lo que no tiene tasa se excluye **y se avisa** en pantalla en vez de colarse en
+    el total; cuando el número es una equivalencia se muestra la tasa usada; y cada fila lleva
+    debajo el importe real que se cobró.
+  - **Bug de paso:** `OrderList` usaba `formatCOP` para todo → una venta de US$ 49,90 se leía
+    "$ 49,90" (cincuenta pesos). Ahora usa la moneda de la fila.
 - **Retorno (ROAS): costo por chat por agente** (ADR-0065; migración `0028`, `docs/26`). El
   dashboard mostraba lo que entra y lo que cuesta la IA, pero no lo que cuesta **conseguir**
   cada conversación —el gasto grande—, así que las ventas se leían como si fueran ganancia.

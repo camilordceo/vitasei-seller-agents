@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { getOrdersPage } from "@/lib/dashboard/queries";
 import { formatMoney, formatNumber } from "@/lib/dashboard/format";
+import { DEFAULT_CURRENCY, normalizeCurrency, rateNote } from "@/lib/dashboard/currency";
 import { OrderList } from "../ui";
 import { Kpi, PageHeader } from "../ui-kit";
 import { NewOrderButton } from "./NewOrderButton";
+import { OrderScope } from "./OrderScope";
 import { OrderSearch } from "./OrderSearch";
 import type { OrderStatus } from "@/lib/supabase/types";
 
@@ -49,7 +51,14 @@ function SummaryCard({
 export default async function OrdersPage({
   searchParams,
 }: {
-  searchParams: { status?: string; q?: string; sku?: string; page?: string };
+  searchParams: {
+    status?: string;
+    q?: string;
+    sku?: string;
+    agent?: string;
+    cur?: string;
+    page?: string;
+  };
 }) {
   const raw = searchParams.status;
   const status = raw && VALID.has(raw) ? (raw as OrderStatus) : undefined;
@@ -57,11 +66,17 @@ export default async function OrdersPage({
   const pageNum = Math.max(1, Math.floor(Number(searchParams.page)) || 1);
 
   const sku = (searchParams.sku ?? "").slice(0, 100);
+  const agentId = (searchParams.agent ?? "").slice(0, 64);
+  // Moneda pedida por URL; lo que no sea COP/USD/MXN cae al default en vez de
+  // romper la página. Con un agente elegido, `getOrdersPage` ignora esto y usa la suya.
+  const requested = normalizeCurrency(searchParams.cur);
 
-  const { rows, summary, hasNext, products } = await getOrdersPage({
+  const { rows, summary, hasNext, products, agents } = await getOrdersPage({
     status,
     q: q || undefined,
     sku: sku || undefined,
+    agentId: agentId || undefined,
+    display: requested,
     page: pageNum,
     pageSize: PAGE_SIZE,
   });
@@ -69,8 +84,12 @@ export default async function OrdersPage({
   // llega uno viejo por URL el filtro sigue aplicando (y da 0), pero el `<select>`
   // no puede pintar una opción que no tiene.
   const skuForSelect = products.some((p) => p.sku === sku) ? sku : "";
+  // Igual que con el SKU: un `?agent=` que ya no tiene órdenes sigue filtrando
+  // (y da 0), pero el `<select>` no puede pintar una opción que no existe.
+  const agentForSelect = agents.some((a) => a.id === agentId) ? agentId : "";
+  const scopedAgent = agents.find((a) => a.id === agentId);
   const hasPrev = pageNum > 1;
-  const anyFilter = Boolean(status || q || sku);
+  const anyFilter = Boolean(status || q || sku || agentId);
 
   function hrefFor(next: {
     status?: OrderStatus;
@@ -82,6 +101,8 @@ export default async function OrdersPage({
     if (next.status) qs.set("status", next.status);
     if (next.q) qs.set("q", next.q);
     if (next.sku) qs.set("sku", next.sku);
+    if (agentId) qs.set("agent", agentId);
+    else if (summary.currency !== DEFAULT_CURRENCY) qs.set("cur", summary.currency);
     if (next.page && next.page > 1) qs.set("page", String(next.page));
     const s = qs.toString();
     return s ? `/dashboard/orders?${s}` : "/dashboard/orders";
@@ -90,6 +111,20 @@ export default async function OrdersPage({
   // Filtros a conservar cuando cambia la búsqueda/producto (sin `page`: vuelve a 1).
   const preserved: Record<string, string> = {};
   if (status) preserved.status = status;
+  if (agentId) preserved.agent = agentId;
+  else if (summary.currency !== DEFAULT_CURRENCY) preserved.cur = summary.currency;
+
+  // El alcance (agente/moneda) se conserva al buscar o cambiar de producto, pero NO
+  // se copia a sí mismo: el propio selector lo reescribe.
+  const scopePreserved: Record<string, string> = {};
+  if (status) scopePreserved.status = status;
+  if (q) scopePreserved.q = q;
+  if (sku) scopePreserved.sku = sku;
+
+  // Nota de moneda: solo cuando el número que se ve es una equivalencia nuestra.
+  const moneySub = summary.converted
+    ? `homologado a ${summary.currency} · ${rateNote(summary.currency)}`
+    : null;
 
   return (
     <div className="space-y-4">
@@ -110,7 +145,7 @@ export default async function OrdersPage({
         <SummaryCard
           label="En ventas"
           value={formatMoney(summary.revenue, summary.currency)}
-          sub={summary.currency ? "sin canceladas" : "sin canceladas · varias monedas"}
+          sub={moneySub ? `sin canceladas · ${moneySub}` : "sin canceladas"}
           tone="teal"
         />
         <SummaryCard
@@ -127,9 +162,34 @@ export default async function OrdersPage({
         />
       </section>
 
+      {/* Si alguna orden quedó fuera de las sumas, se dice. Un total que esconde
+          filas descartadas se lee como completo y no lo es. */}
+      {summary.excluded > 0 && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {summary.excluded} {summary.excluded === 1 ? "orden quedó" : "órdenes quedaron"} fuera de
+          los totales: {summary.excluded === 1 ? "su moneda no tiene" : "sus monedas no tienen"}{" "}
+          tasa de conversión configurada.
+        </p>
+      )}
+
       <NewOrderButton />
 
       <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
+        <OrderScope
+          agents={agents}
+          agentId={agentForSelect}
+          currency={summary.currency}
+          preserved={scopePreserved}
+        />
+
+        {scopedAgent && (
+          <p className="text-xs text-slate-400">
+            Viendo solo {scopedAgent.name}: sus totales van en {scopedAgent.currency}, la moneda
+            del agente. Para sumar varios mercados en una sola moneda, vuelve a “Todos los
+            agentes”.
+          </p>
+        )}
+
         <OrderSearch q={q} sku={skuForSelect} products={products} preserved={preserved} />
 
         <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[11px] bg-slate-100 p-1">

@@ -41,6 +41,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
     paymentMethods: agent.paymentMethods,
     costPerChat: agent.costPerChat != null ? String(agent.costPerChat) : "",
     costCurrency: agent.costCurrency,
+    currency: agent.currency,
   };
 
   return (

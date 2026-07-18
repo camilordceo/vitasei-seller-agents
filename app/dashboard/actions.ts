@@ -6,6 +6,7 @@ import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods } from "@/lib/agent/paymentMethods";
 import { normalizeProviderId } from "@/lib/messaging/types";
+import { DEFAULT_CURRENCY, normalizeCurrency, type CurrencyCode } from "@/lib/dashboard/currency";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
 import { loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
@@ -129,6 +130,25 @@ function textOrNull(v: string): string | null {
 }
 
 /**
+ * Moneda de venta del agente dueño de una conversación, para sellarla en la orden
+ * que nace. Sin agente (órdenes manuales sueltas) cae al default. Best-effort: si
+ * falta la migración 0029 la lectura falla y volvemos al default en vez de tumbar
+ * la creación de la orden. Ver ADR-0068.
+ */
+async function currencyForConversationAgent(
+  supabase: ReturnType<typeof createServiceClient>,
+  agentId: string | null,
+): Promise<CurrencyCode> {
+  if (!agentId) return DEFAULT_CURRENCY;
+  try {
+    const { data } = await supabase.from("agents").select("currency").eq("id", agentId).maybeSingle();
+    return normalizeCurrency((data as { currency?: string | null } | null)?.currency);
+  } catch {
+    return DEFAULT_CURRENCY;
+  }
+}
+
+/**
  * Edita una orden: corrige la cabecera (estado, método, envío, notas, total) y
  * REEMPLAZA sus ítems por los enviados. Sirve para arreglar lo que la IA marcó
  * mal al cerrar la venta. Corre server-side con service-role (protegida por el
@@ -227,7 +247,7 @@ export async function createOrderForConversation(conversationId: string): Promis
 
   const { data: convo, error: convoErr } = await supabase
     .from("conversations")
-    .select("contact_id, fulfillment_method")
+    .select("contact_id, fulfillment_method, agent_id")
     .eq("id", conversationId)
     .maybeSingle();
   if (convoErr) throw new Error(`createOrderForConversation convo: ${convoErr.message}`);
@@ -240,6 +260,8 @@ export async function createOrderForConversation(conversationId: string): Promis
       contact_id: convo.contact_id,
       status: "pending_handoff",
       fulfillment_method: convo.fulfillment_method ?? "undecided",
+      // Misma razón que en el bot: el default de la tabla es COP. Ver ADR-0068.
+      currency: await currencyForConversationAgent(supabase, convo.agent_id),
     })
     .select("id")
     .single();
@@ -527,6 +549,10 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
     // que el reporte distingue de un 0 (un costo 0 daría un retorno infinito).
     cost_per_chat: parseCostPerChat(input.costPerChat),
     cost_currency: (textOrNull(input.costCurrency) ?? "COP").toUpperCase(),
+    // Moneda de VENTA: manda en Órdenes y se sella en cada orden nueva. Se normaliza
+    // contra las monedas con tasa conocida para que nunca entre un código sin
+    // conversión posible. Ver ADR-0068.
+    currency: normalizeCurrency(input.currency),
   };
   const newKey = input.callbellApiKey.trim();
   if (newKey.length > 0) patch.callbell_api_key = newKey;

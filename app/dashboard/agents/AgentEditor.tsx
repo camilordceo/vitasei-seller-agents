@@ -12,6 +12,12 @@ import {
 } from "@/lib/openai/catalog";
 import type { CatalogImportResult } from "@/lib/openai/catalogLoader";
 import {
+  CURRENCY_LABELS,
+  normalizeCurrency,
+  rateNote,
+  SUPPORTED_CURRENCIES,
+} from "@/lib/dashboard/currency";
+import {
   isAgentActiveNow,
   COLOMBIA_HOLIDAYS_2026,
   DEFAULT_TIMEZONE,
@@ -60,6 +66,8 @@ export interface AgentEditorInitial {
   /** Costo por chat (pauta) como texto; vacío = sin configurar. Ver ADR-0065. */
   costPerChat: string;
   costCurrency: string;
+  /** Moneda de VENTA del agente (COP · USD · MXN). Ver ADR-0068. */
+  currency: string;
 }
 
 /**
@@ -108,6 +116,9 @@ export function AgentEditor({
   // Costo por chat (pauta) + su moneda: el insumo del retorno (ROAS). Ver ADR-0065.
   const [costPerChat, setCostPerChat] = useState(initial.costPerChat);
   const [costCurrency, setCostCurrency] = useState(initial.costCurrency || "COP");
+
+  // Moneda de VENTA del agente: manda en Órdenes y se sella en cada orden. Ver ADR-0068.
+  const [currency, setCurrency] = useState(normalizeCurrency(initial.currency));
 
   // Horario (encendido/apagado) — franjas por día. Ver ADR-0033.
   const [scheduleEnabled, setScheduleEnabled] = useState(initial.scheduleEnabled);
@@ -275,6 +286,7 @@ export function AgentEditor({
         .filter((m) => m.tag.length > 0),
       costPerChat,
       costCurrency,
+      currency,
     };
 
     const hasCatalog = Boolean(catalogProducts && catalogProducts.length > 0);
@@ -969,6 +981,44 @@ export function AgentEditor({
           >
             + Agregar método
           </button>
+        </div>
+      </fieldset>
+
+      {/* Moneda de VENTA del agente → manda en Órdenes. Ver ADR-0068. */}
+      <fieldset className="grid gap-4 rounded-md border border-slate-200 bg-slate-50/60 p-4 sm:grid-cols-2">
+        <legend className="px-1 text-sm font-semibold text-slate-700">Moneda del agente</legend>
+
+        <div>
+          <label htmlFor="currency" className={labelCls}>
+            En qué moneda vende
+          </label>
+          <select
+            id="currency"
+            value={currency}
+            onChange={(e) => {
+              dirty();
+              setCurrency(normalizeCurrency(e.target.value));
+            }}
+            className={inputCls}
+          >
+            {SUPPORTED_CURRENCIES.map((c) => (
+              <option key={c} value={c}>
+                {c} · {CURRENCY_LABELS[c]}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-400">
+            Los precios de este mercado. Al filtrar Órdenes por este agente, sus totales se leen
+            en esta moneda, y cada orden nueva se guarda con ella.
+          </p>
+        </div>
+
+        <div className="flex items-end">
+          <p className="text-xs text-slate-400">
+            Viendo <strong className="font-medium text-slate-500">todos</strong> los agentes,
+            Órdenes homologa las monedas a la que elijas allá. Tasas fijas:{" "}
+            {rateNote("COP")}.
+          </p>
         </div>
       </fieldset>
 

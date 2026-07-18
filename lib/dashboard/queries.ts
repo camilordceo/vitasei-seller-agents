@@ -48,6 +48,14 @@ import { normalizeProviderId, type MessagingProviderId } from "@/lib/messaging/t
 import { findHotmartAgentId } from "@/lib/agent/agents";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
+import {
+  convertMoney,
+  DEFAULT_CURRENCY,
+  normalizeCurrency,
+  roundForCurrency,
+  sumConverted,
+  type CurrencyCode,
+} from "@/lib/dashboard/currency";
 
 /**
  * Consultas de solo lectura del dashboard (Sprint 6).
@@ -912,10 +920,20 @@ export interface OrderRow {
   status: OrderStatus;
   method: FulfillmentMethod;
   total: number | null;
+  /** Moneda NATIVA de la orden (la del agente que la generó). Ver ADR-0068. */
   currency: string;
   itemsCount: number;
   shippingCity: string | null;
   createdAt: string;
+  /** Agente dueño (vía la conversación). null en órdenes manuales sueltas. */
+  agentId?: string | null;
+  agentName?: string | null;
+  /**
+   * Total ya expresado en la moneda de lectura. Igual a `total` cuando no hubo
+   * conversión; `null` si la orden no tiene monto o no se pudo convertir.
+   */
+  displayTotal?: number | null;
+  displayCurrency?: CurrencyCode;
 }
 
 /** Lista de órdenes (opcionalmente filtrada por estado), más recientes primero. */
@@ -979,6 +997,13 @@ export interface OrderListFilters {
   q?: string;
   /** SKU exacto de un ítem de la orden. */
   sku?: string;
+  /** Agente dueño de la conversación que originó la orden. Ver ADR-0068. */
+  agentId?: string;
+  /**
+   * Moneda en la que se quiere LEER el resultado. Al filtrar por un agente manda
+   * la suya (se ignora esto); viendo todos, homologa la mezcla a esta. Ver ADR-0068.
+   */
+  display?: CurrencyCode;
   /** Página 1-based. */
   page?: number;
   pageSize?: number;
@@ -987,14 +1012,21 @@ export interface OrderListFilters {
 export interface OrdersSummary {
   /** Órdenes que cumplen el filtro (todas, no solo la página). */
   count: number;
-  /** Monto de las órdenes NO canceladas. */
+  /** Monto de las órdenes NO canceladas, YA en `currency`. */
   revenue: number;
-  /** Monto de las confirmadas. */
+  /** Monto de las confirmadas, ya en `currency`. */
   confirmedRevenue: number;
-  /** Ticket promedio de las no canceladas que tienen total. */
+  /** Ticket promedio de las no canceladas que tienen total, ya en `currency`. */
   avgTicket: number;
-  /** Moneda si TODAS las órdenes del filtro coinciden; null si hay mezcla. */
-  currency: string | null;
+  /** Moneda en la que están expresados los montos de arriba. */
+  currency: CurrencyCode;
+  /** true si hubo que convertir al menos una orden (los totales son equivalencias). */
+  converted: boolean;
+  /**
+   * Órdenes que quedaron FUERA de las sumas por no tener tasa. Se expone para
+   * decirlo en pantalla: un total que esconde filas descartadas miente.
+   */
+  excluded: number;
 }
 
 export interface OrdersPage {
@@ -1004,6 +1036,8 @@ export interface OrdersPage {
   hasNext: boolean;
   /** Productos presentes en las órdenes (para el selector), ordenados por nombre. */
   products: Array<{ sku: string; name: string }>;
+  /** Agentes con órdenes (para el selector), con su moneda. */
+  agents: Array<{ id: string; name: string; brand: string | null; currency: CurrencyCode }>;
 }
 
 /**
@@ -1020,7 +1054,7 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
   const page = Math.max(1, opts.page ?? 1);
   const supabase = createServiceClient();
 
-  const [orders, items, contacts] = await Promise.all([
+  const [orders, items, contacts, convos, agents] = await Promise.all([
     fetchAllRows(
       (from, to) =>
         supabase
@@ -1040,9 +1074,17 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
       (from, to) => supabase.from("contacts").select("id, name, phone").range(from, to),
       "getOrdersPage contacts",
     ),
+    // La orden no lleva `agent_id`: cuelga de su conversación (migración 0010).
+    fetchAllRows(
+      (from, to) => supabase.from("conversations").select("id, agent_id").range(from, to),
+      "getOrdersPage conversations",
+    ),
+    getAgents(),
   ]);
 
   const contactById = new Map(contacts.map((c) => [c.id, c]));
+  const agentByConvo = new Map(convos.map((c) => [c.id, c.agent_id as string | null]));
+  const agentById = new Map(agents.map((a) => [a.id, a]));
 
   // Ítems por orden: conteo (para la lista), SKUs (para el filtro de producto) y
   // el catálogo de opciones del selector (sku → nombre más reciente que se vio).
@@ -1059,6 +1101,7 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
   const q = searchKey(opts.q).trim();
   const filtered = orders.filter((o) => {
     if (opts.status && o.status !== opts.status) return false;
+    if (opts.agentId && agentByConvo.get(o.conversation_id) !== opts.agentId) return false;
     if (opts.sku && !itemsByOrder.get(o.id)?.skus.has(opts.sku)) return false;
     if (q) {
       const c = contactById.get(o.contact_id);
@@ -1069,20 +1112,50 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
     return true;
   });
 
+  // Moneda de lectura: filtrando por un agente manda la SUYA (no tiene sentido leer
+  // el mercado mexicano en pesos colombianos); viendo todos, la que pida la UI.
+  const filterAgent = opts.agentId ? agentById.get(opts.agentId) : undefined;
+  const display: CurrencyCode = filterAgent?.currency ?? opts.display ?? DEFAULT_CURRENCY;
+
+  // Moneda NATIVA de cada orden. Manda la del agente, no `orders.currency`: esa
+  // columna tiene default 'COP' y hasta ADR-0068 nadie la escribía, así que las
+  // órdenes históricas de EE.UU./México dicen "COP" sobre montos que no lo son.
+  // El valor guardado solo se usa cuando la orden no tiene agente (manuales sueltas).
+  const currencyOf = (o: { conversation_id: string; currency: string }): CurrencyCode => {
+    const agentId = agentByConvo.get(o.conversation_id);
+    const agent = agentId ? agentById.get(agentId) : undefined;
+    return agent ? agent.currency : normalizeCurrency(o.currency);
+  };
+
   // Resumen sobre el filtro COMPLETO. Las canceladas no suman monto (mismo
   // criterio que "Órdenes generadas" en Reportes) pero sí cuentan en `count`.
   const active = filtered.filter((o) => o.status !== "cancelled");
-  const revenue = active.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
-  const withTotal = active.filter((o) => Number(o.total) > 0);
-  const currencies = new Set(filtered.map((o) => o.currency).filter(Boolean));
+
+  // Suma homologada a `display`. La lógica (convertir antes de sumar, redondear una
+  // sola vez, excluir lo que no tiene tasa) vive en `sumConverted`, que está testeada.
+  const entriesOf = (list: typeof filtered) =>
+    list.map((o) => ({ amount: o.total, currency: currencyOf(o) }));
+
+  const sales = sumConverted(entriesOf(active), display);
+  const confirmed = sumConverted(
+    entriesOf(filtered.filter((o) => o.status === "confirmed")),
+    display,
+  );
+  // El ticket promedio se reparte solo entre órdenes CON monto (> 0): meter las de
+  // total 0 o vacío hundiría el promedio con filas que no son una venta medida.
+  const ticketBase = sumConverted(entriesOf(active.filter((o) => Number(o.total) > 0)), display);
+
   const summary: OrdersSummary = {
     count: filtered.length,
-    revenue,
-    confirmedRevenue: filtered
-      .filter((o) => o.status === "confirmed")
-      .reduce((sum, o) => sum + (Number(o.total) || 0), 0),
-    avgTicket: withTotal.length > 0 ? revenue / withTotal.length : 0,
-    currency: currencies.size === 1 ? [...currencies][0] : null,
+    revenue: sales.total,
+    confirmedRevenue: confirmed.total,
+    avgTicket:
+      ticketBase.counted > 0
+        ? roundForCurrency(ticketBase.total / ticketBase.counted, display)
+        : 0,
+    currency: display,
+    converted: sales.converted,
+    excluded: sales.excluded,
   };
 
   const start = (page - 1) * pageSize;
@@ -1091,6 +1164,9 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
   return {
     rows: slice.map((r) => {
       const c = contactById.get(r.contact_id);
+      const agentId = agentByConvo.get(r.conversation_id) ?? null;
+      const agent = agentId ? agentById.get(agentId) : undefined;
+      const native = currencyOf(r);
       return {
         id: r.id,
         conversationId: r.conversation_id,
@@ -1099,10 +1175,17 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
         status: r.status,
         method: r.fulfillment_method,
         total: r.total,
-        currency: r.currency,
+        currency: native,
         itemsCount: itemsByOrder.get(r.id)?.count ?? 0,
         shippingCity: r.shipping_city,
         createdAt: r.created_at,
+        agentId,
+        agentName: agent?.name ?? null,
+        displayTotal: (() => {
+          const v = convertMoney(r.total, native, display);
+          return v == null ? null : roundForCurrency(v, display);
+        })(),
+        displayCurrency: display,
       };
     }),
     summary,
@@ -1111,6 +1194,16 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
     products: [...productBySku.entries()]
       .map(([sku, name]) => ({ sku, name }))
       .sort((a, b) => a.name.localeCompare(b.name, "es")),
+    // Solo agentes que TIENEN órdenes: un selector con marcas que siempre dan 0 es ruido.
+    agents: (() => {
+      const withOrders = new Set(
+        orders.map((o) => agentByConvo.get(o.conversation_id)).filter(Boolean) as string[],
+      );
+      return agents
+        .filter((a) => withOrders.has(a.id))
+        .map((a) => ({ id: a.id, name: a.name, brand: a.brand, currency: a.currency }))
+        .sort((a, b) => a.name.localeCompare(b.name, "es"));
+    })(),
   };
 }
 
@@ -1722,6 +1815,8 @@ export interface AgentRow {
   enabled: boolean;
   /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
   paymentMethods: PaymentMethodConfig[];
+  /** Moneda en la que VENDE (manda en Órdenes). Ver ADR-0068. */
+  currency: CurrencyCode;
 }
 
 /**
@@ -1757,6 +1852,7 @@ export async function getAgents(): Promise<AgentRow[]> {
     model: a.model,
     enabled: a.enabled,
     paymentMethods: parsePaymentMethods((a as { payment_methods?: unknown }).payment_methods),
+    currency: normalizeCurrency((a as { currency?: string | null }).currency),
   }));
 }
 
@@ -1791,6 +1887,8 @@ export interface AgentDetail {
   /** Costo de traer una conversación (pauta). null = sin configurar. Ver ADR-0065. */
   costPerChat: number | null;
   costCurrency: string;
+  /** Moneda en la que VENDE (manda en Órdenes). Ver ADR-0068. */
+  currency: CurrencyCode;
   createdAt: string;
   updatedAt: string;
 }
@@ -1834,6 +1932,7 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
     schedule: parseAgentSchedule(data.schedule),
     paymentMethods: parsePaymentMethods((data as { payment_methods?: unknown }).payment_methods),
     ...readCostConfig(data),
+    currency: normalizeCurrency((data as { currency?: string | null }).currency),
     createdAt: data.created_at,
     updatedAt: data.updated_at,
   };
