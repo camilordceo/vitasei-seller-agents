@@ -297,7 +297,14 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   Nueva env `RETARGET_STAGE3_MS` (default 23h).
 
 ### Fixed
-- **La credencial de descarga de adjuntos podía filtrarse a un host ajeno** (ADR-0056; afectaba
+- **El PUT de assistants de Synthflow devolvía 500 y tumbaba el botón del webhook.** Dos
+  blindajes: (1) el `name` que se reenvía en el PUT se **plancha a ASCII** antes de escribir
+  (`asciiAssistantName`, con tests) — el API de assistants revienta con no-ASCII, gotcha
+  documentado en sprint-08 y que también afectaba a la sincronización de voz; (2) el apuntado
+  del webhook ahora intenta **en escalera** (cuerpo completo → webhook dentro de `agent` →
+  cuerpo mínimo), releyendo tras cada intento para verificar que el webhook quedó **y** que no
+  se pisó el prompt/voz/saludo del assistant (si se pisó, restaura y avisa). Además los errores
+  de Synthflow ahora incluyen el **cuerpo de la respuesta**, no solo el status.
   también a **Callbell**, donde el agujero existía desde ADR-0022). `fetchMedia` probaba el
   patrón de host contra la **URL completa**, así que `/callbell/i` lo satisfacía cualquier URL
   con "callbell" en el path o el query (`https://atacante.com/x?ref=callbell`). Como la URL del

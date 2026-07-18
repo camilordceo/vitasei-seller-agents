@@ -61,8 +61,11 @@ async function call(
       res.status === 401
         ? " (revisa la API key y que SYNTHFLOW_API_BASE sea la región del workspace)"
         : "";
+    // El cuerpo va en el mensaje: sus 500 no dicen nada por el status solo, y
+    // este texto es lo único que el operador ve en el dashboard.
+    const detail = text.trim() ? ` — ${text.trim().slice(0, 200)}` : "";
     throw new SynthflowError(
-      `Synthflow ${init?.method ?? "GET"} ${path} falló: ${res.status}${hint}`,
+      `Synthflow ${init?.method ?? "GET"} ${path} falló: ${res.status}${hint}${detail}`,
       res.status,
       text.slice(0, 500),
     );
@@ -288,6 +291,23 @@ export async function getAssistant(
 }
 
 /**
+ * El API de assistants devuelve **500 con caracteres no-ASCII en `name`** (una
+ * raya `—` bastó al crear; ver sprint-08). Como el PUT reenvía el nombre leído
+ * del GET, hay que plancharlo a ASCII antes de escribir: primero se quitan las
+ * tildes (NFKD) y lo que quede fuera de ASCII se vuelve espacio.
+ */
+export function asciiAssistantName(name: unknown): string {
+  const raw = typeof name === "string" && name.trim() ? name : "agente";
+  const ascii = raw
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return ascii || "agente";
+}
+
+/**
  * Sincroniza SOLO la voz del assistant, con **read-modify-write**: se lee el
  * `agent` completo, se cambia `voice_id` y se reenvía. Sin esto, un `PUT` con
  * cuerpo parcial puede borrarle campos a un assistant que **compartimos con otro
@@ -308,18 +328,49 @@ export async function syncAssistantVoice(
     method: "PUT",
     body: {
       type: assistant.type ?? "outbound",
-      name: assistant.name ?? "agente",
+      name: asciiAssistantName(assistant.name),
       agent,
     },
   });
 }
 
+function webhookApplied(after: Record<string, unknown> | null, webhookUrl: string): boolean {
+  if (!after) return false;
+  if (after.external_webhook_url === webhookUrl) return true;
+  return isRecord(after.agent) && after.agent.external_webhook_url === webhookUrl;
+}
+
+/**
+ * ¿El PUT le borró el cerebro al assistant? Se comparan los campos que duelen
+ * (prompt, voz, saludo): si antes tenían valor y después cambiaron, algo se pisó.
+ */
+function brainIntact(
+  before: Record<string, unknown>,
+  after: Record<string, unknown> | null,
+): boolean {
+  if (!after) return false;
+  const b = isRecord(before.agent) ? before.agent : {};
+  const a = isRecord(after.agent) ? after.agent : {};
+  for (const key of ["prompt", "voice_id", "greeting_message"]) {
+    const prev = b[key];
+    if (typeof prev === "string" && prev.length > 0 && a[key] !== prev) return false;
+  }
+  return true;
+}
+
 /**
  * Apunta el webhook post-llamada (`external_webhook_url`) del assistant a la URL
- * dada, con el mismo read-modify-write que la voz (ver arriba). Como el PUT de
- * assistants no está verificado campo a campo contra la cuenta real, después de
- * escribir se relee y se confirma que el valor quedó; si no, se lanza error para
- * que el operador lo configure a mano en el panel de Synthflow.
+ * dada. El PUT de assistants no está documentado de forma confiable (su primer
+ * uso real devolvió un 500 pelado), así que se intenta en escalera, del cuerpo
+ * más completo al más chico:
+ *
+ *   1. read-modify-write con el webhook al tope (forma del POST de creación),
+ *   2. el webhook DENTRO de `agent` (por si al tope no lo acepta el PUT),
+ *   3. cuerpo mínimo solo con el webhook (por si algún campo releído lo revienta).
+ *
+ * Después de cada intento se relee y se verifica que (a) el webhook quedó y
+ * (b) no se borró el prompt/voz/saludo del assistant. Si un intento dejó el
+ * assistant a medias, se intenta restaurar con el cuerpo completo original.
  */
 export async function syncAssistantWebhook(
   creds: SynthflowCreds,
@@ -330,26 +381,53 @@ export async function syncAssistantWebhook(
   if (!assistant) throw new Error(`No se encontró el assistant ${modelId} en Synthflow.`);
 
   const agent = isRecord(assistant.agent) ? { ...assistant.agent } : {};
+  const base = {
+    type: assistant.type ?? "outbound",
+    name: asciiAssistantName(assistant.name),
+  };
 
-  await call(creds, `/assistants/${encodeURIComponent(modelId)}`, {
-    method: "PUT",
-    body: {
-      type: assistant.type ?? "outbound",
-      name: assistant.name ?? "agente",
-      external_webhook_url: webhookUrl,
-      agent,
-    },
-  });
+  const attempts: Array<Record<string, unknown>> = [
+    { ...base, external_webhook_url: webhookUrl, agent },
+    { ...base, agent: { ...agent, external_webhook_url: webhookUrl } },
+    { external_webhook_url: webhookUrl },
+  ];
 
-  const after = await getAssistant(creds, modelId);
-  const applied =
-    after != null &&
-    (after.external_webhook_url === webhookUrl ||
-      (isRecord(after.agent) && after.agent.external_webhook_url === webhookUrl));
-  if (!applied) {
-    throw new Error(
-      "Synthflow aceptó el cambio pero al releer el assistant el webhook no quedó guardado. " +
-        "Configúralo a mano en el panel de Synthflow (external_webhook_url del assistant).",
+  let lastError: Error | null = null;
+  for (const body of attempts) {
+    try {
+      await call(creds, `/assistants/${encodeURIComponent(modelId)}`, { method: "PUT", body });
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      continue;
+    }
+
+    const after = await getAssistant(creds, modelId);
+
+    if (!brainIntact(assistant, after)) {
+      // El PUT pisó campos del assistant: restaurar con el cuerpo completo
+      // original (mejor esfuerzo) y avisar en vez de seguir intentando.
+      try {
+        await call(creds, `/assistants/${encodeURIComponent(modelId)}`, {
+          method: "PUT",
+          body: { ...base, agent },
+        });
+      } catch {
+        // se reporta abajo igual
+      }
+      throw new Error(
+        "El PUT de Synthflow alteró campos del assistant (prompt/voz). Se intentó restaurar; " +
+          "revisa el assistant en el panel de Synthflow y configura el webhook a mano.",
+      );
+    }
+
+    if (webhookApplied(after, webhookUrl)) return;
+    lastError = new Error(
+      "Synthflow aceptó el cambio pero al releer el assistant el webhook no quedó guardado.",
     );
   }
+
+  throw new Error(
+    `No se pudo apuntar el webhook del assistant: ${lastError?.message ?? "error desconocido"}. ` +
+      "Configúralo a mano en el panel de Synthflow (external_webhook_url del assistant).",
+  );
 }
