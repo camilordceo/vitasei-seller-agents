@@ -34,6 +34,10 @@ const BLANK: AgentEditorInitial = {
   schedule: { days: emptyWeek(), holidays: [] },
   // Métodos por defecto (Colombia); se editan/quitan según el mercado del agente.
   paymentMethods: DEFAULT_PAYMENT_METHODS,
+  // Costo por chat vacío a propósito: cada mercado tiene el suyo y un default
+  // heredado saldría en el reporte de retorno como si fuera un dato real.
+  costPerChat: "",
+  costCurrency: "COP",
 };
 
 export default function NewAgentPage() {

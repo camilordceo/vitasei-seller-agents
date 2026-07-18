@@ -34,6 +34,13 @@ export interface AgentEditInput {
   schedule: AgentSchedule;
   /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
   paymentMethods: PaymentMethodConfig[];
+  /**
+   * Costo de traer UNA conversación (pauta) en este mercado. Texto porque viene de
+   * un `<input>`: vacío = sin configurar. Alimenta el retorno (ROAS). Ver ADR-0065.
+   */
+  costPerChat: string;
+  /** Moneda ISO del costo por chat y de la lectura de retorno (COP, USD…). */
+  costCurrency: string;
 }
 
 /** Carga de catálogo desde el editor de agente (server action `loadAgentCatalog`). */

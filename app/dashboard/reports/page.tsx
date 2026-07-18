@@ -1,18 +1,23 @@
+import Link from "next/link";
 import {
   getAgents,
   getAiCostReport,
   getVoiceCallStats,
   getConversionReport,
   getProductConversion,
+  getRoasReport,
   getSalesReport,
 } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
   type ConversionReport,
+  type RoasReport,
+  type RoasRow,
   type SalesReport,
 } from "@/lib/dashboard/report";
 import {
   formatCOP,
+  formatMoney,
   formatNumber,
   formatDayKeyShort,
   formatPercent,
@@ -53,7 +58,20 @@ function ReportCard({
   );
 }
 
-function buildSummary(r: SalesReport, c: ConversionReport, scope: string): string {
+function buildSummary(
+  r: SalesReport,
+  c: ConversionReport,
+  roas: RoasReport,
+  scope: string,
+): string {
+  // El retorno solo entra al resumen si hay una lectura consolidable (una moneda
+  // y costo configurado); si no, se omite en vez de mandar un "—" al equipo.
+  const roasLine =
+    roas.total && roas.total.roas != null
+      ? [
+          `Retorno (ROAS): ${new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 }).format(roas.total.roas)}× · ${formatMoney(roas.total.revenue, roas.total.currency)} sobre ${formatMoney(roas.total.investment, roas.total.currency)} de pauta (${formatNumber(roas.total.chats)} chats)`,
+        ]
+      : [];
   return [
     `Reporte de ventas — ${scope}`,
     `Ventas confirmadas: ${r.confirmed.count} · ${formatCOP(r.confirmed.revenue)}`,
@@ -61,8 +79,193 @@ function buildSummary(r: SalesReport, c: ConversionReport, scope: string): strin
     `Órdenes generadas: ${r.generated.count} · ${formatCOP(r.generated.revenue)}`,
     `Canceladas: ${r.cancelled.count}`,
     `Conversión: ${formatPercent(c.total.rate)} (${c.total.transactions}/${c.total.conversations} conversaciones)`,
+    ...roasLine,
     `Hoy: ${r.today.count} (${formatCOP(r.today.revenue)}) · 7 días: ${r.last7.count} (${formatCOP(r.last7.revenue)}) · 30 días: ${r.last30.count} (${formatCOP(r.last30.revenue)})`,
   ].join("\n");
+}
+
+/** Un ROAS se lee como "×": 3.2 = por cada $1 de pauta entran $3,20. */
+function formatRoas(roas: number | null): string {
+  if (roas == null) return "—";
+  return `${new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 }).format(roas)}×`;
+}
+
+/** Verde si el retorno paga la pauta, ámbar si empata, rojo si pierde. */
+function roasTone(roas: number | null): string {
+  if (roas == null) return "text-slate-400";
+  if (roas >= 2) return "text-emerald-700";
+  if (roas >= 1) return "text-amber-700";
+  return "text-rose-700";
+}
+
+function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
+  const cell = strong ? "py-2 font-medium text-slate-900" : "py-2 text-slate-700";
+  return (
+    <tr className={strong ? "border-t-2 border-slate-200 bg-slate-50/60" : undefined}>
+      <td className={cell}>
+        {row.name}
+        {row.brand ? <span className="ml-1 text-xs text-slate-400">{row.brand}</span> : null}
+      </td>
+      <td className={`${cell} text-right tabular-nums`}>{formatNumber(row.chats)}</td>
+      <td className={`${cell} text-right tabular-nums`}>
+        {row.costPerChat != null ? (
+          formatMoney(row.costPerChat, row.currency)
+        ) : (
+          <span className="text-slate-400">sin configurar</span>
+        )}
+      </td>
+      <td className={`${cell} text-right tabular-nums`}>
+        {formatMoney(row.investment, row.currency)}
+      </td>
+      <td className={`${cell} text-right tabular-nums`}>
+        {formatMoney(row.revenue, row.currency)}
+        <span className="ml-1 text-xs text-slate-400">{formatNumber(row.orders)}</span>
+      </td>
+      <td className={`${cell} text-right tabular-nums`}>
+        {row.costPerOrder != null ? (
+          formatMoney(row.costPerOrder, row.currency)
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
+      </td>
+      <td className={`py-2 text-right font-semibold tabular-nums ${roasTone(row.roas)}`}>
+        {formatRoas(row.roas)}
+      </td>
+      <td className={`py-2 text-right tabular-nums ${roasTone(row.confirmedRoas)}`}>
+        {formatRoas(row.confirmedRoas)}
+      </td>
+    </tr>
+  );
+}
+
+/** Sección de retorno: tabla por agente + barras de inversión vs. ventas por día. */
+function RoasSection({ roas }: { roas: RoasReport }) {
+  const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-700">Retorno (ROAS)</h2>
+          <p className="max-w-prose text-xs text-slate-400">
+            Ventas generadas ÷ lo que costó traer los chats. Un <strong>chat</strong> es una
+            conversación en la que el cliente escribió; el costo por chat lo define cada agente en
+            su moneda. <strong>ROAS 3×</strong> = por cada $1 de pauta entran $3.
+          </p>
+        </div>
+        {roas.total ? (
+          <div className="text-right">
+            <p className={`text-2xl font-semibold tracking-tight ${roasTone(roas.total.roas)}`}>
+              {formatRoas(roas.total.roas)}
+            </p>
+            <p className="text-xs text-slate-500">
+              {formatMoney(roas.total.revenue, roas.total.currency)} sobre{" "}
+              {formatMoney(roas.total.investment, roas.total.currency)}
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {!roas.configured ? (
+        <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+          Ningún agente tiene <strong>costo por chat</strong> configurado todavía. Ponlo en{" "}
+          <Link
+            href="/dashboard/agents"
+            className="font-medium text-slate-900 underline underline-offset-2"
+          >
+            Agentes
+          </Link>{" "}
+          (por ejemplo, 1.000 COP por chat en Colombia) y este cuadro calcula el retorno.
+        </div>
+      ) : null}
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[46rem] text-sm">
+          <thead>
+            <tr className="text-left text-xs text-slate-500">
+              <th className="pb-2 font-medium">Agente</th>
+              <th className="pb-2 text-right font-medium">Chats</th>
+              <th className="pb-2 text-right font-medium">Costo/chat</th>
+              <th className="pb-2 text-right font-medium">Inversión</th>
+              <th className="pb-2 text-right font-medium">Ventas</th>
+              <th className="pb-2 text-right font-medium">Costo/venta</th>
+              <th className="pb-2 text-right font-medium">ROAS</th>
+              <th className="pb-2 text-right font-medium">ROAS confirm.</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {roas.rows.length === 0 ? (
+              <tr>
+                <td className="py-3 text-slate-400" colSpan={8}>
+                  No hay agentes en este alcance.
+                </td>
+              </tr>
+            ) : (
+              roas.rows.map((r) => <RoasTableRow key={r.agentId ?? r.name} row={r} />)
+            )}
+            {roas.total && roas.rows.length > 1 ? (
+              <RoasTableRow row={roas.total} strong />
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
+      {roas.total === null ? (
+        <p className="mt-3 text-xs text-amber-700">
+          Los agentes de este alcance usan monedas distintas, así que no se consolidan ni se
+          grafican: sumar pesos con dólares daría un retorno falso. Filtra por un agente para ver
+          su serie.
+        </p>
+      ) : (
+        <div className="mt-5">
+          <div className="mb-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm bg-rose-400" aria-hidden="true" />
+              Inversión
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" aria-hidden="true" />
+              Ventas
+            </span>
+            <span className="ml-auto">Últimos 14 días</span>
+          </div>
+          <ul className="space-y-2">
+            {roas.perDay.map((d) => (
+              <li key={d.date} className="flex items-center gap-3">
+                <span className="w-14 shrink-0 text-xs text-slate-500">
+                  {formatDayKeyShort(d.date)}
+                </span>
+                {/* Dos barras a la misma escala: se ve de un vistazo si el verde
+                    (ventas) le gana al rojo (pauta) ese día. */}
+                <div className="flex-1 space-y-1">
+                  <div className="h-2.5 overflow-hidden rounded bg-slate-100">
+                    <div
+                      className="h-full rounded bg-rose-400"
+                      style={{ width: `${Math.round((d.investment / maxDay) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded bg-slate-100">
+                    <div
+                      className="h-full rounded bg-emerald-500"
+                      style={{ width: `${Math.round((d.revenue / maxDay) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="w-12 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                  {d.chats}
+                </span>
+                <span
+                  className={`w-14 shrink-0 text-right text-xs font-medium tabular-nums ${roasTone(d.roas)}`}
+                >
+                  {formatRoas(d.roas)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
 }
 
 // Días de la semana en orden Lun→Dom (los índices son 0=Dom … 6=Sáb).
@@ -98,12 +301,13 @@ export default async function ReportsPage({
     ? `${selected.name}${selected.brand ? ` · ${selected.brand}` : ""}`
     : "Todos los agentes";
 
-  const [r, conv, ai, products, voice] = await Promise.all([
+  const [r, conv, ai, products, voice, roas] = await Promise.all([
     getSalesReport(agentId),
     getConversionReport(agentId),
     getAiCostReport(agentId),
     getProductConversion(agentId),
     getVoiceCallStats(agentId),
+    getRoasReport(agentId),
   ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
@@ -132,7 +336,7 @@ export default async function ReportsPage({
             )}
           </p>
         </div>
-        <CopySummaryButton summary={buildSummary(r, conv, scope)} />
+        <CopySummaryButton summary={buildSummary(r, conv, roas, scope)} />
       </div>
 
       {agents.length > 1 && (
@@ -226,6 +430,9 @@ export default async function ReportsPage({
           />
         </div>
       </section>
+
+      {/* Retorno sobre el costo de adquirir cada chat (ADR-0065) */}
+      <RoasSection roas={roas} />
 
       {/* Conversión: conversaciones → transacciones */}
       <section className="rounded-lg border border-slate-200 bg-white p-4">

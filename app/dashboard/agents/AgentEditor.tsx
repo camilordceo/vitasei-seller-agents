@@ -57,6 +57,9 @@ export interface AgentEditorInitial {
   scheduleTimezone: string;
   schedule: AgentSchedule;
   paymentMethods: PaymentMethodConfig[];
+  /** Costo por chat (pauta) como texto; vacío = sin configurar. Ver ADR-0065. */
+  costPerChat: string;
+  costCurrency: string;
 }
 
 /**
@@ -101,6 +104,10 @@ export function AgentEditor({
   const [temperature, setTemperature] = useState(String(initial.temperature));
   const [systemPrompt, setSystemPrompt] = useState(initial.systemPrompt);
   const [enabled, setEnabled] = useState(initial.enabled);
+
+  // Costo por chat (pauta) + su moneda: el insumo del retorno (ROAS). Ver ADR-0065.
+  const [costPerChat, setCostPerChat] = useState(initial.costPerChat);
+  const [costCurrency, setCostCurrency] = useState(initial.costCurrency || "COP");
 
   // Horario (encendido/apagado) — franjas por día. Ver ADR-0033.
   const [scheduleEnabled, setScheduleEnabled] = useState(initial.scheduleEnabled);
@@ -266,6 +273,8 @@ export function AgentEditor({
           method: m.method || slugMethod(m.tag),
         }))
         .filter((m) => m.tag.length > 0),
+      costPerChat,
+      costCurrency,
     };
 
     const hasCatalog = Boolean(catalogProducts && catalogProducts.length > 0);
@@ -960,6 +969,53 @@ export function AgentEditor({
           >
             + Agregar método
           </button>
+        </div>
+      </fieldset>
+
+      {/* Costo por chat → alimenta el retorno (ROAS) de Reportes. Ver ADR-0065. */}
+      <fieldset className="grid gap-4 rounded-md border border-slate-200 bg-slate-50/60 p-4 sm:grid-cols-2">
+        <legend className="px-1 text-sm font-semibold text-slate-700">Costo por chat</legend>
+
+        <div>
+          <label htmlFor="costPerChat" className={labelCls}>
+            Cuánto cuesta traer una conversación
+          </label>
+          <input
+            id="costPerChat"
+            inputMode="decimal"
+            value={costPerChat}
+            onChange={(e) => {
+              dirty();
+              setCostPerChat(e.target.value);
+            }}
+            className={inputCls}
+            placeholder="1000"
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            Lo que pagas en pauta por cada conversación que llega a este número. Vacío = sin
+            configurar (Reportes muestra los chats y las ventas, pero no calcula retorno).
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="costCurrency" className={labelCls}>
+            Moneda
+          </label>
+          <input
+            id="costCurrency"
+            value={costCurrency}
+            onChange={(e) => {
+              dirty();
+              setCostCurrency(e.target.value.toUpperCase());
+            }}
+            className={inputCls}
+            placeholder="COP"
+            maxLength={3}
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            La de este mercado (COP, USD…). Reportes solo consolida agentes que comparten
+            moneda: sumar pesos con dólares daría un retorno falso.
+          </p>
         </div>
       </fieldset>
 

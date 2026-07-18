@@ -459,6 +459,34 @@ export async function updateRetargetConfig(
   revalidatePath("/dashboard/agents");
 }
 
+/**
+ * Costo por chat del formulario → número o NULL. Acepta lo que la gente teclea de
+ * verdad ("1.000", "1,000", "$ 1000"): se quitan símbolos y separadores de miles.
+ * Solo un valor > 0 se guarda; el resto es "sin configurar".
+ */
+function parseCostPerChat(raw: string | null | undefined): number | null {
+  const cleaned = (raw ?? "").replace(/[^\d.,-]/g, "").trim();
+  if (!cleaned) return null;
+  // Con los dos separadores, el ÚLTIMO manda como decimal ("1.234,56" y "1,234.56").
+  const lastComma = cleaned.lastIndexOf(",");
+  const lastDot = cleaned.lastIndexOf(".");
+  let normalized = cleaned;
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimalSep = lastComma > lastDot ? "," : ".";
+    const thousandSep = decimalSep === "," ? "." : ",";
+    normalized = cleaned.split(thousandSep).join("").replace(decimalSep, ".");
+  } else if (lastComma >= 0) {
+    // Una sola coma: decimal si deja 1-2 dígitos ("1000,5"), si no es de miles.
+    normalized =
+      cleaned.length - lastComma - 1 <= 2 ? cleaned.replace(",", ".") : cleaned.split(",").join("");
+  } else if (lastDot >= 0 && cleaned.length - lastDot - 1 === 3) {
+    // "1.000" en es-CO son mil pesos, no uno con tres decimales.
+    normalized = cleaned.split(".").join("");
+  }
+  const value = Number(normalized);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /** Normaliza la temperatura a [0, 2] (default 0.3 si viene inválida). */
 function cleanTemperature(t: number): number {
   if (!Number.isFinite(t)) return 0.3;
@@ -495,6 +523,10 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
     // Métodos de pago (tags de compra por agente). Se normalizan/deduplican con el
     // helper puro antes de guardar (tags válidos + method estable). Ver ADR-0055.
     payment_methods: parsePaymentMethods(input.paymentMethods) as unknown as Json,
+    // Costo por chat (ROAS, ADR-0065). Vacío o no numérico → NULL = "sin configurar",
+    // que el reporte distingue de un 0 (un costo 0 daría un retorno infinito).
+    cost_per_chat: parseCostPerChat(input.costPerChat),
+    cost_currency: (textOrNull(input.costCurrency) ?? "COP").toUpperCase(),
   };
   const newKey = input.callbellApiKey.trim();
   if (newKey.length > 0) patch.callbell_api_key = newKey;
@@ -514,10 +546,12 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
  * proveedor que el operador acaba de elegir, que es peor que fallar. Así que falla, pero
  * diciendo exactamente qué hacer — mismo criterio que `setHotmartAgent` con la 0020.
  */
-function missingProviderMigration(error: { code?: string }): string | null {
-  return error.code === "42703"
-    ? "Falta aplicar la migración 0026 (provider + credenciales de Kapso) en Supabase."
-    : null;
+function missingProviderMigration(error: { code?: string; message?: string }): string | null {
+  if (error.code !== "42703") return null;
+  // El mensaje de Postgres nombra la columna que falta → se dice QUÉ migración.
+  return /cost_(per_chat|currency)/.test(error.message ?? "")
+    ? "Falta aplicar la migración 0028 (costo por chat) en Supabase."
+    : "Falta aplicar la migración 0026 (provider + credenciales de Kapso) en Supabase.";
 }
 
 /**
