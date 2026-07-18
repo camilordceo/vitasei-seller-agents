@@ -48,3 +48,36 @@ export interface AgentCatalogInput {
   products: CatalogProductInput[];
   filename?: string | null;
 }
+
+/**
+ * Config de llamadas con IA de un agente (server action `saveVoiceConfig`).
+ * Ver docs/25 y ADR-0060..0063.
+ */
+export interface VoiceConfigInput {
+  voiceEnabled: boolean;
+  /** Assistant de Synthflow que ejecuta la llamada. Se referencia, no se muta. */
+  modelId: string;
+  /** Número saliente en E.164 CON `+` (convención de Synthflow). */
+  fromNumber: string;
+  voiceId: string;
+  voiceName: string;
+  /** Prompt de VOZ, separado del de WhatsApp. */
+  prompt: string;
+  greeting: string;
+  /** Vacío = no se pisa el secreto guardado (patrón del resto de credenciales). */
+  apiKey: string;
+  /** Etapas de la cadencia: `[{delayMinutes, guidance}]`. */
+  stages: Array<{ delayMinutes: number; guidance: string | null }>;
+  /** Prefijos E.164 permitidos (`["57"]`). Vacío = todos. */
+  countries: string[];
+  /** Extractores de información configurables por agente. */
+  extractors: Array<{
+    identifier: string;
+    type: string;
+    condition: string;
+    choices: string[];
+    examples: string[];
+    actionId?: string | null;
+  }>;
+  stopWhenAnswered: boolean;
+}

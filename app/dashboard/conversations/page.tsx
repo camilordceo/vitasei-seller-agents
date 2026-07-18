@@ -20,6 +20,7 @@ type SearchParams = {
   agent?: string;
   tag?: string;
   product?: string;
+  call?: string;
   page?: string;
 };
 
@@ -133,6 +134,10 @@ export default async function ConversationsPage({
       ? searchParams.product
       : undefined;
 
+  // "Tuvo llamada con IA": el único valor válido es `with` (el resto se ignora,
+  // igual que los demás filtros). Ver docs/25.
+  const callKey = searchParams.call === "with" ? "with" : undefined;
+
   // Pedimos UNA de más (PAGE_SIZE + 1) para saber si hay página siguiente sin un
   // count aparte: si vuelven más de PAGE_SIZE, hay "más antiguas".
   const fetched = await getRecentConversations({
@@ -145,6 +150,7 @@ export default async function ConversationsPage({
     agentId: agentKey,
     labelId: tagKey,
     productCategory: productKey,
+    hasVoiceCall: callKey === "with" ? true : undefined,
   });
   const hasNext = fetched.length > PAGE_SIZE;
   const convos = fetched.slice(0, PAGE_SIZE);
@@ -163,6 +169,7 @@ export default async function ConversationsPage({
     agent: agentKey,
     tag: tagKey,
     product: productKey,
+    call: callKey,
   };
   function hrefWith(key: keyof typeof current, value: string): string {
     const clears = value === "all" || (key === "sort" && value === "inbound");
@@ -175,6 +182,7 @@ export default async function ConversationsPage({
     if (next.agent) qs.set("agent", next.agent);
     if (next.tag) qs.set("tag", next.tag);
     if (next.product) qs.set("product", next.product);
+    if (next.call) qs.set("call", next.call);
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
@@ -189,6 +197,7 @@ export default async function ConversationsPage({
     if (agentKey) qs.set("agent", agentKey);
     if (tagKey) qs.set("tag", tagKey);
     if (productKey) qs.set("product", productKey);
+    if (callKey) qs.set("call", callKey);
     if (target > 1) qs.set("page", String(target));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
@@ -206,11 +215,12 @@ export default async function ConversationsPage({
     if (agentKey && omit !== "agent") p.agent = agentKey;
     if (tagKey && omit !== "tag") p.tag = tagKey;
     if (productKey && omit !== "product") p.product = productKey;
+    if (callKey && omit !== "call") p.call = callKey;
     return p;
   }
 
   const anyFilter = Boolean(
-    rangeKey || orderKey || statusKey || sortParam || agentKey || tagKey || productKey,
+    rangeKey || orderKey || statusKey || sortParam || agentKey || tagKey || productKey || callKey,
   );
 
   // Agente seleccionado (para el subtítulo). undefined = todos.
@@ -256,6 +266,15 @@ export default async function ConversationsPage({
             preserved={preservedExcept("tag")}
           />
         )}
+        <SelectFilter
+          label="Llamada IA"
+          ariaLabel="Filtrar por llamada con IA"
+          paramName="call"
+          current={callKey ?? ""}
+          allLabel="Todas"
+          options={[{ value: "with", label: "Con llamada" }]}
+          preserved={preservedExcept("call")}
+        />
         {filterOptions.products.length > 0 && (
           <SelectFilter
             label="Producto"

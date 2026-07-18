@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/retargets",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/voice-calls",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

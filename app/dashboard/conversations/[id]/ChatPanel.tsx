@@ -86,6 +86,41 @@ export function ChatPanel({
             const out = m.direction === "outbound";
             const isManual = m.tags.includes("manual");
             const chips = m.tags.filter((t) => t !== "manual");
+
+            // Resultado de una llamada con IA: es una NOTA interna, no un mensaje
+            // que el cliente recibió. Se renderiza centrada y neutra para que
+            // nadie la confunda con algo que el bot escribió. Ver docs/25.
+            if (m.tags.includes("#llamada-ia")) {
+              return (
+                <div key={m.id} className="flex justify-center py-1">
+                  <div className="w-full max-w-[92%] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      <svg
+                        className="h-3.5 w-3.5"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M6 3.5h3l1.5 4-2 1.5a12 12 0 0 0 6.5 6.5l1.5-2 4 1.5v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4 5.7 2 2 0 0 1 6 3.5Z"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      Nota interna
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-700">
+                      {m.content}
+                    </p>
+                    <span className="mt-1 block text-[10px] text-slate-400">
+                      {formatDateTime(m.createdAt)}
+                    </span>
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div key={m.id} className={`flex ${out ? "justify-end" : "justify-start"}`}>
                 <div

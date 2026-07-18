@@ -104,6 +104,22 @@ export function describeEvent(type: string, payload: unknown): EventView {
       return { label: "No se pudo procesar la imagen del cliente", detail: null, tone: "warn" };
     case "retarget_sent":
       return { label: "Seguimiento (retarget) enviado", detail: null, tone: "good" };
+    // Llamadas con IA (docs/25). El desenlace real va como nota en el hilo; acá
+    // queda el rastro para el panel "¿por qué no llamó?".
+    case "voice_call_placed":
+      return { label: "Llamada con IA iniciada", detail: null, tone: "good" };
+    case "voice_call_completed":
+      return { label: "Llamada con IA terminada", detail: null, tone: "good" };
+    case "voice_call_deferred":
+      return {
+        label: "Llamada con IA aplazada (fuera de horario)",
+        detail: null,
+        tone: "neutral",
+      };
+    case "voice_call_cancelled":
+      return { label: "Llamada con IA cancelada", detail: null, tone: "neutral" };
+    case "voice_call_error":
+      return { label: "Error al llamar con IA", detail: null, tone: "warn" };
     case "reactivation_sent":
       return { label: "Plantilla de reactivación enviada", detail: null, tone: "good" };
     case "reactivation_skipped":

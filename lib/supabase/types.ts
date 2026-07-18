@@ -39,6 +39,17 @@ export type RetargetStatus =
   | "cancelled"
   | "failed";
 export type CallRequestStatus = "pending" | "done" | "cancelled";
+/** Estado de una llamada con IA. Texto + CHECK en la base (ADR-0063). */
+export type VoiceCallStatus =
+  | "scheduled"
+  | "processing"
+  | "placed"
+  | "completed"
+  | "no_answer"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+export type VoiceCallTrigger = "auto" | "manual" | "request";
 export type ConversationSource = "whatsapp" | "hotmart" | "manual" | "other";
 
 export type Json =
@@ -356,6 +367,18 @@ export interface Database {
           retarget_instruction_2: string | null;
           retarget_config: Json | null;
           payment_methods: Json | null;
+          voice_enabled: boolean;
+          synthflow_api_key: string | null;
+          synthflow_model_id: string | null;
+          synthflow_from_number: string | null;
+          voice_id: string | null;
+          voice_name: string | null;
+          voice_prompt: string | null;
+          voice_greeting: string | null;
+          voice_config: Json | null;
+          voice_countries: Json | null;
+          voice_extractors: Json | null;
+          voice_stop_when_answered: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -391,6 +414,18 @@ export interface Database {
           retarget_instruction_2?: string | null;
           retarget_config?: Json | null;
           payment_methods?: Json | null;
+          voice_enabled?: boolean;
+          synthflow_api_key?: string | null;
+          synthflow_model_id?: string | null;
+          synthflow_from_number?: string | null;
+          voice_id?: string | null;
+          voice_name?: string | null;
+          voice_prompt?: string | null;
+          voice_greeting?: string | null;
+          voice_config?: Json | null;
+          voice_countries?: Json | null;
+          voice_extractors?: Json | null;
+          voice_stop_when_answered?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -426,6 +461,18 @@ export interface Database {
           retarget_instruction_2?: string | null;
           retarget_config?: Json | null;
           payment_methods?: Json | null;
+          voice_enabled?: boolean;
+          synthflow_api_key?: string | null;
+          synthflow_model_id?: string | null;
+          synthflow_from_number?: string | null;
+          voice_id?: string | null;
+          voice_name?: string | null;
+          voice_prompt?: string | null;
+          voice_greeting?: string | null;
+          voice_config?: Json | null;
+          voice_countries?: Json | null;
+          voice_extractors?: Json | null;
+          voice_stop_when_answered?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -488,6 +535,96 @@ export interface Database {
           type?: string;
           payload?: Json;
           created_at?: string;
+        };
+        Relationships: [];
+      };
+      voice_calls: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          contact_id: string;
+          agent_id: string | null;
+          phone: string;
+          stage: number;
+          delay_minutes: number | null;
+          trigger: VoiceCallTrigger;
+          status: VoiceCallStatus;
+          scheduled_at: string;
+          anchor_inbound_at: string | null;
+          placed_at: string | null;
+          started_at: string | null;
+          ended_at: string | null;
+          synthflow_call_id: string | null;
+          synthflow_model_id: string | null;
+          call_status: string | null;
+          end_call_reason: string | null;
+          duration_sec: number | null;
+          cost_usd: number | null;
+          transcript: string | null;
+          recording_url: string | null;
+          summary: string | null;
+          extracted: Json | null;
+          error: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          conversation_id: string;
+          contact_id: string;
+          agent_id?: string | null;
+          phone: string;
+          stage?: number;
+          delay_minutes?: number | null;
+          trigger?: VoiceCallTrigger;
+          status?: VoiceCallStatus;
+          scheduled_at?: string;
+          anchor_inbound_at?: string | null;
+          placed_at?: string | null;
+          started_at?: string | null;
+          ended_at?: string | null;
+          synthflow_call_id?: string | null;
+          synthflow_model_id?: string | null;
+          call_status?: string | null;
+          end_call_reason?: string | null;
+          duration_sec?: number | null;
+          cost_usd?: number | null;
+          transcript?: string | null;
+          recording_url?: string | null;
+          summary?: string | null;
+          extracted?: Json | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          conversation_id?: string;
+          contact_id?: string;
+          agent_id?: string | null;
+          phone?: string;
+          stage?: number;
+          delay_minutes?: number | null;
+          trigger?: VoiceCallTrigger;
+          status?: VoiceCallStatus;
+          scheduled_at?: string;
+          anchor_inbound_at?: string | null;
+          placed_at?: string | null;
+          started_at?: string | null;
+          ended_at?: string | null;
+          synthflow_call_id?: string | null;
+          synthflow_model_id?: string | null;
+          call_status?: string | null;
+          end_call_reason?: string | null;
+          duration_sec?: number | null;
+          cost_usd?: number | null;
+          transcript?: string | null;
+          recording_url?: string | null;
+          summary?: string | null;
+          extracted?: Json | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
         };
         Relationships: [];
       };

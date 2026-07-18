@@ -28,6 +28,7 @@ import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarge
 import { sendKeywordVideos } from "@/lib/agent/videos";
 import { detectProductCategory } from "@/lib/agent/productCategory";
 import { scheduleReactivations, cancelScheduledReactivations } from "@/lib/agent/reactivation";
+import { scheduleVoiceCalls, cancelScheduledVoiceCalls } from "@/lib/agent/voiceCall";
 import { isAgentActiveNow } from "@/lib/agent/schedule";
 import {
   buildSaleNotification,
@@ -278,6 +279,28 @@ export async function ingestInboundMessage(msg: InboundMessage): Promise<IngestR
     } catch (e) {
       console.error(
         "[ingestInboundMessage] schedule reactivations failed:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
+  // 8) Llamadas con IA: primer contacto → agenda la cadencia del agente (p.ej.
+  //    "a los 10 min" o "al llegar / 24h / 72h"). El ancla es este primer
+  //    inbound, así que los mensajes siguientes NO mueven la cadencia.
+  //    Best-effort: un fallo aquí jamás debe tumbar la ingesta. Ver ADR-0063.
+  if (conversationIsNew && agentId) {
+    try {
+      await scheduleVoiceCalls(supabase, {
+        conversationId,
+        contactId,
+        phone,
+        agentId,
+        anchorInboundAt: new Date(receivedAt).toISOString(),
+        fromMs: receivedAt,
+      });
+    } catch (e) {
+      console.error(
+        "[ingestInboundMessage] schedule voice calls failed:",
         e instanceof Error ? e.message : String(e),
       );
     }
@@ -1040,6 +1063,15 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       } catch (e) {
         console.error(
           "[generateAndSend] cancel reactivations failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+      // Y las llamadas con IA programadas: ya compró, llamarlo sobra.
+      try {
+        await cancelScheduledVoiceCalls(supabase, conversationId, "converted");
+      } catch (e) {
+        console.error(
+          "[generateAndSend] cancel voice calls failed:",
           e instanceof Error ? e.message : String(e),
         );
       }

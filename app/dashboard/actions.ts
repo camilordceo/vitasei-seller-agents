@@ -13,7 +13,25 @@ import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
 import type { CallRequestStatus, Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
-import type { AgentEditInput, AgentCatalogInput } from "./agents/types";
+import type { AgentEditInput, AgentCatalogInput, VoiceConfigInput } from "./agents/types";
+import {
+  credsFor,
+  loadAgentVoiceConfig,
+  triggerVoiceCallNow,
+} from "@/lib/agent/voiceCall";
+import {
+  parseVoiceConfig,
+  parseVoiceCountries,
+  parseVoiceExtractors,
+} from "@/lib/agent/voiceCallPlan";
+import {
+  attachActions,
+  createExtractor,
+  listVoices,
+  syncAssistantVoice,
+  updateExtractor,
+} from "@/lib/synthflow/client";
+import type { SynthflowVoice, VoiceExtractor } from "@/lib/synthflow/types";
 
 /**
  * Server Actions del dashboard.
@@ -1142,4 +1160,208 @@ export async function updateProductImage(productId: string, imageUrl: string): P
     payload: { productId, hasImage: url.length > 0 } as unknown as Json,
   });
   revalidatePath("/dashboard/inventory");
+}
+
+// --- Llamadas con IA (Synthflow) — docs/25, ADR-0060..0063 ------------------
+
+/**
+ * Cancela llamadas PROGRAMADAS. Acepta varias de un golpe (multi-selección en la
+ * sección Llamadas) porque el caso de uso es justamente "por si acaso, tumba
+ * estas cinco". Solo toca las que aún no salieron: una llamada ya colocada no se
+ * puede des-hacer.
+ */
+export async function cancelVoiceCalls(ids: string[]): Promise<number> {
+  const clean = [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))];
+  if (clean.length === 0) return 0;
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("voice_calls")
+    .update({ status: "cancelled", error: "cancelled_from_dashboard" })
+    .in("id", clean)
+    .eq("status", "scheduled")
+    .select("id, conversation_id");
+  if (error) {
+    if (error.code === "42P01") {
+      throw new Error("Falta aplicar la migración 0027 (llamadas con IA) en Supabase.");
+    }
+    throw new Error(`cancelVoiceCalls: ${error.message}`);
+  }
+
+  const rows = data ?? [];
+  for (const row of rows) {
+    await supabase.from("events_log").insert({
+      conversation_id: (row as { conversation_id: string }).conversation_id,
+      type: "voice_call_cancelled",
+      payload: { voiceCallId: (row as { id: string }).id, reason: "dashboard" } as unknown as Json,
+    });
+  }
+
+  revalidatePath("/dashboard/calls");
+  revalidatePath("/dashboard");
+  return rows.length;
+}
+
+/**
+ * Dispara una llamada con IA YA, desde el detalle de la conversación.
+ * Devuelve el error en texto (no lanza) para poder mostrarlo en la UI: las
+ * causas normales —agente apagado, fuera de horario, país no habilitado— son
+ * información útil para el operador, no fallas del sistema.
+ */
+export async function triggerVoiceCall(
+  conversationId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const result = await triggerVoiceCallNow(conversationId);
+  if (result.ok) {
+    revalidatePath(`/dashboard/conversations/${conversationId}`);
+    revalidatePath("/dashboard/calls");
+  }
+  return result;
+}
+
+/**
+ * Guarda la config de voz de un agente y **sincroniza los extractores con
+ * Synthflow** (crear / actualizar / adjuntar / quitar). La sincronización puede
+ * fallar por red: en ese caso se guarda igual la config local y se devuelve el
+ * aviso, para no perder lo que el operador escribió. Ver ADR-0062.
+ */
+export async function saveVoiceConfig(
+  agentId: string,
+  input: VoiceConfigInput,
+): Promise<{ ok: boolean; warning?: string }> {
+  const supabase = createServiceClient();
+
+  const stages = parseVoiceConfig(input.stages);
+  const extractors = parseVoiceExtractors(input.extractors);
+  const countries = parseVoiceCountries(input.countries);
+
+  const patch: Record<string, unknown> = {
+    voice_enabled: input.voiceEnabled,
+    synthflow_model_id: textOrNull(input.modelId),
+    synthflow_from_number: textOrNull(input.fromNumber),
+    voice_id: textOrNull(input.voiceId),
+    voice_name: textOrNull(input.voiceName),
+    voice_prompt: textOrNull(input.prompt),
+    voice_greeting: textOrNull(input.greeting),
+    voice_config: (stages.length > 0 ? stages : null) as unknown as Json,
+    voice_countries: (countries.length > 0 ? countries : null) as unknown as Json,
+    voice_stop_when_answered: input.stopWhenAnswered,
+  };
+  // El secreto solo se pisa si pegaron uno nuevo (patrón del resto de credenciales).
+  const newKey = (input.apiKey ?? "").trim();
+  if (newKey.length > 0) patch.synthflow_api_key = newKey;
+
+  // Sincronizar extractores ANTES de guardar, para persistir los `actionId`.
+  let warning: string | undefined;
+  let synced = extractors;
+  if (input.modelId && extractors.length > 0) {
+    try {
+      synced = await syncExtractorsWithSynthflow(supabase, agentId, input.modelId, extractors);
+    } catch (e) {
+      warning = `La config se guardó, pero no se pudieron sincronizar los extractores con Synthflow: ${
+        e instanceof Error ? e.message : String(e)
+      }`;
+    }
+  }
+  patch.voice_extractors = (synced.length > 0 ? synced : null) as unknown as Json;
+
+  const { error } = await supabase
+    .from("agents")
+    .update(patch as never)
+    .eq("id", agentId);
+  if (error) {
+    if (error.code === "42703") {
+      throw new Error("Falta aplicar la migración 0027 (llamadas con IA) en Supabase.");
+    }
+    throw new Error(`saveVoiceConfig: ${error.message}`);
+  }
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "voice_config_updated",
+    payload: {
+      agentId,
+      enabled: input.voiceEnabled,
+      stages: stages.length,
+      extractors: synced.length,
+    } as unknown as Json,
+  });
+
+  revalidatePath("/dashboard/agents");
+  revalidatePath(`/dashboard/agents/${agentId}`);
+  revalidatePath("/dashboard/calls");
+  return { ok: true, warning };
+}
+
+/**
+ * Crea/actualiza en Synthflow los extractores del agente y los adjunta a su
+ * assistant. Devuelve la lista con los `actionId` resueltos para persistirlos.
+ */
+async function syncExtractorsWithSynthflow(
+  supabase: ReturnType<typeof createServiceClient>,
+  agentId: string,
+  modelId: string,
+  extractors: VoiceExtractor[],
+): Promise<VoiceExtractor[]> {
+  const agent = await loadAgentVoiceConfig(supabase, agentId);
+  if (!agent) throw new Error("No se pudo leer la config de voz del agente.");
+  const creds = credsFor(agent);
+
+  const out: VoiceExtractor[] = [];
+  for (const extractor of extractors) {
+    if (extractor.actionId) {
+      try {
+        await updateExtractor(creds, extractor.actionId, extractor);
+        out.push(extractor);
+        continue;
+      } catch {
+        // El id quedó colgado (lo borraron desde el panel de Synthflow): se recrea.
+      }
+    }
+    const actionId = await createExtractor(creds, extractor);
+    out.push({ ...extractor, actionId });
+  }
+
+  await attachActions(
+    creds,
+    modelId,
+    out.map((e) => e.actionId).filter((id): id is string => Boolean(id)),
+  );
+  return out;
+}
+
+/**
+ * Trae las voces disponibles en Synthflow para el selector del dashboard.
+ * Devuelve `[]` con un mensaje si falta configuración, en vez de romper la página.
+ */
+export async function listSynthflowVoices(
+  agentId: string,
+  search?: string,
+): Promise<{ voices: SynthflowVoice[]; error?: string }> {
+  try {
+    const supabase = createServiceClient();
+    const agent = await loadAgentVoiceConfig(supabase, agentId);
+    if (!agent) return { voices: [], error: "Falta aplicar la migración 0027." };
+    const voices = await listVoices(credsFor(agent), { search, max: 300 });
+    return { voices };
+  } catch (e) {
+    return { voices: [], error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Sincroniza la voz elegida con el assistant de Synthflow (read-modify-write). */
+export async function syncVoiceToSynthflow(
+  agentId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const supabase = createServiceClient();
+    const agent = await loadAgentVoiceConfig(supabase, agentId);
+    if (!agent) return { ok: false, error: "Falta aplicar la migración 0027." };
+    if (!agent.modelId) return { ok: false, error: "El agente no tiene assistant de Synthflow." };
+    if (!agent.voiceId) return { ok: false, error: "El agente no tiene voz seleccionada." };
+    await syncAssistantVoice(credsFor(agent), agent.modelId, agent.voiceId);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }

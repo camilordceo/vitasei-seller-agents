@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAgent } from "@/lib/dashboard/queries";
+import { getAgent, getAgentVoiceSettings } from "@/lib/dashboard/queries";
 import { formatDateTime } from "@/lib/dashboard/format";
 import { AgentEditor, type AgentEditorInitial } from "../AgentEditor";
+import { VoiceSettings } from "../VoiceSettings";
 
 export const dynamic = "force-dynamic";
 // Recargar el catálogo (polling del vector store) puede tardar; damos margen.
@@ -11,6 +12,8 @@ export const maxDuration = 300;
 export default async function AgentDetailPage({ params }: { params: { id: string } }) {
   const agent = await getAgent(params.id);
   if (!agent) notFound();
+
+  const voice = await getAgentVoiceSettings(params.id);
 
   const initial: AgentEditorInitial = {
     name: agent.name,
@@ -62,6 +65,8 @@ export default async function AgentDetailPage({ params }: { params: { id: string
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <AgentEditor agentId={agent.id} initial={initial} />
       </div>
+
+      <VoiceSettings agentId={agent.id} initial={voice} />
 
       <p className="px-1 text-xs text-slate-400">
         El número entra por Callbell y se enruta a este agente por su channel_uuid (o número). Si

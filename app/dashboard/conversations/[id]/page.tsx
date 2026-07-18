@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getConversation, getConversationEvents, getVideos } from "@/lib/dashboard/queries";
+import {
+  getConversation,
+  getConversationEvents,
+  getVideos,
+  getVoiceCallsForConversation,
+} from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
 import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
 import { ChatPanel } from "./ChatPanel";
@@ -9,6 +14,7 @@ import { CreateOrderButton } from "./CreateOrderButton";
 import { ConversationLabels } from "./ConversationLabels";
 import { ProductCategoryEditor } from "./ProductCategoryEditor";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
+import { VoiceCallsCard } from "./VoiceCallsCard";
 import { getLabels, getConversationLabels } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -29,11 +35,12 @@ export default async function ConversationDetailPage({ params }: { params: { id:
 
   // Cargar etiquetas de la conversación y las disponibles + palabras de producto +
   // el rastro de eventos (para el panel de diagnóstico "¿por qué no respondió?").
-  const [conversationLabels, availableLabels, videos, events] = await Promise.all([
+  const [conversationLabels, availableLabels, videos, events, voiceCalls] = await Promise.all([
     getConversationLabels(params.id),
     getLabels(convo.agentId),
     getVideos(),
     getConversationEvents(params.id),
+    getVoiceCallsForConversation(params.id),
   ]);
   // Sugerencias para la fuente de producto = palabras clave configuradas (videos).
   const productSuggestions = [...new Set(videos.map((v) => v.keyword))].sort();
@@ -183,6 +190,8 @@ export default async function ConversationDetailPage({ params }: { params: { id:
               label={convo.orders.length > 0 ? "Crear otra orden" : "Crear orden"}
             />
           </div>
+
+          <VoiceCallsCard conversationId={params.id} rows={voiceCalls} />
 
           <DiagnosticsPanel events={events} />
         </aside>

@@ -1,6 +1,7 @@
 import {
   getAgents,
   getAiCostReport,
+  getVoiceCallStats,
   getConversionReport,
   getProductConversion,
   getSalesReport,
@@ -97,11 +98,12 @@ export default async function ReportsPage({
     ? `${selected.name}${selected.brand ? ` · ${selected.brand}` : ""}`
     : "Todos los agentes";
 
-  const [r, conv, ai, products] = await Promise.all([
+  const [r, conv, ai, products, voice] = await Promise.all([
     getSalesReport(agentId),
     getConversionReport(agentId),
     getAiCostReport(agentId),
     getProductConversion(agentId),
+    getVoiceCallStats(agentId),
   ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
@@ -195,7 +197,7 @@ export default async function ReportsPage({
             (sus tokens vienen dentro de los del modelo); el total es exacto.
           </p>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <ReportCard
             label="Texto (respuestas)"
             value={formatUsd4(ai.textCostUsd)}
@@ -212,9 +214,14 @@ export default async function ReportsPage({
             sub={`${formatNumber(ai.audioCount)} ${ai.audioCount === 1 ? "audio" : "audios"} · ${formatNumber(Math.round(ai.audioSeconds))} s`}
           />
           <ReportCard
+            label="Llamadas con IA"
+            value={formatUsd4(voice.totalCostUsd)}
+            sub={`${voice.completed} contestadas · ${voice.totalMinutes} min · estimado`}
+          />
+          <ReportCard
             label="Costo IA total"
-            value={formatUsd4(ai.totalCostUsd)}
-            sub="texto + imágenes + audio"
+            value={formatUsd4(ai.totalCostUsd + voice.totalCostUsd)}
+            sub="texto + imágenes + audio + llamadas"
             accent="text-indigo-700"
           />
         </div>

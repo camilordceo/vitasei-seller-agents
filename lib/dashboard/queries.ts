@@ -26,8 +26,14 @@ import type {
   MessageType,
   OrderStatus,
   RetargetStatus,
+  VoiceCallStatus,
 } from "@/lib/supabase/types";
 import { parseAgentSchedule, type AgentSchedule } from "@/lib/agent/schedule";
+import {
+  parseVoiceConfig,
+  parseVoiceCountries,
+  parseVoiceExtractors,
+} from "@/lib/agent/voiceCallPlan";
 import { normalizeProviderId, type MessagingProviderId } from "@/lib/messaging/types";
 import { findHotmartAgentId } from "@/lib/agent/agents";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
@@ -307,6 +313,8 @@ export interface ConversationFilters {
   orderBy?: ConversationOrderBy;
   /** Filtra por agente (marca/número). undefined = todos los agentes (migración 0010). */
   agentId?: string;
+  /** true = solo conversaciones que tuvieron llamada con IA. undefined = todas. Ver docs/25. */
+  hasVoiceCall?: boolean;
   /** Filtra por etiqueta (id de `labels`): solo conversaciones con esa etiqueta. undefined = todas. */
   labelId?: string;
   /** Filtra por producto/fuente (`product_category` exacto). undefined = todos. */
@@ -352,6 +360,20 @@ export async function getRecentConversations(
       "getRecentConversations label ids",
     );
     labelConvoIds = [...new Set(rows.map((r) => r.conversation_id))];
+    if (labelConvoIds.length === 0) return [];
+  }
+
+  /**
+   * Filtro "tuvo llamada con IA": se resuelven los `conversation_id` de
+   * `voice_calls` y se acotan con `.in("id", ...)`, igual que el de etiqueta. Si
+   * además hay etiqueta, se INTERSECTAN los dos conjuntos. Resiliente a que falte
+   * la tabla (migración 0027): sin ids → lista vacía, no excepción. Ver docs/25.
+   */
+  if (opts.hasVoiceCall) {
+    const callIds = await getConversationIdsWithVoiceCall();
+    if (callIds.length === 0) return [];
+    const callIdSet = new Set(callIds);
+    labelConvoIds = labelConvoIds ? labelConvoIds.filter((id) => callIdSet.has(id)) : callIds;
     if (labelConvoIds.length === 0) return [];
   }
 
@@ -1688,4 +1710,317 @@ export async function getRecentHotmartEvents(limit = 25): Promise<HotmartEventRo
     sendError: e.send_error,
     createdAt: e.created_at,
   }));
+}
+
+// --- Llamadas con IA (Synthflow) --------------------------------------------
+
+export interface VoiceCallRow {
+  id: string;
+  conversationId: string;
+  agentId: string | null;
+  agentName: string | null;
+  contactName: string | null;
+  phone: string;
+  stage: number;
+  delayMinutes: number | null;
+  trigger: string;
+  status: string;
+  scheduledAt: string;
+  placedAt: string | null;
+  durationSec: number | null;
+  costUsd: number | null;
+  endCallReason: string | null;
+  recordingUrl: string | null;
+  transcript: string | null;
+  extracted: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface VoiceCallFilters {
+  /** `scheduled` agrupa las que aún no han salido; `done`, las que ya ocurrieron. */
+  bucket?: "scheduled" | "done" | "all";
+  status?: VoiceCallStatus;
+  agentId?: string;
+  /** Búsqueda por teléfono del cliente (coincidencia parcial). */
+  phone?: string;
+  limit?: number;
+}
+
+const VOICE_CALL_COLS =
+  "id, conversation_id, agent_id, phone, stage, delay_minutes, trigger, status, " +
+  "scheduled_at, placed_at, duration_sec, cost_usd, end_call_reason, recording_url, " +
+  "transcript, extracted, error, created_at";
+
+const SCHEDULED_STATUSES: VoiceCallStatus[] = ["scheduled", "processing"];
+const DONE_STATUSES: VoiceCallStatus[] = [
+  "placed",
+  "completed",
+  "no_answer",
+  "failed",
+  "cancelled",
+  "skipped",
+];
+
+/**
+ * Lista de llamadas con IA para la sección Llamadas. Resiliente a que falte la
+ * tabla (migración 0027 sin aplicar): devuelve [] en vez de romper la página.
+ */
+export async function getVoiceCalls(opts?: VoiceCallFilters): Promise<VoiceCallRow[]> {
+  const supabase = createServiceClient();
+  let q = supabase
+    .from("voice_calls")
+    .select(VOICE_CALL_COLS)
+    .order("scheduled_at", { ascending: false })
+    .limit(opts?.limit ?? 200);
+
+  if (opts?.status) q = q.eq("status", opts.status);
+  else if (opts?.bucket === "scheduled") q = q.in("status", SCHEDULED_STATUSES);
+  else if (opts?.bucket === "done") q = q.in("status", DONE_STATUSES);
+
+  if (opts?.agentId) q = q.eq("agent_id", opts.agentId);
+  if (opts?.phone) {
+    const digits = opts.phone.replace(/\D/g, "");
+    if (digits) q = q.like("phone", `%${digits}%`);
+  }
+
+  const { data, error } = await q;
+  if (error) {
+    // 42P01 = tabla inexistente (migración sin aplicar).
+    if (error.code === "42P01") return [];
+    throw new Error(`getVoiceCalls: ${error.message}`);
+  }
+  return hydrateVoiceCalls(supabase, (data ?? []) as unknown as VoiceCallDbRow[]);
+}
+
+interface VoiceCallDbRow {
+  id: string;
+  conversation_id: string;
+  agent_id: string | null;
+  phone: string;
+  stage: number;
+  delay_minutes: number | null;
+  trigger: string;
+  status: string;
+  scheduled_at: string;
+  placed_at: string | null;
+  duration_sec: number | null;
+  cost_usd: number | null;
+  end_call_reason: string | null;
+  recording_url: string | null;
+  transcript: string | null;
+  extracted: unknown;
+  error: string | null;
+  created_at: string;
+}
+
+/** Rellena nombre de contacto y de agente en dos consultas (patrón de getCallRequests). */
+async function hydrateVoiceCalls(
+  supabase: ReturnType<typeof createServiceClient>,
+  rows: VoiceCallDbRow[],
+): Promise<VoiceCallRow[]> {
+  if (rows.length === 0) return [];
+
+  const convoIds = [...new Set(rows.map((r) => r.conversation_id))];
+  const convosRes = await supabase
+    .from("conversations")
+    .select("id, contact_id")
+    .in("id", convoIds);
+  const contactByConvo = new Map(
+    (convosRes.data ?? []).map((c) => [c.id as string, c.contact_id as string]),
+  );
+
+  const contactIds = [...new Set([...contactByConvo.values()])];
+  const contactsRes = contactIds.length
+    ? await supabase.from("contacts").select("id, name").in("id", contactIds)
+    : { data: [] };
+  const nameByContact = new Map(
+    (contactsRes.data ?? []).map((c) => [c.id as string, (c.name as string | null) ?? null]),
+  );
+
+  const agentIds = [...new Set(rows.map((r) => r.agent_id).filter(Boolean))] as string[];
+  const agentsRes = agentIds.length
+    ? await supabase.from("agents").select("id, name").in("id", agentIds)
+    : { data: [] };
+  const nameByAgent = new Map(
+    (agentsRes.data ?? []).map((a) => [a.id as string, (a.name as string | null) ?? null]),
+  );
+
+  return rows.map((r) => ({
+    id: r.id,
+    conversationId: r.conversation_id,
+    agentId: r.agent_id,
+    agentName: r.agent_id ? (nameByAgent.get(r.agent_id) ?? null) : null,
+    contactName: nameByContact.get(contactByConvo.get(r.conversation_id) ?? "") ?? null,
+    phone: r.phone,
+    stage: r.stage,
+    delayMinutes: r.delay_minutes,
+    trigger: r.trigger,
+    status: r.status,
+    scheduledAt: r.scheduled_at,
+    placedAt: r.placed_at,
+    durationSec: r.duration_sec,
+    costUsd: r.cost_usd,
+    endCallReason: r.end_call_reason,
+    recordingUrl: r.recording_url,
+    transcript: r.transcript,
+    extracted:
+      r.extracted && typeof r.extracted === "object"
+        ? (r.extracted as Record<string, unknown>)
+        : null,
+    error: r.error,
+    createdAt: r.created_at,
+  }));
+}
+
+/** Llamadas de UNA conversación, para la tarjeta del detalle. */
+export async function getVoiceCallsForConversation(
+  conversationId: string,
+): Promise<VoiceCallRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("voice_calls")
+    .select(VOICE_CALL_COLS)
+    .eq("conversation_id", conversationId)
+    .order("scheduled_at", { ascending: true });
+  if (error) {
+    if (error.code === "42P01") return [];
+    throw new Error(`getVoiceCallsForConversation: ${error.message}`);
+  }
+  return hydrateVoiceCalls(supabase, (data ?? []) as unknown as VoiceCallDbRow[]);
+}
+
+/** Conversaciones que tuvieron al menos una llamada con IA (para el filtro). */
+export async function getConversationIdsWithVoiceCall(): Promise<string[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("voice_calls")
+    .select("conversation_id")
+    .in("status", ["placed", "completed", "no_answer", "failed"] as VoiceCallStatus[]);
+  if (error) return [];
+  return [...new Set((data ?? []).map((r) => r.conversation_id as string))];
+}
+
+export interface VoiceCallStats {
+  total: number;
+  scheduled: number;
+  completed: number;
+  noAnswer: number;
+  failed: number;
+  totalMinutes: number;
+  totalCostUsd: number;
+}
+
+/** Resumen para la cabecera de la sección Llamadas y el reporte de costos. */
+export async function getVoiceCallStats(agentId?: string): Promise<VoiceCallStats> {
+  const empty: VoiceCallStats = {
+    total: 0,
+    scheduled: 0,
+    completed: 0,
+    noAnswer: 0,
+    failed: 0,
+    totalMinutes: 0,
+    totalCostUsd: 0,
+  };
+  const supabase = createServiceClient();
+  let q = supabase.from("voice_calls").select("status, duration_sec, cost_usd");
+  if (agentId) q = q.eq("agent_id", agentId);
+
+  const { data, error } = await q;
+  if (error || !data) return empty;
+
+  const stats = { ...empty };
+  for (const raw of data) {
+    const r = raw as { status: string; duration_sec: number | null; cost_usd: number | null };
+    stats.total++;
+    if (r.status === "scheduled" || r.status === "processing") stats.scheduled++;
+    if (r.status === "completed") stats.completed++;
+    if (r.status === "no_answer") stats.noAnswer++;
+    if (r.status === "failed") stats.failed++;
+    stats.totalMinutes += (r.duration_sec ?? 0) / 60;
+    stats.totalCostUsd += Number(r.cost_usd ?? 0);
+  }
+  stats.totalMinutes = Number(stats.totalMinutes.toFixed(1));
+  stats.totalCostUsd = Number(stats.totalCostUsd.toFixed(2));
+  return stats;
+}
+
+/**
+ * Config de voz de un agente para el editor del dashboard. Resiliente a que
+ * falten las columnas (migración 0027 sin aplicar): devuelve los defaults, así
+ * la página del agente sigue abriendo. Ver docs/25.
+ */
+export async function getAgentVoiceSettings(agentId: string): Promise<{
+  voiceEnabled: boolean;
+  modelId: string;
+  fromNumber: string;
+  voiceId: string;
+  voiceName: string;
+  prompt: string;
+  greeting: string;
+  apiKey: string;
+  stages: Array<{ delayMinutes: number; guidance: string | null }>;
+  countries: string[];
+  extractors: Array<{
+    identifier: string;
+    type: string;
+    condition: string;
+    choices: string[];
+    examples: string[];
+    actionId?: string | null;
+  }>;
+  stopWhenAnswered: boolean;
+  migrationMissing: boolean;
+}> {
+  const fallback = {
+    voiceEnabled: false,
+    modelId: "",
+    fromNumber: "",
+    voiceId: "",
+    voiceName: "",
+    prompt: "",
+    greeting: "",
+    apiKey: "",
+    stages: [] as Array<{ delayMinutes: number; guidance: string | null }>,
+    countries: [] as string[],
+    extractors: [] as Array<{
+      identifier: string;
+      type: string;
+      condition: string;
+      choices: string[];
+      examples: string[];
+      actionId?: string | null;
+    }>,
+    stopWhenAnswered: true,
+    migrationMissing: true,
+  };
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("agents")
+    .select(
+      "voice_enabled, synthflow_model_id, synthflow_from_number, voice_id, voice_name, " +
+        "voice_prompt, voice_greeting, voice_config, voice_countries, voice_extractors, " +
+        "voice_stop_when_answered",
+    )
+    .eq("id", agentId)
+    .maybeSingle();
+  if (error || !data) return fallback;
+
+  const row = data as unknown as Record<string, unknown>;
+  return {
+    voiceEnabled: row.voice_enabled === true,
+    modelId: (row.synthflow_model_id as string | null) ?? "",
+    fromNumber: (row.synthflow_from_number as string | null) ?? "",
+    voiceId: (row.voice_id as string | null) ?? "",
+    voiceName: (row.voice_name as string | null) ?? "",
+    prompt: (row.voice_prompt as string | null) ?? "",
+    greeting: (row.voice_greeting as string | null) ?? "",
+    apiKey: "",
+    stages: parseVoiceConfig(row.voice_config),
+    countries: parseVoiceCountries(row.voice_countries),
+    extractors: parseVoiceExtractors(row.voice_extractors),
+    stopWhenAnswered: row.voice_stop_when_answered !== false,
+    migrationMissing: false,
+  };
 }

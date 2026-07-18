@@ -13,6 +13,58 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Llamadas con IA por teléfono (Synthflow)** (ADR-0060/0061/0062/0063; migración `0027`,
+  `docs/25`). El agente vendía solo por WhatsApp; ahora también **llama**. Cada agente tiene su
+  propia IA de voz —prompt de voz **separado del de WhatsApp**, saludo, voz y número saliente— y
+  una **cadencia configurable**: *1 llamada a los 10 min del primer mensaje*, o *3 llamadas: al
+  llegar, a 24h y a 72h*, acotable por país (prefijo E.164). Apagado por defecto, con tres
+  cerraduras: migración aplicada + `VOICE_CALLS_ENABLED` + `voice_enabled` del agente.
+  - **La doc de Synthflow está mal en tres puntos que rompen la integración**, y por eso el
+    contrato se verificó **contra la cuenta real** (82 assistants, 43 actions, **977 objetos
+    `executed_actions` de llamadas de producción**) antes de escribir código:
+    (1) `return_value` **no es un objeto: es un string con JSON adentro**;
+    (2) conviven **dos prefijos** de clave (`extract_info_` histórico e `info_extractor_`, el que
+    genera hoy la API — confirmado creando y borrando un extractor real);
+    (3) `GET /v2/calls/{id}` **devuelve un array paginado**, no el objeto suelto. Además el
+    identifier **puede traer espacios** y el valor puede ser escalar, objeto o anidado en dos
+    niveles. El parser absorbe las cuatro formas y está testeado con esos payloads reales.
+  - **Assistant referenciado, cerebro por llamada** (ADR-0060). El workspace es **compartido con
+    otro producto** (los dos assistants que nos pasaron son de Rentmies, `type: inbound`, y ya
+    apuntan su webhook a Bubble): mutarlos rompía un flujo ajeno en producción. Como
+    `POST /v2/calls` acepta `prompt`, `greeting` y `custom_variables` **por llamada**, el prompt
+    viaja en cada llamada con el contexto vivo de la conversación (nombre, producto, últimos
+    mensajes) y **no se toca ningún assistant**. La voz —único campo no overrideable— se
+    sincroniza con un botón explícito y **read-modify-write**, para no borrarle campos a nadie.
+  - **El webhook es un aviso; la API es la fuente de verdad** (ADR-0061). Synthflow firma
+    **solo el `call_id`, no el cuerpo**, así que una firma válida *no* da integridad del payload:
+    del webhook se usa **únicamente el `call_id`** y los datos se releen por API. Encima el cron
+    **reconcilia** las llamadas abiertas, así que **la feature funciona aunque el webhook nunca se
+    configure** — que es el caso realista con assistants compartidos. Las desalineaciones
+    webhook↔API (`status` vs `call_status`, ISO vs epoch-ms) quedan en un solo módulo.
+  - **Extractores por agente** (ADR-0062): producto, dirección, nombre y método de pago se
+    configuran desde el dashboard y se sincronizan con Synthflow (crear/actualizar/adjuntar). El
+    texto se **sanea** antes de enviarlo porque pedir JSON o usar `{} [] <>` puede dejar la
+    llamada colgada en "in progress" para siempre.
+  - **Cadencia clonada de retargets, con cuatro diferencias deliberadas** (ADR-0063): **sin
+    ventana de 24h** (una llamada a 72h es válida), ancla en el **primer** inbound, y fuera del
+    horario del agente se **difiere en vez de omitirse** —nadie debe recibir una llamada de
+    ventas a las 3am—. Se conserva lo probado: claim atómico `scheduled → processing` e índice
+    parcial anti-duplicado, porque acá un duplicado marca un teléfono real dos veces.
+  - **Sección Llamadas unificada**: pestañas *Llamadas con IA* (realizadas + programadas, con
+    KPIs de minutos y costo) y *Solicitudes* (`#llamada`, lo que ya existía). Búsqueda **por
+    teléfono**, filtros por estado/agente, detalle con **transcripción y audio**, y **cancelación
+    masiva** con multi-selección.
+  - **En la conversación**: botón *Llamar ahora* (respeta país y horario: un clic no puede llamar
+    a las 3am), tarjeta con las llamadas del cliente, y el resultado como **nota interna** en el
+    hilo —renderizada aparte para que nadie la confunda con un mensaje al cliente—. Nuevo filtro
+    **"Llamada IA"** en Conversaciones, integrado en los cuatro constructores de href para que
+    sobreviva a la paginación y a los otros filtros.
+  - **Costos**: Synthflow **no expone costo por API** (`/v2/analytics/export`, `/credits` y
+    `/usage` dan 404), así que se estima `duration_sec/60 × SYNTHFLOW_USD_PER_MINUTE` y se suma
+    al *Costo IA total* de Reportes junto a texto/imágenes/audio.
+  - Verificado: typecheck, lint, build y **411/411 tests** — más una corrida **contra la API real**
+    del cliente y el normalizador (200 voces, 79 en español; una llamada de producción
+    normalizada con su transcript, grabación y datos extraídos anidados).
 - **Filtros de Conversaciones por etiqueta y por producto.** La lista ya se filtraba por
   agente/fecha/pedido/estado/orden; ahora suma dos selectores más: **Etiqueta** (las `labels`
   asignadas a las conversaciones) y **Producto** (la fuente `product_category` de cada

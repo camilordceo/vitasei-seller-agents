@@ -202,6 +202,37 @@ export const env = {
     return optional("HOTMART_AGENT_ID");
   },
 
+  // Llamadas con IA — Synthflow (ver docs/25, ADR-0060..0063)
+  // Kill switch GLOBAL. Apagado por defecto: un fallo acá llama a un cliente
+  // real y cuesta plata. Prender exige además `agents.voice_enabled`.
+  get VOICE_CALLS_ENABLED() {
+    const raw = process.env.VOICE_CALLS_ENABLED;
+    return raw === "true" || raw === "1";
+  },
+  // API key global; cada agente puede sobreescribirla (`agents.synthflow_api_key`).
+  get SYNTHFLOW_API_KEY() {
+    return optional("SYNTHFLOW_API_KEY");
+  },
+  // Base REGIONAL del workspace. Ojo: con la misma key, la región equivocada
+  // devuelve 401 (no 404). La cuenta de Vitasei vive en la global.
+  get SYNTHFLOW_API_BASE() {
+    return optional("SYNTHFLOW_API_BASE") ?? "https://api.synthflow.ai/v2";
+  },
+  // Requerido SOLO para listar voces (`GET /v2/voices`). Es distinto de la key.
+  get SYNTHFLOW_WORKSPACE_ID() {
+    return optional("SYNTHFLOW_WORKSPACE_ID");
+  },
+  // Secreto del post-call webhook. Synthflow firma el `call_id`, no el cuerpo:
+  // por eso el webhook es solo un aviso y los datos se releen por API (ADR-0061).
+  get SYNTHFLOW_WEBHOOK_SECRET() {
+    return optional("SYNTHFLOW_WEBHOOK_SECRET");
+  },
+  // Costo estimado por minuto: Synthflow NO expone costo por API.
+  get SYNTHFLOW_USD_PER_MINUTE() {
+    const n = Number(process.env.SYNTHFLOW_USD_PER_MINUTE);
+    return Number.isFinite(n) && n > 0 ? n : 0.2;
+  },
+
   // Supabase
   get SUPABASE_URL() {
     return required("NEXT_PUBLIC_SUPABASE_URL");
