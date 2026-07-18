@@ -307,6 +307,10 @@ export interface ConversationFilters {
   orderBy?: ConversationOrderBy;
   /** Filtra por agente (marca/número). undefined = todos los agentes (migración 0010). */
   agentId?: string;
+  /** Filtra por etiqueta (id de `labels`): solo conversaciones con esa etiqueta. undefined = todas. */
+  labelId?: string;
+  /** Filtra por producto/fuente (`product_category` exacto). undefined = todos. */
+  productCategory?: string;
 }
 
 /** Fila cruda de `conversations` para la lista (last_outbound_at opcional: migración 0023). */
@@ -328,6 +332,28 @@ export async function getRecentConversations(
   const offset = opts.offset ?? 0;
   const orderBy: ConversationOrderBy = opts.orderBy === "outbound" ? "outbound" : "inbound";
   const supabase = createServiceClient();
+
+  /**
+   * Filtro por etiqueta: PostgREST no filtra cómodamente por el embed de `labels`,
+   * así que primero resolvemos las conversaciones que TIENEN esa etiqueta y luego
+   * acotamos la lista con `.in("id", ...)`. Paginado por si una etiqueta cubre >1000
+   * conversaciones. Volumen v1 bajo → el `.in` con esos ids es aceptable; si crece
+   * mucho, mover el join a la BD (vista/RPC). Sin coincidencias → lista vacía.
+   */
+  let labelConvoIds: string[] | null = null;
+  if (opts.labelId) {
+    const rows = await fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("conversation_labels")
+          .select("conversation_id")
+          .eq("label_id", opts.labelId as string)
+          .range(from, to),
+      "getRecentConversations label ids",
+    );
+    labelConvoIds = [...new Set(rows.map((r) => r.conversation_id))];
+    if (labelConvoIds.length === 0) return [];
+  }
 
   /**
    * Corre la consulta de conversaciones. `hasOutboundCol` = false reintenta sin
@@ -359,6 +385,11 @@ export async function getRecentConversations(
     if (opts.status) q = q.eq("status", opts.status);
     // `agent_id` vive en `conversations` desde la migración 0010 (columna base).
     if (opts.agentId) q = q.eq("agent_id", opts.agentId);
+    // Etiqueta: conversaciones ya resueltas arriba (ids con ese `label_id`).
+    if (labelConvoIds) q = q.in("id", labelConvoIds);
+    // Producto/fuente (`product_category`, migración 0018). La página solo lo aplica
+    // tras validarlo contra las opciones reales, así que la columna siempre existe.
+    if (opts.productCategory) q = q.eq("product_category", opts.productCategory);
     if (opts.sinceDays != null) {
       const since = new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString();
       // Ventana por la MISMA clave de orden (coherente con la lista).
@@ -477,6 +508,91 @@ export async function getRecentConversations(
   // Sin hasOrder ya vino paginado por range(); con hasOrder recortamos la ventana
   // [offset, offset+limit) tras el filtro en JS.
   return opts.hasOrder == null ? mapped : mapped.slice(offset, offset + limit);
+}
+
+export interface ConversationFilterOptions {
+  /** Etiquetas EN USO (asignadas a alguna conversación del alcance), ordenadas por nombre. */
+  labels: ConversationLabelLite[];
+  /** Productos/fuentes distintos (`product_category`) del alcance, ordenados alfabéticamente. */
+  products: string[];
+}
+
+/**
+ * Opciones para los filtros de la lista de Conversaciones: etiquetas en uso y
+ * productos (fuentes) distintos, opcionalmente acotados a un agente. Solo incluye
+ * valores que REALMENTE existen en los datos, así ninguna opción del dropdown da una
+ * lista vacía y la validación en la página descarta parámetros inventados.
+ *
+ * Resiliente a la ventana de migración: si falta `product_category` (0018) no hay
+ * productos; si falta la tabla de etiquetas (0014) no hay etiquetas — el resto sigue
+ * funcionando. Volumen v1 bajo → lee y dedupe en JS (mismo criterio que
+ * `getProductConversion`); si crece mucho, mover a una vista/RPC.
+ */
+export async function getConversationFilterOptions(
+  agentId?: string,
+): Promise<ConversationFilterOptions> {
+  const supabase = createServiceClient();
+
+  // Conversaciones (id + categoría) del alcance. Si falta la columna de categoría
+  // (0018), se cae a solo ids (sin productos) en vez de romper.
+  let convos: Array<{ id: string; product_category: string | null }>;
+  try {
+    convos = await fetchAllRows(
+      (from, to) => {
+        let q = supabase.from("conversations").select("id, product_category");
+        if (agentId) q = q.eq("agent_id", agentId);
+        return q.range(from, to);
+      },
+      "getConversationFilterOptions conversations",
+    );
+  } catch {
+    const ids = await fetchAllRows(
+      (from, to) => {
+        let q = supabase.from("conversations").select("id");
+        if (agentId) q = q.eq("agent_id", agentId);
+        return q.range(from, to);
+      },
+      "getConversationFilterOptions conv ids",
+    );
+    convos = ids.map((c) => ({ id: c.id, product_category: null }));
+  }
+
+  const products = [
+    ...new Set(convos.map((c) => (c.product_category ?? "").trim()).filter((p) => p.length > 0)),
+  ].sort((a, b) => a.localeCompare(b, "es"));
+
+  // Con agente: solo etiquetas de SUS conversaciones. Sin agente: todas las usadas.
+  const convoIdSet = agentId ? new Set(convos.map((c) => c.id)) : null;
+
+  const labelsById = new Map<string, ConversationLabelLite>();
+  try {
+    const rows = await fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("conversation_labels")
+          .select("conversation_id, labels(id, name, color)")
+          .range(from, to),
+      "getConversationFilterOptions labels",
+    );
+    type EmbedRow = {
+      conversation_id: string;
+      labels: ConversationLabelLite | ConversationLabelLite[] | null;
+    };
+    for (const row of rows as EmbedRow[]) {
+      if (convoIdSet && !convoIdSet.has(row.conversation_id)) continue;
+      const label = Array.isArray(row.labels) ? row.labels[0] : row.labels;
+      if (!label) continue;
+      if (!labelsById.has(label.id)) {
+        labelsById.set(label.id, { id: label.id, name: label.name, color: label.color });
+      }
+    }
+  } catch {
+    // Tabla de etiquetas ausente (migración 0014 sin aplicar) → sin filtro de etiquetas.
+  }
+
+  const labels = [...labelsById.values()].sort((a, b) => a.name.localeCompare(b.name, "es"));
+
+  return { labels, products };
 }
 
 // --- Retargets (seguimientos automáticos, ver docs/10) ---------------------

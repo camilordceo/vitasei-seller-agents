@@ -1,12 +1,14 @@
 import Link from "next/link";
 import {
   getAgents,
+  getConversationFilterOptions,
   getRecentConversations,
   type ConversationOrderBy,
 } from "@/lib/dashboard/queries";
 import { ConversationList } from "../ui";
 import type { ConversationStatus } from "@/lib/supabase/types";
 import { AgentFilter } from "./AgentFilter";
+import { SelectFilter } from "./SelectFilter";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,8 @@ type SearchParams = {
   status?: string;
   sort?: string;
   agent?: string;
+  tag?: string;
+  product?: string;
   page?: string;
 };
 
@@ -115,6 +119,20 @@ export default async function ConversationsPage({
       ? searchParams.agent
       : undefined;
 
+  // Opciones de filtro (etiquetas en uso + productos) del ALCANCE actual (el agente
+  // seleccionado, si hay). Sirven para pintar los selectores y para validar los
+  // parámetros: un `?tag=`/`?product=` que no exista en el alcance se ignora (igual
+  // que `?agent=`), así una URL vieja o de otro agente no rompe la lista.
+  const filterOptions = await getConversationFilterOptions(agentKey);
+  const tagKey =
+    searchParams.tag && filterOptions.labels.some((l) => l.id === searchParams.tag)
+      ? searchParams.tag
+      : undefined;
+  const productKey =
+    searchParams.product && filterOptions.products.includes(searchParams.product)
+      ? searchParams.product
+      : undefined;
+
   // Pedimos UNA de más (PAGE_SIZE + 1) para saber si hay página siguiente sin un
   // count aparte: si vuelven más de PAGE_SIZE, hay "más antiguas".
   const fetched = await getRecentConversations({
@@ -125,6 +143,8 @@ export default async function ConversationsPage({
     status: statusKey,
     orderBy: sortKey,
     agentId: agentKey,
+    labelId: tagKey,
+    productCategory: productKey,
   });
   const hasNext = fetched.length > PAGE_SIZE;
   const convos = fetched.slice(0, PAGE_SIZE);
@@ -141,6 +161,8 @@ export default async function ConversationsPage({
     status: statusKey,
     sort: sortParam,
     agent: agentKey,
+    tag: tagKey,
+    product: productKey,
   };
   function hrefWith(key: keyof typeof current, value: string): string {
     const clears = value === "all" || (key === "sort" && value === "inbound");
@@ -151,6 +173,8 @@ export default async function ConversationsPage({
     if (next.status) qs.set("status", next.status);
     if (next.sort) qs.set("sort", next.sort);
     if (next.agent) qs.set("agent", next.agent);
+    if (next.tag) qs.set("tag", next.tag);
+    if (next.product) qs.set("product", next.product);
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
@@ -163,19 +187,31 @@ export default async function ConversationsPage({
     if (statusKey) qs.set("status", statusKey);
     if (sortParam) qs.set("sort", sortParam);
     if (agentKey) qs.set("agent", agentKey);
+    if (tagKey) qs.set("tag", tagKey);
+    if (productKey) qs.set("product", productKey);
     if (target > 1) qs.set("page", String(target));
     const s = qs.toString();
     return s ? `/dashboard/conversations?${s}` : "/dashboard/conversations";
   }
 
-  // Filtros que el selector de agente debe conservar (sin `agent` ni `page`).
-  const preserved: Record<string, string> = {};
-  if (rangeKey) preserved.range = rangeKey;
-  if (orderKey) preserved.order = orderKey;
-  if (statusKey) preserved.status = statusKey;
-  if (sortParam) preserved.sort = sortParam;
+  // Filtros activos a conservar al cambiar UN selector, EXCLUYENDO su propia clave
+  // (y `page`, para volver a la página 1). Lo usan los `<select>` de agente/etiqueta/
+  // producto: cada uno preserva a los demás.
+  function preservedExcept(omit: keyof typeof current): Record<string, string> {
+    const p: Record<string, string> = {};
+    if (rangeKey && omit !== "range") p.range = rangeKey;
+    if (orderKey && omit !== "order") p.order = orderKey;
+    if (statusKey && omit !== "status") p.status = statusKey;
+    if (sortParam && omit !== "sort") p.sort = sortParam;
+    if (agentKey && omit !== "agent") p.agent = agentKey;
+    if (tagKey && omit !== "tag") p.tag = tagKey;
+    if (productKey && omit !== "product") p.product = productKey;
+    return p;
+  }
 
-  const anyFilter = Boolean(rangeKey || orderKey || statusKey || sortParam || agentKey);
+  const anyFilter = Boolean(
+    rangeKey || orderKey || statusKey || sortParam || agentKey || tagKey || productKey,
+  );
 
   // Agente seleccionado (para el subtítulo). undefined = todos.
   const selectedAgent = agentKey ? agents.find((a) => a.id === agentKey) : undefined;
@@ -206,7 +242,29 @@ export default async function ConversationsPage({
           <AgentFilter
             agents={agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }))}
             current={agentKey ?? ""}
-            preserved={preserved}
+            preserved={preservedExcept("agent")}
+          />
+        )}
+        {filterOptions.labels.length > 0 && (
+          <SelectFilter
+            label="Etiqueta"
+            ariaLabel="Filtrar por etiqueta"
+            paramName="tag"
+            current={tagKey ?? ""}
+            allLabel="Todas las etiquetas"
+            options={filterOptions.labels.map((l) => ({ value: l.id, label: l.name }))}
+            preserved={preservedExcept("tag")}
+          />
+        )}
+        {filterOptions.products.length > 0 && (
+          <SelectFilter
+            label="Producto"
+            ariaLabel="Filtrar por producto"
+            paramName="product"
+            current={productKey ?? ""}
+            allLabel="Todos los productos"
+            options={filterOptions.products.map((p) => ({ value: p, label: p }))}
+            preserved={preservedExcept("product")}
           />
         )}
         <FilterRow

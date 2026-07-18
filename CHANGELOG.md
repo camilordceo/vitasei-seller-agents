@@ -13,6 +13,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
 > handoff (S5). Ver `docs/sprint-log/sprint-00.md` … `sprint-05.md`.
 
 ### Added
+- **Filtros de Conversaciones por etiqueta y por producto.** La lista ya se filtraba por
+  agente/fecha/pedido/estado/orden; ahora suma dos selectores más: **Etiqueta** (las `labels`
+  asignadas a las conversaciones) y **Producto** (la fuente `product_category` de cada
+  conversación). Ambos siguen el patrón existente de **query params** (`?tag=` / `?product=`) con
+  preservación cruzada de filtros y reset a la página 1, igual que el selector de agente. Los
+  selectores solo muestran valores **en uso** (nueva `getConversationFilterOptions`, acotada al
+  agente seleccionado), así ninguna opción da lista vacía; un `?tag=`/`?product=` inventado o de
+  otro agente se ignora al validarse contra esas opciones. En la query, la etiqueta se resuelve
+  primero a los `conversation_id` que la tienen (`.in`) y el producto es un `.eq` sobre
+  `product_category`. Resiliente a la ventana de migración (sin `labels`/`0014` no hay filtro de
+  etiquetas; sin `product_category`/`0018` no hay filtro de productos). Verificado: typecheck,
+  lint y 320/320 tests.
 - **Kapso como segundo proveedor de WhatsApp, en paralelo a Callbell** (ADR-0056/0057/0058;
   `agents.provider` + columnas `kapso_*`, migración `0026`). Todo el backend hablaba **solo con
   Callbell**: el envío estaba cableado en seis lugares, había un solo webhook y seis columnas con
