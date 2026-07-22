@@ -71,7 +71,7 @@ export default async function OrdersPage({
   // romper la página. Con un agente elegido, `getOrdersPage` ignora esto y usa la suya.
   const requested = normalizeCurrency(searchParams.cur);
 
-  const { rows, summary, hasNext, products, agents } = await getOrdersPage({
+  const { rows, summary, hasNext, products, agents, methodLabels } = await getOrdersPage({
     status,
     q: q || undefined,
     sku: sku || undefined,
@@ -237,7 +237,7 @@ export default async function OrdersPage({
           </Link>
         </div>
       ) : (
-        <OrderList rows={rows} />
+        <OrderList rows={rows} methodLabels={methodLabels} />
       )}
 
       {hasPrev || hasNext ? (

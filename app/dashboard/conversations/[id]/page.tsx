@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
+  getAgents,
   getConversation,
   getConversationEvents,
   getVideos,
@@ -18,6 +19,7 @@ import { VoiceCallsCard } from "./VoiceCallsCard";
 import { getLabels, getConversationLabels } from "../../actions";
 import { Collapsible } from "../../Collapsible";
 import { InitialsAvatar } from "../../ui-kit";
+import { buildMethodLabels } from "@/lib/dashboard/methodLabels";
 
 export const dynamic = "force-dynamic";
 
@@ -37,13 +39,19 @@ export default async function ConversationDetailPage({ params }: { params: { id:
 
   // Cargar etiquetas de la conversación y las disponibles + palabras de producto +
   // el rastro de eventos (para el panel de diagnóstico "¿por qué no respondió?").
-  const [conversationLabels, availableLabels, videos, events, voiceCalls] = await Promise.all([
-    getConversationLabels(params.id),
-    getLabels(convo.agentId),
-    getVideos(),
-    getConversationEvents(params.id),
-    getVoiceCallsForConversation(params.id),
-  ]);
+  const [conversationLabels, availableLabels, videos, events, voiceCalls, agents] =
+    await Promise.all([
+      getConversationLabels(params.id),
+      getLabels(convo.agentId),
+      getVideos(),
+      getConversationEvents(params.id),
+      getVoiceCallsForConversation(params.id),
+      // Para nombrar el método de pago con la etiqueta del agente (ADR-0080).
+      getAgents(),
+    ]);
+  const methodLabels = buildMethodLabels(
+    agents.filter((a) => !convo.agentId || a.id === convo.agentId),
+  );
   // Sugerencias para la fuente de producto = palabras clave configuradas (videos).
   const productSuggestions = [...new Set(videos.map((v) => v.keyword))].sort();
 
@@ -63,7 +71,7 @@ export default async function ConversationDetailPage({ params }: { params: { id:
         <InitialsAvatar name={convo.contact?.name ?? convo.contact?.phone} size="h-10 w-10 text-[13px]" />
         <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
         <StatusPill status={convo.status} />
-        <MethodPill method={convo.method} />
+        <MethodPill method={convo.method} labels={methodLabels} />
         {convo.aiPaused ? <ManualPill /> : null}
         {convo.hotmartFlow ? (
           <span

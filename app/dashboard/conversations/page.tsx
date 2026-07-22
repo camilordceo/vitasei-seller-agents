@@ -6,6 +6,7 @@ import {
   type ConversationOrderBy,
 } from "@/lib/dashboard/queries";
 import { isDayKey } from "@/lib/dashboard/report";
+import { buildMethodLabels } from "@/lib/dashboard/methodLabels";
 import { ConversationList } from "../ui";
 import { Collapsible } from "../Collapsible";
 import { PageHeader } from "../ui-kit";
@@ -468,6 +469,7 @@ export default async function ConversationsPage({
           rows={convos}
           filtered={anyFilter}
           showAgent={agents.length > 1 && !agentKey}
+          methodLabels={buildMethodLabels(agents)}
         />
       )}
 

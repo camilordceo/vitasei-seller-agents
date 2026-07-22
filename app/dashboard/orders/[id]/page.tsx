@@ -4,6 +4,7 @@ import { getOrder } from "@/lib/dashboard/queries";
 import { formatCOP, formatBogotaDateTime } from "@/lib/dashboard/format";
 import { OrderStatusPill, MethodPill } from "../../ui";
 import { OrderEditor, type OrderEditorInitial } from "../OrderEditor";
+import { buildMethodLabels, methodOptionsFor } from "@/lib/dashboard/methodLabels";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,10 @@ export default async function OrderDetailPage({ params }: { params: { id: string
   if (!order) notFound();
 
   const title = order.contact?.name ?? order.contact?.phone ?? "Orden";
+
+  // Los métodos que se pueden elegir/mostrar salen del agente que vendió (ADR-0055).
+  const methodLabels = buildMethodLabels([{ paymentMethods: order.paymentMethods }]);
+  const methodOptions = methodOptionsFor(order.paymentMethods, order.method);
 
   const initial: OrderEditorInitial = {
     status: order.status,
@@ -57,7 +62,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="font-display text-2xl font-semibold tracking-[-0.03em] text-slate-900">{title}</h1>
         <OrderStatusPill status={order.status} />
-        <MethodPill method={order.method} />
+        <MethodPill method={order.method} labels={methodLabels} />
         <span className="ml-auto text-lg font-semibold text-slate-900">
           {formatCOP(order.total)}
         </span>
@@ -68,7 +73,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
         <div className="lg:col-span-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="mb-4 text-sm font-semibold text-slate-700">Editar orden</h2>
-            <OrderEditor orderId={order.id} initial={initial} />
+            <OrderEditor orderId={order.id} initial={initial} methodOptions={methodOptions} />
           </div>
         </div>
 

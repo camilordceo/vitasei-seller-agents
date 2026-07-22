@@ -19,6 +19,7 @@ import {
 } from "@/lib/dashboard/format";
 import { setCallRequestStatus, setConversationManual } from "./actions";
 import { InitialsAvatar, Kpi, type KpiTone } from "./ui-kit";
+import { methodLabel } from "@/lib/dashboard/methodLabels";
 import type {
   CallRequestStatus,
   ConversationStatus,
@@ -46,16 +47,21 @@ export function StatusPill({ status }: { status: ConversationStatus }) {
   );
 }
 
-const METHOD: Record<FulfillmentMethod, string> = {
-  addi: "Addi",
-  cod: "Contra entrega",
-  undecided: "Sin definir",
-};
-
-export function MethodPill({ method }: { method: FulfillmentMethod }) {
+/**
+ * Píldora de método de pago. Las etiquetas las define cada agente (ADR-0055), así
+ * que se reciben por prop; sin mapa se cae a las claves históricas o al nombre
+ * derivado de la clave. Ver ADR-0080.
+ */
+export function MethodPill({
+  method,
+  labels,
+}: {
+  method: FulfillmentMethod;
+  labels?: Record<string, string>;
+}) {
   return (
     <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-      {METHOD[method] ?? METHOD.undecided}
+      {methodLabel(method, labels)}
     </span>
   );
 }
@@ -183,7 +189,14 @@ export function OrderBadge({ status }: { status: OrderStatus }) {
 }
 
 /** Lista de órdenes (sección Órdenes). Enlaza al detalle editable. */
-export function OrderList({ rows }: { rows: OrderRow[] }) {
+export function OrderList({
+  rows,
+  methodLabels,
+}: {
+  rows: OrderRow[];
+  /** `method → etiqueta` según los agentes (ADR-0055). */
+  methodLabels?: Record<string, string>;
+}) {
   if (rows.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
@@ -209,7 +222,7 @@ export function OrderList({ rows }: { rows: OrderRow[] }) {
                   {o.contactName || o.phone || "Sin contacto"}
                 </span>
                 <OrderStatusPill status={o.status} />
-                <MethodPill method={o.method} />
+                <MethodPill method={o.method} labels={methodLabels} />
                 {/* De qué pauta/producto llegó el cliente: es lo que dice QUÉ campaña
                     está vendiendo, no solo qué se pidió. Ver ADR-0076. */}
                 {o.productCategory ? <SourcePill source={o.productCategory} /> : null}
@@ -615,8 +628,11 @@ export function ConversationList({
   rows,
   filtered = false,
   showAgent = true,
+  methodLabels,
 }: {
   rows: ConversationRow[];
+  /** `method → etiqueta` según los agentes (ADR-0055). */
+  methodLabels?: Record<string, string>;
   /** Cambia el mensaje de vacío cuando hay filtros activos. */
   filtered?: boolean;
   /** Chip con el agente de cada fila (se apaga al filtrar por UN agente: sería repetirlo 50 veces). */
@@ -666,7 +682,7 @@ export function ConversationList({
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
               <span className="text-xs text-slate-400">{relativeTime(c.lastActivity)}</span>
-              <MethodPill method={c.method} />
+              <MethodPill method={c.method} labels={methodLabels} />
             </div>
           </Link>
         </li>

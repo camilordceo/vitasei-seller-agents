@@ -6,6 +6,7 @@ import { saveOrder } from "../actions";
 import type { OrderEditInput } from "./types";
 import type { FulfillmentMethod, OrderStatus } from "@/lib/supabase/types";
 import { formatCOP } from "@/lib/dashboard/format";
+import type { MethodOption } from "@/lib/dashboard/methodLabels";
 
 /** Estado de una fila de ítem en el editor (valores como string para inputs). */
 interface ItemRow {
@@ -33,12 +34,6 @@ const STATUS_OPTIONS: Array<{ value: OrderStatus; label: string }> = [
   { value: "handed_off", label: "Con logística" },
   { value: "confirmed", label: "Confirmada (venta cerrada)" },
   { value: "cancelled", label: "Cancelada" },
-];
-
-const METHOD_OPTIONS: Array<{ value: FulfillmentMethod; label: string }> = [
-  { value: "cod", label: "Contra entrega" },
-  { value: "addi", label: "Addi" },
-  { value: "undecided", label: "Sin definir" },
 ];
 
 const inputCls =
@@ -70,9 +65,15 @@ function previewTotal(items: ItemRow[]): number | null {
 export function OrderEditor({
   orderId,
   initial,
+  methodOptions,
 }: {
   orderId: string;
   initial: OrderEditorInitial;
+  /**
+   * Métodos que se pueden elegir: los del agente que vendió (ADR-0055) + "Sin
+   * definir" + el actual de la orden. Los arma el server con `methodOptionsFor`.
+   */
+  methodOptions: MethodOption[];
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -81,12 +82,6 @@ export function OrderEditor({
 
   const [status, setStatus] = useState<OrderStatus>(initial.status);
   const [method, setMethod] = useState<FulfillmentMethod>(initial.method);
-
-  // El método es texto libre por agente (ADR-0055): si el de la orden no está entre
-  // los conocidos (ej. "zelle"), se agrega como opción para no perderlo al editar.
-  const methodOptions = METHOD_OPTIONS.some((o) => o.value === initial.method)
-    ? METHOD_OPTIONS
-    : [...METHOD_OPTIONS, { value: initial.method, label: initial.method }];
   const [shippingName, setShippingName] = useState(initial.shippingName);
   const [shippingAddress, setShippingAddress] = useState(initial.shippingAddress);
   const [shippingCity, setShippingCity] = useState(initial.shippingCity);
@@ -201,6 +196,9 @@ export function OrderEditor({
               </option>
             ))}
           </select>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Las opciones salen de los métodos de pago del agente que vendió.
+          </p>
         </div>
       </div>
 
