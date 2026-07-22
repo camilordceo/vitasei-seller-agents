@@ -35,6 +35,17 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `events_log` como `video_test_sent`.
 
 ### Fixed
+- **Mensajes que el dashboard daba por enviados y nunca llegaron a Callbell ni al cliente**
+  (ADR-0074). Con `maxDuration = 60` la invocación se moría entre la generación y el envío
+  (rastro real: `reply_generated` a los 46–59 s y después nada, ni siquiera `process_error`),
+  pero el outbound **ya estaba guardado** en `messages` — era el único camino de salida que
+  guardaba antes de enviar — así que el hilo lo mostraba igual que uno entregado. Ahora:
+  **el envío va primero** (órdenes, `extractOrder`, avisos, videos y seguimientos corren
+  después), **el mensaje se guarda solo cuando el proveedor lo acepta** (con su `uuid`), un
+  envío fallido se marca `#no-enviado` y se ve en el hilo como **"No entregado — el cliente
+  no lo recibió"** con su evento `send_failed`, y el envío principal **reintenta una vez**
+  ante fallos transitorios (un `HTTP 4xx` no se reintenta). Las imágenes adicionales pasan a
+  best-effort: que una foto falle ya no tumba la orden ni los seguimientos.
 - **El video por palabra clave no salía en Vitasei USA** (ADR-0073). El video es el último
   paso del flujo y el webhook corría con `maxDuration = 60`: las respuestas de USA tardaban
   ~57s (debounce 12s + generación + envío de la imagen), así que la invocación se moría

@@ -11,6 +11,7 @@ import {
 import { useRouter } from "next/navigation";
 import { sendManualMessage } from "../../actions";
 import { formatDateTime } from "@/lib/dashboard/format";
+import { UNSENT_TAG } from "@/lib/agent/tags";
 import type { MessageDirection, MessageType } from "@/lib/supabase/types";
 
 interface ChatMessage {
@@ -85,7 +86,11 @@ export function ChatPanel({
           messages.map((m) => {
             const out = m.direction === "outbound";
             const isManual = m.tags.includes("manual");
-            const chips = m.tags.filter((t) => t !== "manual");
+            // El proveedor NO aceptó el envío: el cliente nunca lo recibió. Se
+            // muestra distinto para que el hilo no lo haga pasar por entregado
+            // (antes se veía idéntico a uno enviado). Ver ADR-0074.
+            const unsent = m.tags.includes(UNSENT_TAG);
+            const chips = m.tags.filter((t) => t !== "manual" && t !== UNSENT_TAG);
 
             // Resultado de una llamada con IA: es una NOTA interna, no un mensaje
             // que el cliente recibió. Se renderiza centrada y neutra para que
@@ -125,11 +130,33 @@ export function ChatPanel({
               <div key={m.id} className={`flex ${out ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[80%] px-3.5 py-2.5 text-sm leading-relaxed ${
-                    out
-                      ? "rounded-2xl rounded-br-md bg-slate-900 text-slate-100"
-                      : "rounded-2xl rounded-bl-md border border-slate-200 bg-white text-slate-800"
+                    unsent
+                      ? "rounded-2xl rounded-br-md border border-dashed border-amber-400 bg-amber-50 text-slate-700"
+                      : out
+                        ? "rounded-2xl rounded-br-md bg-slate-900 text-slate-100"
+                        : "rounded-2xl rounded-bl-md border border-slate-200 bg-white text-slate-800"
                   }`}
                 >
+                  {unsent ? (
+                    <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                      <svg
+                        className="h-3.5 w-3.5"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 8v5" strokeLinecap="round" />
+                        <path d="M12 16.5h.01" strokeLinecap="round" />
+                        <path
+                          d="M10.3 3.9 2.6 17.1A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.9L13.7 3.9a2 2 0 0 0-3.4 0Z"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      No entregado — el cliente no lo recibió
+                    </p>
+                  ) : null}
                   {m.type === "image" && m.mediaUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={m.mediaUrl} alt="Imagen enviada" className="mb-1 max-h-56 rounded-lg" />

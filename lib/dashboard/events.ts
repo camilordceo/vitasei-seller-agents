@@ -41,6 +41,26 @@ export function describeEvent(type: string, payload: unknown): EventView {
       return { label: "Texto enviado al cliente", detail: null, tone: "good" };
     case "image_sent":
       return { label: "Imagen enviada al cliente", detail: str(p.sku), tone: "good" };
+    // Envíos que NO salieron: el operador tiene que verlos como error, no como ruido.
+    // Ver ADR-0074.
+    case "send_failed":
+      return {
+        label: "El mensaje NO se pudo enviar",
+        detail: str(p.error) ?? "el proveedor rechazó el envío",
+        tone: "error",
+      };
+    case "image_send_failed":
+      return {
+        label: "Una imagen NO se pudo enviar",
+        detail: [str(p.sku), str(p.error)].filter(Boolean).join(": ") || null,
+        tone: "error",
+      };
+    case "outbound_save_failed":
+      return {
+        label: "Mensaje enviado pero no guardado en el hilo",
+        detail: str(p.error),
+        tone: "warn",
+      };
     case "reply_skipped": {
       const reason = str(p.reason);
       return {

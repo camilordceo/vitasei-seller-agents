@@ -36,6 +36,13 @@ export interface ParsedTags {
   raw: string[];
 }
 
+/**
+ * Marca en `messages.tags` de un outbound que el proveedor NO aceptó (el cliente
+ * NUNCA lo recibió). El hilo del dashboard lo pinta como "No entregado" en vez de
+ * hacerlo pasar por enviado. No lo emite el modelo: lo pone el backend. Ver ADR-0074.
+ */
+export const UNSENT_TAG = "#no-enviado";
+
 export interface ParsedReply {
   /** Texto sin los `#ID` ni las líneas de tags ni líneas en blanco colgantes. */
   cleanText: string;

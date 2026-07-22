@@ -7,7 +7,7 @@ import { generateReply } from "@/lib/openai/responses";
 import { transcribeAudioUrl } from "@/lib/openai/transcribe";
 import { audioCostUsd } from "@/lib/openai/pricing";
 import type { OrderDraft } from "@/lib/openai/extractOrder";
-import { parseReply } from "@/lib/agent/tags";
+import { parseReply, UNSENT_TAG } from "@/lib/agent/tags";
 import { applyGate } from "@/lib/agent/gate";
 import { prependContactContext } from "@/lib/agent/contactContext";
 import { kindFromUrl, toDataUrl } from "@/lib/messaging/media";
@@ -818,25 +818,15 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     });
   }
 
-  // Parsear tags + cleanText (puro) y guardar el outbound + encadenar. Los tags de
-  // pago se reconocen según los métodos configurados de ESTE agente.
+  // Parsear tags + cleanText (puro). Los tags de pago se reconocen según los
+  // métodos configurados de ESTE agente.
+  //
+  // El outbound NO se guarda aquí: se guarda DESPUÉS del envío (como hacen todos
+  // los demás caminos de salida). Guardarlo antes hacía que el dashboard mostrara
+  // como enviado un mensaje que nunca salió cuando el envío fallaba o —el caso
+  // real— cuando la función se moría por timeout entre la generación y el envío.
+  // Ver ADR-0074.
   const parsed = parseReply(gen.text, { paymentMethods });
-
-  const { data: outbound, error: outErr } = await supabase
-    .from("messages")
-    .insert({
-      conversation_id: conversationId,
-      direction: "outbound",
-      role: "assistant",
-      type: "text",
-      content: parsed.cleanText,
-      tags: parsed.tags.raw as unknown as Json,
-      openai_response_id: gen.responseId,
-    })
-    .select("id")
-    .single();
-  if (outErr) throw new Error(`save-outbound-message: ${outErr.message}`);
-  const outboundMessageId = outbound.id;
 
   {
     const { error: updErr } = await supabase
@@ -858,17 +848,10 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     } as unknown as Json,
   });
 
-  // Fuente de producto: categoriza la conversación por la primera palabra clave
-  // (magnesio, colageno…) que aparezca en el mensaje del cliente o la respuesta.
-  // Best-effort, no pisa una categoría ya asignada. Ver docs/21.
-  await detectProductCategory(supabase, {
-    conversationId,
-    agentId: agent.id,
-    clientText: input,
-    replyText: parsed.cleanText,
-  });
-
   // --- S4: gate + envío por Callbell --------------------------------------
+  // TODO lo que no sea imprescindible para ENVIAR (categoría, órdenes, avisos,
+  // seguimientos) va DESPUÉS del envío: la respuesta al cliente es lo único que
+  // no puede quedarse esperando a otra llamada al modelo. Ver ADR-0074.
   let found: ProductLookup[] = [];
   if (parsed.tags.skus.length > 0) {
     const { data, error } = await supabase
@@ -896,7 +879,12 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     await supabase.from("events_log").insert({
       conversation_id: conversationId,
       type: "out_of_window",
-      payload: { lastInboundAt } as unknown as Json,
+      // `preview`: el texto NO se guarda en el hilo (nunca salió), así que sin esto
+      // no quedaría rastro de qué se iba a responder. Ver ADR-0074.
+      payload: {
+        lastInboundAt,
+        preview: parsed.cleanText.slice(0, 300),
+      } as unknown as Json,
     });
     return;
   }
@@ -911,6 +899,224 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
       .from("conversations")
       .update({ fulfillment_method: parsed.tags.paymentMethod })
       .eq("id", conversationId);
+  }
+
+  // --- ENVÍO (lo primero) --------------------------------------------------
+  // La respuesta sale ANTES de crear la orden, avisar al dueño o agendar nada:
+  // esa maquinaria incluye OTRA llamada al modelo (extracción de la orden) y
+  // antes se comía el presupuesto de la función, que moría por timeout DESPUÉS de
+  // haber guardado el mensaje → el dashboard mostraba mensajes que nunca salieron.
+  // Ver ADR-0074.
+
+  // Texto del agente. En handoff va con team_uuid + bot_end (reasigna + apaga bot).
+  const textToSend =
+    parsed.cleanText.length > 0
+      ? parsed.cleanText
+      : isHandoff
+        ? "¡Listo! Te paso con el equipo que confirma tu pedido y la entrega."
+        : "";
+
+  const meta = { metadata: { conversation_id: conversationId } };
+
+  /** Guarda en el hilo un outbound que el proveedor YA aceptó (con su uuid). */
+  let mainSaved = false;
+  const saveOutbound = async (
+    type: MessageType,
+    content: string,
+    uuid: string | null,
+    mediaUrl?: string | null,
+  ): Promise<void> => {
+    const { error } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      direction: "outbound",
+      role: "assistant",
+      type,
+      content,
+      media_url: mediaUrl ?? null,
+      tags: parsed.tags.raw as unknown as Json,
+      openai_response_id: gen.responseId,
+      callbell_message_uuid: uuid,
+    });
+    if (error) {
+      // El mensaje SÍ salió; solo falló el registro. No se revierte nada, pero el
+      // hueco en el hilo tiene que quedar visible en el diagnóstico.
+      console.error("[generateAndSend] save outbound failed:", error.message);
+      await supabase
+        .from("events_log")
+        .insert({
+          conversation_id: conversationId,
+          type: "outbound_save_failed",
+          payload: { error: error.message, uuid } as unknown as Json,
+        })
+        .then(() => undefined, () => undefined);
+    }
+    mainSaved = true;
+  };
+
+  // Imágenes válidas (SKU existe en `products` y tiene image_url). En handoff no
+  // se mandan: la conversación se cierra con el texto.
+  const validImages: Array<{ sku: string; imageUrl: string; name: string | null }> = [];
+  if (!isHandoff) {
+    for (const sku of gate.validSkus) {
+      const product = productBySku.get(sku);
+      if (!product?.image_url) {
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "image_missing",
+          payload: { sku } as unknown as Json,
+        });
+        continue;
+      }
+      validImages.push({ sku, imageUrl: product.image_url, name: product.name ?? null });
+    }
+  }
+
+  // Caption de WhatsApp: límite ~1024 chars. Si el texto cabe, va JUNTO con la
+  // primera imagen (una sola llamada al proveedor = un mensaje con foto + texto).
+  // Si el texto es muy largo o no hay imagen, van por separado.
+  const CAPTION_MAX = 1024;
+  const combine =
+    validImages.length > 0 && textToSend.length > 0 && textToSend.length <= CAPTION_MAX;
+
+  try {
+    if (isHandoff) {
+      // Handoff: solo texto (reasigna + apaga el bot). Sin imágenes: se cierra.
+      // `teamUuid`/`botStatus` solo los honra Callbell; Kapso no tiene equipos y los
+      // ignora. Lo que de verdad calla a NUESTRA IA es el `status = 'handed_off'` que
+      // se escribe más abajo, así que el handoff funciona igual en los dos. Ver ADR-0056.
+      if (textToSend.length > 0) {
+        const sent = await sendWithRetry(() =>
+          messaging.sendText(phone, textToSend, {
+            ...meta,
+            teamUuid: agentTeamUuid(agent),
+            botStatus: "bot_end",
+          }),
+        );
+        await saveOutbound("text", textToSend, sent.uuid);
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "text_sent",
+          payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
+        });
+      }
+    } else if (combine) {
+      const [first, ...rest] = validImages;
+      const sent = await sendWithRetry(() =>
+        messaging.sendImage(phone, first.imageUrl, textToSend, meta),
+      );
+      await saveOutbound("image", textToSend, sent.uuid, first.imageUrl);
+      await supabase.from("events_log").insert({
+        conversation_id: conversationId,
+        type: "image_sent",
+        payload: {
+          sku: first.sku,
+          uuid: sent.uuid,
+          status: sent.status,
+          withCaption: true,
+        } as unknown as Json,
+      });
+      // Imágenes adicionales: mensajes aparte con el nombre del producto.
+      await sendExtraImages(supabase, messaging, conversationId, phone, rest, meta);
+    } else {
+      // Texto (si hay) como su propio mensaje.
+      if (textToSend.length > 0) {
+        const sent = await sendWithRetry(() => messaging.sendText(phone, textToSend, meta));
+        await saveOutbound("text", textToSend, sent.uuid);
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "text_sent",
+          payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
+        });
+      }
+      // Imágenes por separado (con el nombre del producto como caption).
+      await sendExtraImages(supabase, messaging, conversationId, phone, validImages, meta);
+    }
+  } catch (e) {
+    // El envío falló de verdad (ya reintentado). El cliente NO recibió nada: se deja
+    // el texto en el hilo MARCADO como no enviado para que el operador lo vea y
+    // reintente, y NO se sigue con órdenes, avisos ni seguimientos.
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[generateAndSend] send failed:", message);
+    if (!mainSaved && textToSend.length > 0) {
+      await supabase
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          direction: "outbound",
+          role: "assistant",
+          type: "text",
+          content: textToSend,
+          tags: [...parsed.tags.raw, UNSENT_TAG] as unknown as Json,
+          openai_response_id: gen.responseId,
+        })
+        .then(() => undefined, () => undefined);
+    }
+    await supabase
+      .from("events_log")
+      .insert({
+        conversation_id: conversationId,
+        type: "send_failed",
+        payload: { error: message, chars: textToSend.length } as unknown as Json,
+      })
+      .then(() => undefined, () => undefined);
+    return;
+  }
+
+  // --- Después del envío: todo lo demás es best-effort ---------------------
+
+  // Fuente de producto: categoriza la conversación por la primera palabra clave
+  // (magnesio, colageno…) que aparezca en el mensaje del cliente o la respuesta.
+  // Best-effort, no pisa una categoría ya asignada. Ver docs/21.
+  try {
+    await detectProductCategory(supabase, {
+      conversationId,
+      agentId: agent.id,
+      clientText: input,
+      replyText: parsed.cleanText,
+    });
+  } catch (e) {
+    console.error(
+      "[generateAndSend] product category failed:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  if (!isHandoff) {
+    // Método Addi → enviar el link/instrucciones si está configurado (v1 sin API
+    // Addi). Es específico de Colombia (método `addi`); los demás métodos no envían
+    // info extra (solo marcan el pago y generan la orden). Ver ADR-0055.
+    if (parsed.tags.paymentMethod === "addi" && env.ADDI_LINK) {
+      const addiLink = env.ADDI_LINK;
+      try {
+        const sent = await messaging.sendText(
+          phone,
+          `Puedes financiar tu compra con Addi aquí: ${addiLink}`,
+          meta,
+        );
+        await supabase.from("events_log").insert({
+          conversation_id: conversationId,
+          type: "addi_info_sent",
+          payload: { uuid: sent.uuid } as unknown as Json,
+        });
+      } catch (e) {
+        console.error(
+          "[generateAndSend] addi info failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }
+
+    // Videos por palabra clave: si la respuesta del bot menciona una palabra
+    // configurada (ej. "magnesio"), enviar el video correspondiente tras la
+    // respuesta — una sola vez por conversación. Best-effort (no rompe nada).
+    // Ver docs/20, ADR-0038.
+    await sendKeywordVideos(supabase, messaging, {
+      conversationId,
+      phone,
+      agentId: agent.id,
+      replyText: parsed.cleanText,
+      metadata: meta.metadata,
+    });
   }
 
   // #llamada → el cliente pidió que lo llamen. Crea la solicitud + avisa al dueño.
@@ -1094,133 +1300,6 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
     }
   }
 
-  // Texto del agente. En handoff va con team_uuid + bot_end (reasigna + apaga bot).
-  const textToSend =
-    parsed.cleanText.length > 0
-      ? parsed.cleanText
-      : isHandoff
-        ? "¡Listo! Te paso con el equipo que confirma tu pedido y la entrega."
-        : "";
-
-  const meta = { metadata: { conversation_id: conversationId } };
-
-  if (isHandoff) {
-    // Handoff: solo texto (reasigna + apaga el bot). Sin imágenes: se cierra.
-    // `teamUuid`/`botStatus` solo los honra Callbell; Kapso no tiene equipos y los
-    // ignora. Lo que de verdad calla a NUESTRA IA es el `status = 'handed_off'` que
-    // se escribe más abajo, así que el handoff funciona igual en los dos. Ver ADR-0056.
-    if (textToSend.length > 0) {
-      const sent = await messaging.sendText(phone, textToSend, {
-        ...meta,
-        teamUuid: agentTeamUuid(agent),
-        botStatus: "bot_end",
-      });
-      await supabase
-        .from("messages")
-        .update({ callbell_message_uuid: sent.uuid })
-        .eq("id", outboundMessageId);
-      await supabase.from("events_log").insert({
-        conversation_id: conversationId,
-        type: "text_sent",
-        payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
-      });
-    }
-  } else {
-    // Imágenes válidas (SKU existe en `products` y tiene image_url).
-    const validImages: Array<{ sku: string; imageUrl: string; name: string | null }> = [];
-    for (const sku of gate.validSkus) {
-      const product = productBySku.get(sku);
-      if (!product?.image_url) {
-        await supabase.from("events_log").insert({
-          conversation_id: conversationId,
-          type: "image_missing",
-          payload: { sku } as unknown as Json,
-        });
-        continue;
-      }
-      validImages.push({ sku, imageUrl: product.image_url, name: product.name ?? null });
-    }
-
-    // Caption de WhatsApp: límite ~1024 chars. Si el texto cabe, va JUNTO con la
-    // primera imagen (una sola llamada a Callbell = un mensaje con foto + texto).
-    // Si el texto es muy largo o no hay imagen, van por separado.
-    const CAPTION_MAX = 1024;
-    const combine =
-      validImages.length > 0 && textToSend.length > 0 && textToSend.length <= CAPTION_MAX;
-
-    if (combine) {
-      const [first, ...rest] = validImages;
-      // La primera imagen lleva el texto como caption → reutilizamos el mensaje
-      // outbound (que ya guardaba el texto) marcándolo como imagen.
-      const sent = await messaging.sendImage(phone, first.imageUrl, textToSend, meta);
-      await supabase
-        .from("messages")
-        .update({ type: "image", media_url: first.imageUrl, callbell_message_uuid: sent.uuid })
-        .eq("id", outboundMessageId);
-      await supabase.from("events_log").insert({
-        conversation_id: conversationId,
-        type: "image_sent",
-        payload: {
-          sku: first.sku,
-          uuid: sent.uuid,
-          status: sent.status,
-          withCaption: true,
-        } as unknown as Json,
-      });
-      // Imágenes adicionales: mensajes aparte con el nombre del producto.
-      for (const img of rest) {
-        await sendProductImage(supabase, messaging, conversationId, phone, img, meta);
-      }
-    } else {
-      // Texto (si hay) como su propio mensaje.
-      if (textToSend.length > 0) {
-        const sent = await messaging.sendText(phone, textToSend, meta);
-        await supabase
-          .from("messages")
-          .update({ callbell_message_uuid: sent.uuid })
-          .eq("id", outboundMessageId);
-        await supabase.from("events_log").insert({
-          conversation_id: conversationId,
-          type: "text_sent",
-          payload: { uuid: sent.uuid, status: sent.status } as unknown as Json,
-        });
-      }
-      // Imágenes por separado (con el nombre del producto como caption).
-      for (const img of validImages) {
-        await sendProductImage(supabase, messaging, conversationId, phone, img, meta);
-      }
-    }
-
-    // Método Addi → enviar el link/instrucciones si está configurado (v1 sin API
-    // Addi). Es específico de Colombia (método `addi`); los demás métodos no envían
-    // info extra (solo marcan el pago y generan la orden). Ver ADR-0055.
-    if (parsed.tags.paymentMethod === "addi" && env.ADDI_LINK) {
-      const addiLink = env.ADDI_LINK;
-      const sent = await messaging.sendText(
-        phone,
-        `Puedes financiar tu compra con Addi aquí: ${addiLink}`,
-        meta,
-      );
-      await supabase.from("events_log").insert({
-        conversation_id: conversationId,
-        type: "addi_info_sent",
-        payload: { uuid: sent.uuid } as unknown as Json,
-      });
-    }
-
-    // Videos por palabra clave: si la respuesta del bot menciona una palabra
-    // configurada (ej. "magnesio"), enviar el video correspondiente tras la
-    // respuesta — una sola vez por conversación. Best-effort (no rompe nada).
-    // Ver docs/20, ADR-0038.
-    await sendKeywordVideos(supabase, messaging, {
-      conversationId,
-      phone,
-      agentId: agent.id,
-      replyText: parsed.cleanText,
-      metadata: meta.metadata,
-    });
-  }
-
   // Handoff: apagar el bot en nuestra DB y cerrar la orden.
   if (isHandoff) {
     await supabase
@@ -1263,6 +1342,55 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
           conversation_id: conversationId,
           type: "retarget_schedule_error",
           payload: { error: message } as unknown as Json,
+        })
+        .then(() => undefined, () => undefined);
+    }
+  }
+}
+
+/**
+ * Un envío con UN reintento. Los cortes de red y los 5xx del proveedor son
+ * transitorios y antes tumbaban la respuesta entera; un 4xx (payload inválido,
+ * fuera de ventana, plantilla mala) NO se reintenta porque volvería a fallar
+ * igual y solo quema tiempo de la función. Ver ADR-0074.
+ */
+async function sendWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/HTTP 4\d\d/.test(message)) throw e; // error del request: reintentar no ayuda
+    console.warn("[sendWithRetry] reintentando tras fallo transitorio:", message);
+    await sleep(1500);
+    return fn();
+  }
+}
+
+/**
+ * Imágenes ADICIONALES (cuando hay varios `#ID`): best-effort una por una. Si una
+ * falla no se cae el turno — el mensaje principal ya salió y la orden/seguimientos
+ * no deben perderse por una foto. Ver ADR-0074.
+ */
+async function sendExtraImages(
+  supabase: DB,
+  messaging: MessagingProvider,
+  conversationId: string,
+  phone: string,
+  images: Array<{ sku: string; imageUrl: string; name: string | null }>,
+  opts: { metadata?: Record<string, unknown> },
+): Promise<void> {
+  for (const img of images) {
+    try {
+      await sendProductImage(supabase, messaging, conversationId, phone, img, opts);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[sendExtraImages] image send failed:", message);
+      await supabase
+        .from("events_log")
+        .insert({
+          conversation_id: conversationId,
+          type: "image_send_failed",
+          payload: { sku: img.sku, error: message } as unknown as Json,
         })
         .then(() => undefined, () => undefined);
     }
