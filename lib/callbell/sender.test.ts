@@ -43,7 +43,10 @@ describe("sendTemplate — plantilla de solo texto (sin imagen)", () => {
 });
 
 describe("sendTemplate — plantilla con imagen (header)", () => {
-  it("envía type:image con el header en content.url y la variable en template_values", async () => {
+  // La variable viaja en content.text Y en template_values: omitirla de content.text
+  // dejaba el cuerpo de la plantilla sin variable y WhatsApp la descartaba después
+  // de que Callbell respondiera "enqueued". Ver ADR-0081.
+  it("envía type:image con el header en content.url y la variable en content.text y template_values", async () => {
     const fetchMock = mockFetchOk();
     await sendTemplate(creds, "573001112233", "tmpl_7", {
       text: "Ana",
@@ -52,13 +55,13 @@ describe("sendTemplate — plantilla con imagen (header)", () => {
 
     const body = bodyOf(fetchMock);
     expect(body.type).toBe("image");
-    expect(body.content).toEqual({ url: "https://cdn.example.com/promo.jpg" });
+    expect(body.content).toEqual({ url: "https://cdn.example.com/promo.jpg", text: "Ana" });
     expect(body.template_values).toEqual(["Ana"]);
     expect(body.template_uuid).toBe("tmpl_7");
     expect(body.optin_contact).toBe(true);
   });
 
-  it("con templateValues explícitos, esos tienen prioridad sobre text", async () => {
+  it("con templateValues explícitos, esos tienen prioridad y content.text lleva el primero", async () => {
     const fetchMock = mockFetchOk();
     await sendTemplate(creds, "573001112233", "tmpl_15", {
       text: "Ana",
@@ -69,9 +72,10 @@ describe("sendTemplate — plantilla con imagen (header)", () => {
     const body = bodyOf(fetchMock);
     expect(body.type).toBe("image");
     expect(body.template_values).toEqual(["Ana", "Magnesio"]);
+    expect(body.content).toEqual({ url: "https://cdn.example.com/promo.jpg", text: "Ana" });
   });
 
-  it("sin nombre (text vacío) no manda template_values", async () => {
+  it("sin nombre (text vacío) no manda template_values ni content.text", async () => {
     const fetchMock = mockFetchOk();
     await sendTemplate(creds, "573001112233", "tmpl_7", {
       text: "",
@@ -81,6 +85,7 @@ describe("sendTemplate — plantilla con imagen (header)", () => {
     const body = bodyOf(fetchMock);
     expect(body.type).toBe("image");
     expect(body.template_values).toBeUndefined();
+    expect(body.content).toEqual({ url: "https://cdn.example.com/promo.jpg" });
   });
 });
 

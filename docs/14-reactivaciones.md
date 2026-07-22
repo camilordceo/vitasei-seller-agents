@@ -20,8 +20,11 @@ Callbell cambia según eso:
 - **Solo texto** (link de imagen vacío): `type:"text"`, la variable (nombre) va en `content.text`.
   Es el comportamiento por defecto.
 - **Con imagen** (link puesto): `type:"image"`, la imagen (header) va en `content.url` y la variable
-  del cuerpo en `template_values`. La plantilla debe estar **aprobada en Callbell con header de
-  imagen**; el link debe ser una URL pública y directa a la imagen.
+  del cuerpo en `content.text` **y** en `template_values`. La plantilla debe estar **aprobada en
+  Callbell con header de imagen**; el link debe ser una URL pública y directa a la imagen.
+  > Mandar la variable **solo** en `template_values` (como decidió ADR-0044) dejaba el cuerpo sin
+  > variable: Callbell respondía `enqueued` y WhatsApp descartaba la plantilla después. 339 envíos,
+  > 0 respuestas. Corregido en ADR-0081.
 
 Las URL viven por agente en `agents.reactivation_image_7d/15d` (NULL = solo texto) y se leen aparte
 y resiliente (`loadReactivationImages`, **no** en `AGENT_COLS`): si falta la migración `0022`, se
@@ -35,6 +38,22 @@ envía como solo texto y la ruta de inbound no se toca.
 - **Métricas:** programadas, enviadas, canceladas, saltadas/fallidas y **costo total** de plantillas.
 - **Lista:** reactivaciones recientes con estado, etapa (Día 7 / Día 15) y costo; enlazan a la
   conversación.
+
+## Diagnóstico: "enviado" no es "entregado" (ADR-0081)
+Que el envío devuelva `enqueued` solo significa que **Callbell lo aceptó**. Si WhatsApp lo rechaza
+después (plantilla mal armada, imagen que no se puede descargar, número inválido), el mensaje muere.
+Dos herramientas para no volar a ciegas:
+
+- **Webhook `message_status_updated`:** con `failed`/`mismatch` se escribe `outbound_failed` en el
+  hilo con la razón de WhatsApp y la reactivación pasa de `sent` a `failed`.
+  **Hay que suscribir ese evento** en la configuración de webhooks de Callbell.
+- **Panel de diagnóstico** (Seguimientos → Reactivaciones):
+  - **Revisar plantillas:** lista las plantillas aprobadas de la cuenta del agente y avisa si el UUID
+    no existe ahí, si no está aprobada, si el tipo de plantilla y el link de imagen no cuadran o si
+    pide más variables de las que mandamos (hoy: solo el nombre).
+  - **Enviar prueba:** manda la plantilla a un número ahora — con o sin imagen — y muestra el
+    desenlace REAL consultado a Callbell unos segundos después. Sirve para validar el día 15 **antes**
+    de que venza el primero, y para aislar si el problema es el header de imagen.
 
 ## Configuración (una sola vez, al aprobar el feature)
 1. En **Callbell**, crea la(s) plantilla(s) de WhatsApp y espera su **aprobación** por Meta.

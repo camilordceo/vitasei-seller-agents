@@ -106,6 +106,100 @@ async function send(creds: CallbellCreds, body: SendBody): Promise<SentMessage> 
   return { uuid: data.message?.uuid ?? null, status: data.message?.status ?? null };
 }
 
+// --- Diagnóstico ------------------------------------------------------------
+
+/**
+ * Estado REAL de un mensaje ya enviado — `GET /v1/messages/status/:uuid`.
+ *
+ * `enqueued` (lo que devuelve el envío) solo dice que Callbell lo aceptó, no que
+ * WhatsApp lo entregó. Una plantilla mal armada se acepta con 200 y muere después:
+ * el único lugar donde eso se ve es acá (o en el webhook `message_status_updated`).
+ * Estados: `enqueued`, `sent`, `delivered`, `read`, `failed`, `mismatch`, `deleted`.
+ */
+export interface MessageStatus {
+  status: string | null;
+  /** Razón del fallo (o el payload crudo del proveedor) para mostrarla tal cual. */
+  detail: string | null;
+}
+
+export async function getMessageStatus(
+  creds: CallbellCreds,
+  uuid: string,
+): Promise<MessageStatus> {
+  const res = await fetch(`${BASE}/messages/status/${uuid}`, {
+    headers: { Authorization: `Bearer ${creds.apiKey}` },
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Callbell status HTTP ${res.status}: ${detail.slice(0, 200)}`);
+  }
+  const data = (await res.json().catch(() => ({}))) as {
+    message?: { status?: string; messageStatusPayload?: unknown };
+  };
+  return {
+    status: data.message?.status ?? null,
+    detail: describeStatusPayload(data.message?.messageStatusPayload),
+  };
+}
+
+/**
+ * Saca la razón legible de un `messageStatusPayload` (misma forma en el webhook).
+ * Callbell no documenta el nombre del campo del fallo, así que se buscan los
+ * candidatos conocidos y, si no hay ninguno, se devuelve el JSON crudo recortado:
+ * más vale un JSON feo que un "no se sabe".
+ */
+export function describeStatusPayload(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const outer = raw as Record<string, unknown>;
+  const inner = (outer.payload && typeof outer.payload === "object"
+    ? (outer.payload as Record<string, unknown>)
+    : {}) as Record<string, unknown>;
+  for (const source of [inner, outer]) {
+    for (const key of ["reason", "error", "message", "description", "title"]) {
+      const v = source[key];
+      if (typeof v === "string" && v.trim().length > 0) return v.trim();
+    }
+  }
+  const json = JSON.stringify(outer.payload ?? outer);
+  return json && json !== "{}" ? json.slice(0, 300) : null;
+}
+
+/** Plantilla aprobada tal como la lista Callbell (`GET /v1/templates`). */
+export interface CallbellTemplate {
+  uuid: string;
+  title: string | null;
+  /** `text`, `image`, `document`… — tiene que cuadrar con si mandamos imagen o no. */
+  templateType: string | null;
+  status: string | null;
+  text: string | null;
+}
+
+/**
+ * Lista las plantillas aprobadas de la cuenta. Sirve para responder sin adivinar
+ * las dos preguntas que rompen las reactivaciones: ¿el UUID pegado en el dashboard
+ * existe en ESTA cuenta? ¿la plantilla lleva header de imagen o es de solo texto?
+ */
+export async function listTemplates(creds: CallbellCreds): Promise<CallbellTemplate[]> {
+  const res = await fetch(`${BASE}/templates`, {
+    headers: { Authorization: `Bearer ${creds.apiKey}` },
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Callbell templates HTTP ${res.status}: ${detail.slice(0, 200)}`);
+  }
+  const data = (await res.json().catch(() => ({}))) as {
+    templates?: Array<Record<string, unknown>>;
+  };
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return (data.templates ?? []).map((t) => ({
+    uuid: String(t.uuid ?? ""),
+    title: str(t.title),
+    templateType: str(t.templateType),
+    status: str(t.status),
+    text: str(t.text),
+  }));
+}
+
 /**
  * Envía un mensaje de texto con las credenciales del agente (`creds`). Con
  * `options.teamUuid` + `options.botStatus:"bot_end"` hace el handoff (reasigna a
@@ -137,10 +231,15 @@ export function sendText(
  *  - **Sin imagen** (`imageUrl` vacío): `type:"text"`, la variable única va en
  *    `content.text` (convención de Callbell para plantillas de una variable).
  *  - **Con imagen** (`imageUrl`): `type:"image"`, el header viaja en `content.url`
- *    (como en `sendImage`) y las variables del cuerpo van en `template_values` — NO
- *    en `content.text`, que en un mensaje de imagen sería el caption y chocaría con
- *    el cuerpo de la plantilla. Si solo hay una variable (el nombre) y no se pasó
- *    `templateValues`, se usa `[text]`.
+ *    (como en `sendImage`) y la variable va en `content.text` **y también** en
+ *    `template_values`.
+ *
+ * Por qué las dos: la doc de Callbell pone SIEMPRE el valor de la variable en
+ * `content.text` (su ejemplo de varias variables manda `content.text` **y**
+ * `template_values`). ADR-0044 lo omitió con imagen por miedo a que fuera un
+ * caption, y el resultado fue que la plantilla de día 7 (la única con imagen) salía
+ * con el cuerpo sin variable: Callbell devolvía `enqueued` y WhatsApp la descartaba
+ * después — 339 envíos, 0 respuestas. Ver ADR-0081.
  *
  * `templateValues` es para plantillas con varias variables (tiene prioridad).
  */
@@ -162,15 +261,18 @@ export function sendTemplate(
       : undefined;
 
   if (options?.imageUrl) {
+    const values = templateValues ?? (options.text ? [options.text] : undefined);
+    // El valor de la variable va en content.text (convención de Callbell) ADEMÁS de
+    // en template_values: sin él, el cuerpo de la plantilla viajaba sin variable.
+    const first = values?.[0] ?? options.text ?? "";
     return send(creds, {
       to,
       from: "whatsapp",
       type: "image",
-      content: { url: options.imageUrl },
+      content: first ? { url: options.imageUrl, text: first } : { url: options.imageUrl },
       channel_uuid: creds.channelUuid ?? undefined,
       template_uuid: templateUuid,
-      // Con imagen, la variable del cuerpo va en template_values (no en content.text).
-      template_values: templateValues ?? (options.text ? [options.text] : undefined),
+      template_values: values,
       optin_contact: true,
       metadata: options?.metadata,
     });

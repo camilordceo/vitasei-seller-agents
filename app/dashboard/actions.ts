@@ -9,7 +9,16 @@ import { normalizeProviderId } from "@/lib/messaging/types";
 import { DEFAULT_CURRENCY, normalizeCurrency, type CurrencyCode } from "@/lib/dashboard/currency";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
-import { loadAgent, loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
+import {
+  agentCallbellCreds,
+  agentProvider,
+  agentReactivationSettings,
+  loadAgent,
+  loadAgentForConversation,
+  loadReactivationImages,
+  providerForAgent,
+} from "@/lib/agent/agents";
+import { getMessageStatus, listTemplates } from "@/lib/callbell/sender";
 import { normalizePhone } from "@/lib/messaging/phone";
 import { uploadChatImage } from "@/lib/supabase/storage";
 import { regenerateReply } from "@/lib/agent/processMessage";
@@ -441,6 +450,189 @@ export async function updateReactivationSettings(
   revalidatePath("/dashboard/retargets");
   revalidatePath("/dashboard/agents");
   revalidatePath("/dashboard");
+}
+
+// --- Diagnóstico de plantillas (reactivaciones) -----------------------------
+
+/**
+ * Ficha de una plantilla de la cuenta de Callbell del agente, ya cruzada con lo
+ * que hay configurado en el dashboard. Ver ADR-0081.
+ */
+export interface TemplateCheck {
+  uuid: string;
+  title: string | null;
+  /** `text`, `image`, `document`… tal como la aprobó Meta. */
+  templateType: string | null;
+  status: string | null;
+  text: string | null;
+  /** Etapa a la que está asignada en el dashboard (7 o 15), si alguna. */
+  usedForDay: 7 | 15 | null;
+  /** Nº de variables ({{1}}, {{2}}…) que declara el texto de la plantilla. */
+  variables: number;
+}
+
+export interface TemplateCheckResult {
+  templates: TemplateCheck[];
+  /** Avisos concretos: UUID que no existe, imagen y plantilla que no cuadran… */
+  warnings: string[];
+}
+
+/** Cuenta las variables `{{n}}` del texto de una plantilla. */
+function countTemplateVariables(text: string | null): number {
+  if (!text) return 0;
+  const found = new Set(text.match(/\{\{\s*\d+\s*\}\}/g) ?? []);
+  return found.size;
+}
+
+/**
+ * Trae las plantillas aprobadas de la cuenta de Callbell del agente y las cruza
+ * con las reactivaciones configuradas. Responde sin adivinar las preguntas que
+ * rompen los envíos: ¿el UUID existe en ESTA cuenta?, ¿la plantilla lleva header
+ * de imagen?, ¿cuántas variables espera? Solo Callbell. Ver ADR-0081.
+ */
+export async function checkAgentTemplates(agentId: string): Promise<TemplateCheckResult> {
+  const supabase = createServiceClient();
+  const agent = await loadAgent(supabase, agentId);
+  if (!agent) throw new Error("El agente no existe.");
+  if (agentProvider(agent) !== "callbell")
+    throw new Error("El listado de plantillas solo está disponible para agentes de Callbell.");
+
+  const settings = agentReactivationSettings(agent);
+  const images = await loadReactivationImages(supabase, agent.id);
+  const list = await listTemplates(agentCallbellCreds(agent));
+
+  const stages: Array<{ day: 7 | 15; uuid: string | null; image: string | null }> = [
+    { day: 7, uuid: settings.template7d, image: images.image7d },
+    { day: 15, uuid: settings.template15d, image: images.image15d },
+  ];
+
+  const warnings: string[] = [];
+  for (const stage of stages) {
+    if (!stage.uuid) {
+      warnings.push(`Día ${stage.day}: sin UUID configurado — esa etapa no se envía.`);
+      continue;
+    }
+    const found = list.find((t) => t.uuid === stage.uuid);
+    if (!found) {
+      warnings.push(
+        `Día ${stage.day}: el UUID ${stage.uuid} no está en las plantillas de esta cuenta.`,
+      );
+      continue;
+    }
+    if (found.status && found.status !== "approved")
+      warnings.push(`Día ${stage.day}: la plantilla está "${found.status}", no aprobada.`);
+
+    const isImageTemplate = (found.templateType ?? "text") !== "text";
+    if (isImageTemplate && !stage.image)
+      warnings.push(
+        `Día ${stage.day}: la plantilla es de tipo "${found.templateType}" pero no tiene link de imagen. Ponle uno o WhatsApp la rechaza.`,
+      );
+    if (!isImageTemplate && stage.image)
+      warnings.push(
+        `Día ${stage.day}: hay link de imagen pero la plantilla es de solo texto. Borra el link o aprueba una plantilla con header de imagen.`,
+      );
+
+    const vars = countTemplateVariables(found.text);
+    if (vars > 1)
+      warnings.push(
+        `Día ${stage.day}: la plantilla usa ${vars} variables y nosotros solo mandamos el nombre.`,
+      );
+  }
+
+  return {
+    templates: list.map((t) => ({
+      ...t,
+      usedForDay: stages.find((s) => s.uuid === t.uuid)?.day ?? null,
+      variables: countTemplateVariables(t.text),
+    })),
+    warnings,
+  };
+}
+
+export interface TemplateTestResult {
+  uuid: string | null;
+  /** Estado devuelto por el envío (`enqueued` = aceptado, no entregado). */
+  sendStatus: string | null;
+  /** Estado REAL consultado unos segundos después (`delivered`, `failed`…). */
+  finalStatus: string | null;
+  /** Razón del fallo, tal como la da Callbell/WhatsApp. */
+  detail: string | null;
+  withImage: boolean;
+}
+
+/**
+ * Envía AHORA la plantilla de reactivación configurada (día 7 o 15) a un número
+ * de prueba y consulta su desenlace real unos segundos después.
+ *
+ * Por qué existe: la única forma de saber si una plantilla llega era esperar 7 o
+ * 15 días y ver si alguien respondía; y como el envío responde `enqueued` aunque
+ * WhatsApp la descarte después, ni eso era concluyente. Con `conImagen` se puede
+ * aislar el header: si sin imagen llega y con imagen no, el problema es la imagen
+ * o el tipo de plantilla. Ver ADR-0081.
+ */
+export async function sendReactivationTest(
+  agentId: string,
+  day: 7 | 15,
+  phoneRaw: string,
+  withImage: boolean,
+): Promise<TemplateTestResult> {
+  const phone = normalizePhone(phoneRaw);
+  if (!phone) throw new Error("Escribe un número válido con indicativo (ej. 573001234567).");
+
+  const supabase = createServiceClient();
+  const agent = await loadAgent(supabase, agentId);
+  if (!agent) throw new Error("El agente no existe.");
+
+  const settings = agentReactivationSettings(agent);
+  const templateUuid = day === 7 ? settings.template7d : settings.template15d;
+  if (!templateUuid) throw new Error(`El agente no tiene plantilla configurada para el día ${day}.`);
+
+  const images = await loadReactivationImages(supabase, agent.id);
+  const imageUrl = withImage ? (day === 7 ? images.image7d : images.image15d) : null;
+
+  const sent = await providerForAgent(agent).sendTemplate(phone, templateUuid, {
+    text: "Prueba",
+    imageUrl,
+    metadata: { source: "dashboard-template-test", reactivation_stage: String(day) },
+  });
+
+  // El desenlace real tarda unos segundos: se consulta con reintentos cortos.
+  // Solo Callbell expone el endpoint de estado; con Kapso queda en lo que devolvió.
+  let final: { status: string | null; detail: string | null } = { status: null, detail: null };
+  if (sent.uuid && agentProvider(agent) === "callbell") {
+    const creds = agentCallbellCreds(agent);
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        final = await getMessageStatus(creds, sent.uuid);
+      } catch {
+        break; // sin estado: nos quedamos con lo que devolvió el envío
+      }
+      if (final.status && final.status !== "enqueued") break;
+    }
+  }
+
+  await supabase.from("events_log").insert({
+    type: "reactivation_test_sent",
+    payload: {
+      agentId,
+      day,
+      phone,
+      withImage: !!imageUrl,
+      uuid: sent.uuid,
+      sendStatus: sent.status,
+      finalStatus: final.status,
+      detail: final.detail,
+    } as unknown as Json,
+  });
+
+  return {
+    uuid: sent.uuid,
+    sendStatus: sent.status,
+    finalStatus: final.status,
+    detail: final.detail,
+    withImage: !!imageUrl,
+  };
 }
 
 /**

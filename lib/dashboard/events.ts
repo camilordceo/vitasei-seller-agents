@@ -55,6 +55,14 @@ export function describeEvent(type: string, payload: unknown): EventView {
         detail: [str(p.sku), str(p.error)].filter(Boolean).join(": ") || null,
         tone: "error",
       };
+    // El envío fue aceptado por el proveedor pero WhatsApp lo rechazó DESPUÉS
+    // (plantilla mal armada, número inválido…). Ver ADR-0081.
+    case "outbound_failed":
+      return {
+        label: "WhatsApp rechazó el mensaje (no llegó)",
+        detail: [str(p.status), str(p.reason)].filter(Boolean).join(": ") || null,
+        tone: "error",
+      };
     case "outbound_save_failed":
       return {
         label: "Mensaje enviado pero no guardado en el hilo",

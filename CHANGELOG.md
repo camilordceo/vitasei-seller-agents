@@ -64,6 +64,23 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `events_log` como `video_test_sent`.
 
 ### Fixed
+- **Las reactivaciones de día 7 salían pero no llegaban — "enviado" no era "entregado"**
+  (ADR-0081, `docs/14`). Callbell aceptaba el envío (`enqueued`) y el dashboard lo daba por
+  bueno: 339 plantillas "enviadas" y **0 respuestas** (contra 9% en los retargets normales).
+  La plantilla de día 7 es la única con imagen y su payload (ADR-0044) mandaba la variable
+  **solo** en `template_values`, sin `content.text` — que es donde Callbell documenta el valor
+  de la variable —, así que el cuerpo viajaba sin variable y WhatsApp la descartaba después.
+  Ahora la variable va en `content.text` **y** en `template_values`. Además:
+  - **Se acabó volar a ciegas:** el webhook procesa `message_status_updated`; un `failed` /
+    `mismatch` escribe `outbound_failed` en el hilo con la razón de WhatsApp y la reactivación
+    pasa de `sent` a `failed` (el dashboard y los costos dejan de contar como éxito algo que
+    nunca llegó). Requiere suscribir ese evento en Callbell.
+  - **Ciclo de prueba de 7 días → 30 segundos:** nuevo panel de diagnóstico en Seguimientos →
+    Reactivaciones. **Revisar plantillas** lee las plantillas aprobadas de la cuenta del agente
+    y avisa si el UUID no existe ahí, si no está aprobada, si el tipo (texto/imagen) no cuadra
+    con el link configurado o si pide más variables de las que mandamos. **Enviar prueba** manda
+    la plantilla a un número ahora, con o sin imagen, y muestra el desenlace real consultado a
+    Callbell — sirve para validar el **día 15 antes de que venza el primero** (25/07).
 - **Reportes sumaba dólares y pesos mexicanos como si fueran pesos colombianos**
   (ADR-0077). "Ventas confirmadas $1.156" metía una orden de **USD 96 contada como 96
   pesos** y órdenes de México contadas como COP. Ahora `summarizeOrders` recibe la moneda

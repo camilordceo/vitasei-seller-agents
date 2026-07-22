@@ -14,6 +14,7 @@ import {
   runDebouncedReply,
 } from "@/lib/agent/processMessage";
 import { resolveAgentForInbound } from "@/lib/agent/agents";
+import { parseOutboundStatus, recordOutboundStatus } from "@/lib/callbell/outboundStatus";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { Json } from "@/lib/supabase/types";
 
@@ -79,10 +80,24 @@ export async function POST(req: Request) {
     return ok();
   }
 
-  // 3) Filtrar: solo `message_created` inbound del cliente.
+  // 3) Desenlace de un mensaje NUESTRO (`message_status_updated`). Es el único
+  //    lugar donde se ve que un envío aceptado ("enqueued") murió después en
+  //    WhatsApp. Se registra y se responde 200; nunca toca la ruta del inbound.
+  //    Requiere tener el evento suscrito en Callbell. Ver ADR-0081.
+  const statusEvent = parseOutboundStatus(body);
+  if (statusEvent) {
+    try {
+      await recordOutboundStatus(statusEvent);
+    } catch (e) {
+      console.error("[callbell webhook] status-update failed:", e);
+    }
+    return ok();
+  }
+
+  // 4) Filtrar: solo `message_created` inbound del cliente.
   if (!body || !isInboundMessageEvent(body)) return ok();
 
-  // 4) Normalizar y extraer lo necesario para idempotencia + debounce.
+  // 5) Normalizar y extraer lo necesario para idempotencia + debounce.
   const payload = body.payload ?? {};
   const phone = normalizePhone(payload.contact?.phoneNumber);
   const messageUuid = payload.uuid ?? null;
@@ -90,7 +105,7 @@ export async function POST(req: Request) {
   // Sin teléfono o sin uuid no podemos procesar de forma idempotente → ack y salir.
   if (!phone || !messageUuid) return ok();
 
-  // 5) Enrutamiento multi-agente: ¿a qué agente pertenece este inbound? Callbell
+  // 6) Enrutamiento multi-agente: ¿a qué agente pertenece este inbound? Callbell
   //    tiene varios números/marcas y un solo webhook. Se resuelve por canal o
   //    número destino contra la tabla `agents` (con fallback a las env de Vercel
   //    para el agente actual). Sin agente → no es un número nuestro. Ver docs/16.
@@ -126,7 +141,7 @@ export async function POST(req: Request) {
   // Tomamos la primera; el resto queda en el `raw` del events_log. Ver docs/15.
   const mediaUrl = getAttachments(payload)[0] ?? null;
 
-  // 6) Ingesta síncrona. Un error no debe tumbar el webhook: se registra y 200.
+  // 7) Ingesta síncrona. Un error no debe tumbar el webhook: se registra y 200.
   try {
     const ingest = await ingestInboundMessage({
       phone,
@@ -143,7 +158,7 @@ export async function POST(req: Request) {
       receivedAt,
     });
 
-    // 7) Duplicado → no reprogramar. Si no, agendar la respuesta con debounce.
+    // 8) Duplicado → no reprogramar. Si no, agendar la respuesta con debounce.
     if (!ingest.duplicate) {
       waitUntil(
         runDebouncedReply({
