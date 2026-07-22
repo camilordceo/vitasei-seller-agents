@@ -1,7 +1,13 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { createVideo, updateVideo, deleteVideo, setVideoEnabled } from "../actions";
+import {
+  createVideo,
+  updateVideo,
+  deleteVideo,
+  setVideoEnabled,
+  sendTestVideo,
+} from "../actions";
 import type { VideoRow } from "@/lib/dashboard/queries";
 
 const inputCls =
@@ -109,6 +115,13 @@ export function VideosManager({
   // Filtro por mercado de la lista: "all" | "global" | <agentId>.
   const [filter, setFilter] = useState<string>("all");
 
+  // Prueba de envío: a qué número y cuál video se está probando.
+  const [testPhone, setTestPhone] = useState("");
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ id: string; text: string } | null>(null);
+  // Un video global no tiene mercado propio: se prueba con el agente del filtro.
+  const filterAgentId = filter !== "all" && filter !== "global" ? filter : null;
+
   // Estado de edición inline.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editKeyword, setEditKeyword] = useState("");
@@ -201,6 +214,29 @@ export function VideosManager({
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Error al actualizar el video");
+      }
+    });
+  };
+
+  // Prueba de envío: manda el video a un número ahora mismo, sin esperar a que un
+  // cliente escriba la palabra clave (y sin que la idempotencia por conversación
+  // lo bloquee). El número se recuerda entre pruebas: siempre es el mismo teléfono.
+  const handleTest = (v: VideoRow) => {
+    const to = testPhone.trim();
+    if (!to) {
+      setTestingId(v.id);
+      setError("Escribe el número de WhatsApp al que quieres la prueba.");
+      return;
+    }
+    setTestingId(v.id);
+    startTransition(async () => {
+      try {
+        const result = await sendTestVideo(v.id, to, v.agentId ?? filterAgentId);
+        setTestResult({ id: v.id, text: `Enviado a ${result.phone}. Revisa tu WhatsApp.` });
+        setError(null);
+      } catch (e) {
+        setTestResult(null);
+        setError(e instanceof Error ? e.message : "No se pudo enviar la prueba");
       }
     });
   };
@@ -329,6 +365,27 @@ export function VideosManager({
             </select>
           </div>
         </div>
+
+        {/* Prueba de envío: el número al que va cualquier "Probar" de la lista. */}
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+          <label htmlFor="testPhone" className="text-xs font-medium text-slate-600">
+            Probar envío al WhatsApp
+          </label>
+          <input
+            id="testPhone"
+            type="tel"
+            inputMode="numeric"
+            value={testPhone}
+            onChange={(e) => setTestPhone(e.target.value)}
+            placeholder="573103565492"
+            className="w-44 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-700 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          />
+          <span className="text-xs text-slate-400">
+            Con indicativo y sin +. El video sale por el número del mercado al que pertenece;
+            si el contacto no te ha escrito en 24h, WhatsApp lo bloquea.
+          </span>
+        </div>
+
         {shown.length === 0 ? (
           <p className="text-sm text-slate-400">
             {videos.length === 0
@@ -433,6 +490,14 @@ export function VideosManager({
                   )}
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => handleTest(v)}
+                      disabled={isPending}
+                      title="Enviar este video ahora al número de prueba"
+                      className="rounded-md border border-teal-300 px-2.5 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
+                    >
+                      {isPending && testingId === v.id ? "Enviando…" : "Probar"}
+                    </button>
+                    <button
                       onClick={() => startEdit(v)}
                       disabled={isPending}
                       className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-50"
@@ -454,6 +519,15 @@ export function VideosManager({
                       Eliminar
                     </button>
                   </div>
+                  {testingId === v.id && !isPending && (testResult?.id === v.id || error) ? (
+                    <p
+                      className={`w-full text-xs ${
+                        testResult?.id === v.id ? "text-emerald-700" : "text-rose-600"
+                      }`}
+                    >
+                      {testResult?.id === v.id ? testResult.text : error}
+                    </p>
+                  ) : null}
                 </li>
               ),
             )}

@@ -26,7 +26,10 @@ import type { Json } from "@/lib/supabase/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // La respuesta corre en background (waitUntil): sleep del debounce + OpenAI + envío.
-export const maxDuration = 60;
+// 300s por la misma razón que el webhook de Callbell: con 60 el último paso del
+// flujo (el video por palabra clave) se quedaba fuera del presupuesto. Ver ADR-0073.
+// El 200 al webhook sale igual de inmediato: esto solo alarga el trabajo en background.
+export const maxDuration = 300;
 
 /**
  * Respuesta estándar: Kapso espera **200 en menos de 10 segundos**. Si no, reintenta

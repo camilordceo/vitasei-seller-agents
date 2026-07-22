@@ -28,7 +28,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   cedió ante la realidad (un solo nav, sin datos ficticios, sin búsqueda muerta) en
   `docs/vitasei-software-design.md` §8.
 
+### Added
+- **Botón "Probar" en Videos** (ADR-0073): envía el video a un número de WhatsApp al
+  instante, por el proveedor del mercado del video, sin esperar a que un cliente escriba la
+  palabra clave y sin que la regla de una-vez-por-conversación lo bloquee. Queda en
+  `events_log` como `video_test_sent`.
+
 ### Fixed
+- **El video por palabra clave no salía en Vitasei USA** (ADR-0073). El video es el último
+  paso del flujo y el webhook corría con `maxDuration = 60`: las respuestas de USA tardaban
+  ~57s (debounce 12s + generación + envío de la imagen), así que la invocación se moría
+  entre la imagen y el video. Sin excepción, sin evento, sin log — solo silencio. Los
+  webhooks de mensajes (Callbell y Kapso) pasan a **`maxDuration = 300`**; el 200 al
+  proveedor sigue siendo inmediato.
 - **Llamadas con IA: no se podían apagar desde el dashboard** (ADR-0072). El guardado
   sincronizaba los extractores con Synthflow **antes** de escribir en Supabase y el cliente
   HTTP no tenía timeout: con su API lenta o caída, la server action se quedaba colgada hasta

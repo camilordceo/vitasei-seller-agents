@@ -20,7 +20,11 @@ import type { Json } from "@/lib/supabase/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // La respuesta corre en background (waitUntil): sleep del debounce + OpenAI + envío.
-export const maxDuration = 60;
+// 300s, no 60. Con 60 la invocación se moría JUSTO antes del último paso y el
+// video por palabra clave no salía nunca (Vitasei USA, 2026-07-22: respuestas de
+// ~57s por el debounce de 12s + generación + envío de la imagen; el video quedaba
+// fuera del presupuesto y no dejaba ni evento ni error). Ver ADR-0073.
+export const maxDuration = 300;
 
 /** Respuesta estándar del webhook: Callbell espera SIEMPRE 200 `{"status":"ok"}`. */
 function ok() {

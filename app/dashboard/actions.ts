@@ -9,7 +9,8 @@ import { normalizeProviderId } from "@/lib/messaging/types";
 import { DEFAULT_CURRENCY, normalizeCurrency, type CurrencyCode } from "@/lib/dashboard/currency";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
-import { loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
+import { loadAgent, loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
+import { normalizePhone } from "@/lib/messaging/phone";
 import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
 import type { CallRequestStatus, Json } from "@/lib/supabase/types";
@@ -1024,6 +1025,65 @@ export async function deleteVideo(id: string): Promise<void> {
     payload: { videoId: id } as unknown as Json,
   });
   revalidatePath("/dashboard/videos");
+}
+
+/**
+ * Envía UN video a un número, ya mismo, para probarlo. No toca la conversación ni
+ * el marcador de "ya se envió": es una prueba, no una interacción con el cliente.
+ *
+ * Existe porque probar un video era imposible sin esperar a que un cliente real
+ * escribiera la palabra clave — y peor, en la conversación de prueba del operador
+ * el video **ya se había enviado una vez**, así que nunca volvía a salir aunque se
+ * cambiara la URL (la idempotencia es por id del video, ADR-0038). Ver ADR-0073.
+ *
+ * Sale por el proveedor del MERCADO del video (su agente). Un video global no
+ * tiene mercado propio, así que hay que decir con qué agente se prueba.
+ */
+export async function sendTestVideo(
+  videoId: string,
+  phone: string,
+  agentIdOverride?: string | null,
+): Promise<{ ok: boolean; uuid: string | null; phone: string }> {
+  const to = normalizePhone(phone);
+  if (!to) throw new Error("Escribe un número de WhatsApp (solo dígitos, con indicativo).");
+  if (to.length < 8) throw new Error(`El número "${phone}" es muy corto para ser E.164.`);
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("videos")
+    .select("id, agent_id, keyword, video_url, caption")
+    .eq("id", videoId)
+    .maybeSingle();
+  if (error) throw new Error(`sendTestVideo: ${error.message}`);
+  if (!data) throw new Error("Ese video ya no existe.");
+
+  const agentId = data.agent_id ?? agentIdOverride ?? null;
+  if (!agentId) {
+    throw new Error("Es un video global: elige con qué mercado (agente) quieres probarlo.");
+  }
+  const agent = await loadAgent(supabase, agentId);
+  if (!agent) throw new Error("No se encontró el agente del video.");
+
+  const messaging = providerForAgent(agent);
+  const caption = data.caption?.trim() || null;
+  const sent = await messaging.sendVideo(to, data.video_url, caption, {
+    metadata: { test: "video" },
+  });
+
+  await supabase.from("events_log").insert({
+    conversation_id: null,
+    type: "video_test_sent",
+    payload: {
+      videoId,
+      agentId,
+      keyword: data.keyword,
+      to,
+      uuid: sent.uuid,
+      status: sent.status,
+    } as unknown as Json,
+  });
+
+  return { ok: true, uuid: sent.uuid, phone: to };
 }
 
 // --- Fuente de producto de la conversación (ver docs/21) --------------------
