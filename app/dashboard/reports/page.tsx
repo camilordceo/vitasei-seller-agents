@@ -19,6 +19,7 @@ import {
   type RoasRow,
   type ScalingReport,
   type SalesReport,
+  type WeeklyReport,
 } from "@/lib/dashboard/report";
 import { CURRENCY_LABELS, rateNote, type CurrencyCode } from "@/lib/dashboard/currency";
 import {
@@ -270,6 +271,7 @@ function RoasSection({
 }) {
   const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
   const chartCurrency = roas.currency;
+  const mismatched = roas.rows.filter((r) => r.currencyMismatch);
   const invTotal14 = roas.perDay.reduce((s, d) => s + d.investment, 0);
   const revTotal14 = roas.perDay.reduce((s, d) => s + d.revenue, 0);
 
@@ -313,6 +315,26 @@ function RoasSection({
             {roas.excludedAgents}{" "}
             {roas.excludedAgents === 1 ? "agente quedó" : "agentes quedaron"} fuera del consolidado:
             su moneda no tiene tasa configurada.
+          </p>
+        ) : null}
+        {/* Vender en una moneda y pagar la pauta en otra es legítimo (Meta cobra en
+            dólares), pero es también la forma exacta que toma el mercado a medio
+            configurar. Se pregunta en vez de tragárselo. Ver ADR-0079. */}
+        {mismatched.length > 0 ? (
+          <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+            <span className="font-medium">
+              {mismatched.length === 1 ? "Un agente vende" : `${mismatched.length} agentes venden`}{" "}
+              en una moneda y {mismatched.length === 1 ? "paga" : "pagan"} la pauta en otra:
+            </span>{" "}
+            {mismatched
+              .map((r) => `${r.name} vende en ${r.currency} y pauta en ${r.costCurrency}`)
+              .join(" · ")}
+            . Si es así, todo bien (la pauta se convierte para calcular el retorno). Si no,
+            corrígelo en{" "}
+            <Link href="/dashboard/agents" className="font-medium underline underline-offset-2">
+              Agentes
+            </Link>
+            .
           </p>
         ) : null}
       </div>
@@ -456,6 +478,123 @@ function Growth({ value }: { value: number | null }) {
  * Sección de escala (ADR-0070): cuánto deja CADA chat después de pauta e IA, a
  * dónde va el mes al ritmo actual y si la operación crece semana contra semana.
  */
+/**
+ * Color de cada agente en la barra apilada. Fijo por POSICIÓN (el orden de agentes
+ * es estable entre semanas), para que un mercado no cambie de color de fila en fila.
+ */
+const AGENT_COLORS = ["#0f766e", "#6366f1", "#f59e0b", "#e11d48", "#0891b2", "#7c3aed"];
+
+/**
+ * Semana a semana: de dónde vinieron los chats y cuánto se vendió.
+ *
+ * El día a día de WhatsApp es ruido (un festivo, la pauta que arrancó tarde) y el
+ * mes tarda demasiado en decir algo; la semana es la unidad en la que se decide
+ * subir o bajar presupuesto. Partir los chats por agente responde la pregunta que
+ * un total no responde: **cuál** mercado está creciendo. Ver ADR-0079.
+ */
+function WeeklySection({ weekly }: { weekly: WeeklyReport }) {
+  const maxChats = Math.max(1, ...weekly.weeks.map((w) => w.chats));
+  const maxRevenue = Math.max(1, ...weekly.weeks.map((w) => w.revenue));
+  const hasData = weekly.weeks.some((w) => w.chats > 0 || w.orders > 0);
+  const colorOf = (i: number) => AGENT_COLORS[i % AGENT_COLORS.length];
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">
+            Semana a semana · chats por agente y ventas
+          </h2>
+          <p className="max-w-prose text-xs text-slate-400">
+            Semanas de lunes a domingo (hora Colombia). La barra son los <strong>chats</strong>
+            {" "}que entraron, partidos por el agente que los atendió; a la derecha, las{" "}
+            <strong>ventas</strong> cerradas esa semana y qué porcentaje de los chats
+            terminó en orden. Un chat cuenta el día que llegó y una orden el día que se
+            creó — las mismas bases que el ROAS.
+            {weekly.converted ? ` Ventas homologadas a ${weekly.currency}.` : ""}
+          </p>
+        </div>
+        {weekly.agents.length > 1 ? (
+          <ul className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {weekly.agents.map((a, i) => (
+              <li key={a.id} className="flex items-center gap-1.5 text-xs text-slate-600">
+                <span
+                  className="h-2.5 w-2.5 rounded-sm"
+                  style={{ backgroundColor: colorOf(i) }}
+                  aria-hidden
+                />
+                {a.name}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+
+      {!hasData ? (
+        <p className="py-2 text-sm text-slate-400">Aún no hay actividad para agrupar por semana.</p>
+      ) : (
+        <ul className="space-y-2">
+          {weekly.weeks.map((w) => (
+            <li key={w.weekStart} className="grid items-center gap-3 sm:grid-cols-[7.5rem_1fr_11rem]">
+              <span className="text-xs text-slate-500">
+                {formatDayKeyShort(w.weekStart)}
+                {w.partial ? (
+                  <span className="ml-1 text-[10px] uppercase tracking-wide text-amber-600">
+                    en curso
+                  </span>
+                ) : null}
+              </span>
+
+              <div className="flex items-center gap-2">
+                {/* Barra apilada: un segmento por agente, ancho proporcional a la
+                    semana más alta del periodo (no a cada fila) para poder
+                    comparar semanas de un vistazo. */}
+                <div className="flex h-5 flex-1 items-stretch overflow-hidden rounded bg-slate-100">
+                  {w.byAgent.map((a, i) =>
+                    a.chats > 0 ? (
+                      <div
+                        key={a.agentId}
+                        title={`${a.name}: ${formatNumber(a.chats)} ${a.chats === 1 ? "chat" : "chats"}`}
+                        style={{
+                          width: `${(a.chats / maxChats) * 100}%`,
+                          backgroundColor: colorOf(i),
+                        }}
+                      />
+                    ) : null,
+                  )}
+                </div>
+                <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-700">
+                  {formatNumber(w.chats)}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-3">
+                {/* Segunda barra, escala propia: la plata no se compara con chats,
+                    se compara con las otras semanas. */}
+                <div className="hidden h-1.5 w-16 overflow-hidden rounded bg-slate-100 sm:block">
+                  <div
+                    className="h-full rounded bg-emerald-500/80"
+                    style={{ width: `${Math.round((w.revenue / maxRevenue) * 100)}%` }}
+                  />
+                </div>
+                <span
+                  className="w-24 shrink-0 text-right text-xs tabular-nums text-slate-900"
+                  title={`${formatNumber(w.orders)} ${w.orders === 1 ? "orden" : "órdenes"}`}
+                >
+                  {formatMoney(w.revenue, weekly.currency)}
+                </span>
+                <span className="w-14 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                  {w.conversion != null ? formatPercent(w.conversion) : "—"}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function ScalingSection({ scaling, currency }: { scaling: ScalingReport; currency: string }) {
   const { perChat, month, wow } = scaling;
   const projGrowth =
@@ -889,6 +1028,9 @@ export default async function ReportsPage({
 
       {/* Economía por chat, proyección del mes y crecimiento semanal (ADR-0070) */}
       <ScalingSection scaling={roas.scaling} currency={roas.currency} />
+
+      {/* Semana a semana: chats por agente vs. ventas (ADR-0079) */}
+      <WeeklySection weekly={roas.weekly} />
 
       {/* Conversión: conversaciones → transacciones */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5">

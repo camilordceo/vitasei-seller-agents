@@ -15,6 +15,7 @@ import {
   summarizeOrders,
   summarizeProductConversion,
   summarizeRoas,
+  summarizeWeekly,
   summarizeScaling,
   summarizeTopProducts,
   matchesSearch,
@@ -35,6 +36,7 @@ import {
   type ScalingReport,
   type TopProductRow,
   type TransactionFact,
+  type WeeklyReport,
 } from "@/lib/dashboard/report";
 import type {
   CallRequestStatus,
@@ -1676,6 +1678,7 @@ export async function getConversionReport(agentId?: string): Promise<ConversionR
  */
 export interface RoasScalingReport extends RoasReport {
   scaling: ScalingReport;
+  weekly: WeeklyReport;
 }
 
 export async function getRoasReport(agentId?: string): Promise<RoasScalingReport> {
@@ -1733,7 +1736,12 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
         name: a.name,
         brand: a.brand,
         costPerChat: cost.costPerChat,
-        currency: cost.costCurrency,
+        // DOS monedas, a propósito: la pauta se paga en una y el producto se vende
+        // en otra. Antes acá iba `cost_currency` sola y las ventas de la fila
+        // quedaban etiquetadas con la moneda de la PAUTA — el ROAS dividía pesos
+        // mexicanos entre pesos colombianos. Ver ADR-0079.
+        costCurrency: cost.costCurrency,
+        saleCurrency: normalizeCurrency((a as { currency?: string | null }).currency),
       };
     });
 
@@ -1784,7 +1792,13 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
     : DEFAULT_CURRENCY;
 
   const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent, display);
-  return { ...report, scaling: summarizeScaling(report, chats, orderFacts) };
+  return {
+    ...report,
+    scaling: summarizeScaling(report, chats, orderFacts),
+    // La foto semanal sale de los MISMOS hechos que el ROAS (sin queries extra):
+    // así los chats y las ventas de la semana cuadran con el resto de la página.
+    weekly: summarizeWeekly(agents, chats, orderFacts, display),
+  };
 }
 
 export interface ProductConversionReport {

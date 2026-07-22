@@ -29,6 +29,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Gráfico "Semana a semana · chats por agente y ventas"** en Reportes (ADR-0079). Semanas
+  de lunes a domingo: barra apilada con los chats que entraron partidos por el agente que
+  los atendió, y al lado las ventas cerradas esa semana con el % de chats que terminó en
+  orden. La semana en curso va marcada "en curso" (comparar un martes contra una semana
+  cerrada es la forma más fácil de leer una caída que no existe). Sale de los mismos hechos
+  que el ROAS, sin queries nuevas, así que cuadra con el resto de la página.
 - **Mapa de calor "Cuándo se vende · día × hora"** en Reportes (ADR-0077). Matriz 7×24 en
   hora Colombia con la plata vendida en cada franja, la **mejor franja** destacada y qué
   porcentaje de las ventas concentran las 3 mejores bloques de 3 horas. Responde a qué
@@ -66,6 +72,26 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   redondeo al final. Aplica a titulares, ventanas Hoy/7/30, cortes por estado y método, y
   la serie de 14 días. Lo que no tiene tasa **no se cuela**: cuenta como orden, no como
   plata, y se avisa.
+- **Dos secciones de Reportes mostraban dos verdades distintas sobre los mismos hechos**
+  (ADR-0079): las tarjetas decían `$3.238.652` y el ROAS `$4.101.585`. Un agente tiene DOS
+  columnas de moneda —`currency` (en la que vende) y `cost_currency` (en la que se paga la
+  pauta)— y cada sección leía una. En producción, Vitasei Mexico y Vitasei USA tenían la
+  de la pauta bien (MXN, USD) y la de venta en el default COP: el mercado **sí** estaba
+  configurado, pero en el campo de al lado, porque el editor los tenía en bloques distintos
+  y la ayuda del de la pauta decía "la de este mercado". Ahora **manda la moneda de venta**
+  y la pauta se convierte a ella.
+- **El ROAS por agente dividía monedas distintas** (ADR-0079). `summarizeRoas` etiquetaba
+  toda la fila —ventas incluidas— con la moneda de la PAUTA: la fila de México dividía
+  inversión en pesos mexicanos entre ventas en pesos colombianos. Un agente que vende en
+  MXN y paga 2 USD/chat mostraba `100×` donde el retorno real es `5×`. **Los ROAS previos de
+  mercados con venta y pauta en monedas distintas eran falsos.**
+- **El editor de agente ya no deja configurar una moneda sin ver la otra** (ADR-0079).
+  Moneda de venta, costo por chat y moneda de la pauta viven en un solo bloque; la de la
+  pauta **sigue** a la de venta salvo que se separe a mano, y pasó de ser un campo libre de
+  tres letras a un selector. Si quedan distintas, la pantalla lo dice con nombre propio
+  ("Vitasei Mexico vende en MXN y pauta en USD") en vez de tragárselo.
+- **Backfill de la moneda de venta de cada mercado** (`0030`): CO→COP, Mexico→MXN, USA→USD,
+  Hotmart (MX)→USD. Va como migración versionada, idempotente, en vez de un UPDATE a mano.
 - **La pantalla siempre dice en qué moneda está leída** (ADR-0078), y delata el mercado sin
   configurar. Resultó que la homologación de ADR-0077 no se veía en producción por un dato,
   no por el código: los **cuatro agentes tenían `agents.currency = 'COP'`**, incluidos

@@ -984,9 +984,16 @@ export function AgentEditor({
         </div>
       </fieldset>
 
-      {/* Moneda de VENTA del agente → manda en Órdenes. Ver ADR-0068. */}
-      <fieldset className="grid gap-4 rounded-md border border-slate-200 bg-slate-50/60 p-4 sm:grid-cols-2">
-        <legend className="px-1 text-sm font-semibold text-slate-700">Moneda del agente</legend>
+      {/*
+        Moneda del mercado Y costo de la pauta, en UN SOLO bloque a propósito.
+        Estaban en dos fieldsets separados y pasó lo previsible: el dueño configuró
+        MXN/USD en el campo de la pauta —que decía "la de este mercado"— y la moneda
+        de VENTA se quedó en el default COP, así que Reportes sumaba dólares como
+        pesos mientras el ROAS mostraba otra cifra. Juntas, es imposible tocar una
+        sin ver la otra. Ver ADR-0068, ADR-0065 y ADR-0079.
+      */}
+      <fieldset className="grid gap-4 rounded-md border border-slate-200 bg-slate-50/60 p-4 sm:grid-cols-3">
+        <legend className="px-1 text-sm font-semibold text-slate-700">Moneda y costo del mercado</legend>
 
         <div>
           <label htmlFor="currency" className={labelCls}>
@@ -997,7 +1004,12 @@ export function AgentEditor({
             value={currency}
             onChange={(e) => {
               dirty();
-              setCurrency(normalizeCurrency(e.target.value));
+              const next = normalizeCurrency(e.target.value);
+              // La moneda de la pauta SIGUE a la de venta mientras nadie la haya
+              // separado a mano: es el caso normal (se vende y se pauta en la misma
+              // plata) y evita que quede en el default sin que nadie se entere.
+              if (costCurrency === currency) setCostCurrency(next);
+              setCurrency(next);
             }}
             className={inputCls}
           >
@@ -1008,27 +1020,14 @@ export function AgentEditor({
             ))}
           </select>
           <p className="mt-1 text-xs text-slate-400">
-            Los precios de este mercado. Al filtrar Órdenes por este agente, sus totales se leen
-            en esta moneda, y cada orden nueva se guarda con ella.
+            <strong>La que manda.</strong> Los precios de este mercado: Reportes y Órdenes leen
+            sus ventas en esta moneda y cada orden nueva se guarda con ella.
           </p>
         </div>
-
-        <div className="flex items-end">
-          <p className="text-xs text-slate-400">
-            Viendo <strong className="font-medium text-slate-500">todos</strong> los agentes,
-            Órdenes homologa las monedas a la que elijas allá. Tasas fijas:{" "}
-            {rateNote("COP")}.
-          </p>
-        </div>
-      </fieldset>
-
-      {/* Costo por chat → alimenta el retorno (ROAS) de Reportes. Ver ADR-0065. */}
-      <fieldset className="grid gap-4 rounded-md border border-slate-200 bg-slate-50/60 p-4 sm:grid-cols-2">
-        <legend className="px-1 text-sm font-semibold text-slate-700">Costo por chat</legend>
 
         <div>
           <label htmlFor="costPerChat" className={labelCls}>
-            Cuánto cuesta traer una conversación
+            Costo por chat
           </label>
           <input
             id="costPerChat"
@@ -1043,29 +1042,49 @@ export function AgentEditor({
           />
           <p className="mt-1 text-xs text-slate-400">
             Lo que pagas en pauta por cada conversación que llega a este número. Vacío = sin
-            configurar (Reportes muestra los chats y las ventas, pero no calcula retorno).
+            configurar (Reportes muestra chats y ventas, pero no calcula retorno).
           </p>
         </div>
 
         <div>
           <label htmlFor="costCurrency" className={labelCls}>
-            Moneda
+            Moneda de la pauta
           </label>
-          <input
+          <select
             id="costCurrency"
-            value={costCurrency}
+            value={normalizeCurrency(costCurrency)}
             onChange={(e) => {
               dirty();
-              setCostCurrency(e.target.value.toUpperCase());
+              setCostCurrency(normalizeCurrency(e.target.value));
             }}
             className={inputCls}
-            placeholder="COP"
-            maxLength={3}
-          />
+          >
+            {SUPPORTED_CURRENCIES.map((c) => (
+              <option key={c} value={c}>
+                {c} · {CURRENCY_LABELS[c]}
+              </option>
+            ))}
+          </select>
           <p className="mt-1 text-xs text-slate-400">
-            La de este mercado (COP, USD…). Reportes solo consolida agentes que comparten
-            moneda: sumar pesos con dólares daría un retorno falso.
+            Solo si <strong>pagas</strong> la pauta en otra moneda de la que vendes (Meta suele
+            cobrar en dólares). Reportes la convierte para calcular el retorno.
           </p>
+        </div>
+
+        <div className="sm:col-span-3">
+          {normalizeCurrency(costCurrency) !== currency ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Este agente <strong>vende en {currency}</strong> y{" "}
+              <strong>paga la pauta en {normalizeCurrency(costCurrency)}</strong>. Es válido, pero
+              revísalo: si en realidad vende en {normalizeCurrency(costCurrency)}, cámbialo arriba
+              o sus ventas se leerán en {currency}.
+            </p>
+          ) : (
+            <p className="text-xs text-slate-400">
+              Viendo <strong className="font-medium text-slate-500">todos</strong> los agentes,
+              Reportes y Órdenes homologan las monedas con tasas fijas: {rateNote("COP")}.
+            </p>
+          )}
         </div>
       </fieldset>
 

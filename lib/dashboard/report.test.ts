@@ -13,6 +13,7 @@ import {
   summarizeRoas,
   summarizeScaling,
   summarizeTopProducts,
+  summarizeWeekly,
   type AgentCostConfig,
   type ChatFact,
   type CloseSpeedFact,
@@ -422,11 +423,21 @@ describe("isDayKey / rangos de día en Bogota", () => {
 });
 
 describe("summarizeRoas", () => {
+  // Por defecto vende y paga la pauta en la misma moneda; el tercer argumento las
+  // mueve juntas y el cuarto separa la de la pauta (el caso Meta-cobra-en-dólares).
   const agent = (
     id: string,
     costPerChat: number | null,
     currency = "COP",
-  ): AgentCostConfig => ({ id, name: `Agente ${id}`, brand: null, costPerChat, currency });
+    costCurrency = currency,
+  ): AgentCostConfig => ({
+    id,
+    name: `Agente ${id}`,
+    brand: null,
+    costPerChat,
+    costCurrency,
+    saleCurrency: currency,
+  });
 
   const chat = (agentId: string | null, isChat = true, createdAt = "2026-07-02T15:00:00Z"): ChatFact => ({
     agentId,
@@ -577,6 +588,132 @@ describe("summarizeRoas", () => {
   });
 });
 
+describe("summarizeRoas con pauta y venta en monedas distintas", () => {
+  const agente = (
+    id: string,
+    costPerChat: number | null,
+    saleCurrency: string,
+    costCurrency: string,
+  ): AgentCostConfig => ({
+    id,
+    name: `Agente ${id}`,
+    brand: null,
+    costPerChat,
+    costCurrency,
+    saleCurrency,
+  });
+  const chat = (agentId: string): ChatFact => ({
+    agentId,
+    createdAt: "2026-07-02T15:00:00Z",
+    isChat: true,
+  });
+  const order = (agentId: string, total: number): RoasOrderFact => ({
+    agentId,
+    status: "confirmed",
+    total,
+    createdAt: "2026-07-02T15:00:00Z",
+  });
+
+  // El caso real que rompió: vende en pesos mexicanos y paga la pauta en dólares.
+  const r = summarizeRoas([agente("mx", 2, "MXN", "USD")], [chat("mx"), chat("mx")], [
+    order("mx", 400),
+  ]);
+  const row = r.rows[0];
+
+  it("la fila se lee en la moneda de VENTA, no en la de la pauta", () => {
+    expect(row.currency).toBe("MXN");
+    expect(row.costCurrency).toBe("USD");
+    expect(row.currencyMismatch).toBe(true);
+  });
+
+  it("la inversión se convierte a la moneda de venta antes de dividir", () => {
+    // 2 USD/chat → 40 MXN/chat; 2 chats = 80 MXN de pauta.
+    expect(row.costPerChat).toBe(40);
+    expect(row.investment).toBe(80);
+    // ROAS = 400 MXN de venta ÷ 80 MXN de pauta = 5×. Sin convertir daban 100×.
+    expect(row.roas).toBe(5);
+  });
+
+  it("sin costo por chat no se marca desfase (no hay pauta que contradiga)", () => {
+    const sinCosto = summarizeRoas([agente("x", null, "USD", "COP")], [chat("x")], []);
+    expect(sinCosto.rows[0].currencyMismatch).toBe(false);
+  });
+
+  it("vendiendo y pagando en la misma moneda no cambia nada (ni se marca)", () => {
+    const same = summarizeRoas([agente("co", 1000, "COP", "COP")], [chat("co")], [
+      order("co", 10_000),
+    ]);
+    expect(same.rows[0].currencyMismatch).toBe(false);
+    expect(same.rows[0].roas).toBe(10);
+  });
+});
+
+describe("summarizeWeekly", () => {
+  const agents: AgentCostConfig[] = [
+    { id: "co", name: "CO", brand: null, costPerChat: 1000, costCurrency: "COP", saleCurrency: "COP" },
+    { id: "usa", name: "USA", brand: null, costPerChat: 0.5, costCurrency: "USD", saleCurrency: "USD" },
+  ];
+  const chat = (agentId: string | null, createdAt: string, isChat = true): ChatFact => ({
+    agentId,
+    createdAt,
+    isChat,
+  });
+  const order = (
+    agentId: string,
+    total: number,
+    createdAt: string,
+    status: "confirmed" | "cancelled" = "confirmed",
+  ): RoasOrderFact => ({ agentId, status, total, createdAt });
+
+  // NOW = jueves 2026-07-02 10:00 Bogota → semana del lunes 2026-06-29.
+  const chats = [
+    chat("co", "2026-07-02T15:00:00Z"),
+    chat("co", "2026-06-30T15:00:00Z"),
+    chat("usa", "2026-07-01T15:00:00Z"),
+    // Semana anterior (lunes 2026-06-22).
+    chat("co", "2026-06-24T15:00:00Z"),
+    // No cuenta: nunca escribió el cliente.
+    chat("co", "2026-07-02T15:00:00Z", false),
+  ];
+  const orders = [
+    order("co", 100_000, "2026-07-01T15:00:00Z"),
+    order("usa", 100, "2026-07-01T15:00:00Z"),
+    order("co", 50_000, "2026-06-24T15:00:00Z"),
+    order("co", 999_999, "2026-07-01T15:00:00Z", "cancelled"),
+  ];
+  const w = summarizeWeekly(agents, chats, orders, "COP", 4, NOW);
+
+  it("agrupa por semana lunes→domingo, más reciente primero", () => {
+    expect(w.weeks).toHaveLength(4);
+    expect(w.weeks[0].weekStart).toBe("2026-06-29");
+    expect(w.weeks[1].weekStart).toBe("2026-06-22");
+    expect(w.weeks[0].partial).toBe(true); // la semana en curso va incompleta
+    expect(w.weeks[1].partial).toBe(false);
+  });
+
+  it("cuenta chats por agente y solo los que recibieron inbound", () => {
+    expect(w.weeks[0].chats).toBe(3);
+    const porAgente = Object.fromEntries(w.weeks[0].byAgent.map((a) => [a.name, a.chats]));
+    expect(porAgente).toEqual({ CO: 2, USA: 1 });
+  });
+
+  it("las ventas de la semana se homologan y excluyen canceladas", () => {
+    expect(w.weeks[0].orders).toBe(2);
+    expect(w.weeks[0].revenue).toBe(100_000 + 100 * 3500); // USD 100 → COP
+    expect(w.converted).toBe(true);
+  });
+
+  it("el desglose por agente va en el MISMO orden en todas las semanas", () => {
+    const orden = w.weeks.map((k) => k.byAgent.map((a) => a.agentId).join(","));
+    expect(new Set(orden).size).toBe(1);
+  });
+
+  it("conversión = órdenes / chats, y null sin chats", () => {
+    expect(w.weeks[0].conversion).toBeCloseTo(2 / 3, 5);
+    expect(w.weeks[3].conversion).toBeNull();
+  });
+});
+
 describe("summarizeScaling", () => {
   // Mismo ancla que el resto: 2026-07-02 10:00 en Bogota (día 2 del mes, julio = 31 días).
   const agent = (id: string, costPerChat: number | null = 1000): AgentCostConfig => ({
@@ -584,7 +721,8 @@ describe("summarizeScaling", () => {
     name: `Agente ${id}`,
     brand: null,
     costPerChat,
-    currency: "COP",
+    costCurrency: "COP",
+    saleCurrency: "COP",
   });
   const chat = (agentId: string, createdAt: string, isChat = true): ChatFact => ({
     agentId,
@@ -650,7 +788,7 @@ describe("summarizeScaling", () => {
   it("con mercados mezclados la plata se homologa (no se suma cruda)", () => {
     const mixedAgents: AgentCostConfig[] = [
       agent("a"),
-      { id: "b", name: "B", brand: null, costPerChat: 2, currency: "USD" },
+      { id: "b", name: "B", brand: null, costPerChat: 2, costCurrency: "USD", saleCurrency: "USD" },
     ];
     const mixedReport = summarizeRoas(mixedAgents, chats, orders, new Map(), "COP");
     const mixed = summarizeScaling(mixedReport, chats, orders, NOW);

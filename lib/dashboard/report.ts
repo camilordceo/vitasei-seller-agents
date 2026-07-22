@@ -714,22 +714,40 @@ export interface RoasOrderFact {
   createdAt: string;
 }
 
-/** Costo por chat configurado en un agente (null = sin configurar). */
+/**
+ * Lo que cuesta y lo que vende un agente. **Son dos monedas distintas** y hay que
+ * tratarlas como tales: la pauta se PAGA en una (`costCurrency`, típicamente lo que
+ * cobra Meta) y el producto se VENDE en otra (`saleCurrency`, la del mercado). Meterlas
+ * en un solo campo fue el bug: la fila dividía inversión en pesos mexicanos entre
+ * ventas en pesos colombianos y llamaba a eso ROAS. Ver ADR-0079.
+ */
 export interface AgentCostConfig {
   id: string;
   name: string;
   brand: string | null;
   costPerChat: number | null;
-  currency: string;
+  /** Moneda en la que se PAGA la pauta (`agents.cost_currency`). */
+  costCurrency: string;
+  /** Moneda en la que el agente VENDE (`agents.currency`). */
+  saleCurrency: string;
 }
 
 export interface RoasRow {
   agentId: string | null;
   name: string;
   brand: string | null;
-  /** null = el agente no tiene costo por chat configurado. */
+  /** Costo por chat YA en `currency` (se paga en `costCurrency`, se lee en la de venta). */
   costPerChat: number | null;
+  /** Moneda de LECTURA de la fila = la moneda en la que el agente vende. */
   currency: string;
+  /** Moneda en la que se paga la pauta de este agente. */
+  costCurrency: string;
+  /**
+   * true si vende en una moneda y paga la pauta en otra. No es un error —pasa de
+   * verdad, Meta cobra en dólares— pero es EXACTAMENTE la forma que toma el mercado
+   * mal configurado, así que la UI lo pregunta en vez de tragárselo.
+   */
+  currencyMismatch: boolean;
   chats: number;
   /** chats × costo por chat. */
   investment: number;
@@ -810,12 +828,22 @@ export function summarizeRoas(
 ): RoasReport {
   const byAgent = new Map<string, RoasRow>();
   for (const a of agents) {
+    // La fila se lee en la moneda de VENTA: es la del mercado y la de `revenue`.
+    // La pauta se convierte a ella una sola vez, acá, para que investment, ROAS,
+    // CPA y ganancia salgan todos de las mismas unidades.
+    const sale = a.saleCurrency;
+    const costPerChatInSale =
+      a.costPerChat == null ? null : convertMoney(a.costPerChat, a.costCurrency, sale);
     byAgent.set(a.id, {
       agentId: a.id,
       name: a.name,
       brand: a.brand,
-      costPerChat: a.costPerChat,
-      currency: a.currency,
+      costPerChat: costPerChatInSale,
+      currency: sale,
+      costCurrency: a.costCurrency,
+      // Sin costo por chat no hay pauta que contradiga nada: marcar el desfase ahí
+      // sería un aviso sobre un campo que nadie usó.
+      currencyMismatch: a.costPerChat != null && a.costCurrency !== sale,
       chats: 0,
       investment: 0,
       orders: 0,
@@ -886,6 +914,8 @@ export function summarizeRoas(
       // simple: si un agente trae 10× más chats, pesa 10× más.
       costPerChat: ratio(investment, chatsTotal),
       currency: display,
+      costCurrency: display,
+      currencyMismatch: false,
       chats: chatsTotal,
       investment,
       orders: ordersTotal,
@@ -909,10 +939,7 @@ export function summarizeRoas(
     // tienen que salir de la misma conversión o no cuadran entre sí.
     const inScope = new Set(usable.map((r) => r.agentId));
     const costById = new Map(
-      agents.map((a) => [
-        a.id,
-        (a.costPerChat ?? 0) * ((rateOf.get(a.id) as number | null | undefined) ?? 0),
-      ]),
+      agents.map((a) => [a.id, convertMoney(a.costPerChat ?? 0, a.costCurrency, display) ?? 0]),
     );
     const dayChats = new Map<string, number>();
     const dayInvestment = new Map<string, number>();
@@ -959,6 +986,163 @@ export function summarizeRoas(
     converted,
     excludedAgents,
     configured: rows.some((r) => r.costPerChat != null && r.costPerChat > 0),
+  };
+}
+
+// --- Semana a semana: chats por agente vs. ventas (ADR-0079) -----------------
+
+/**
+ * Lunes de la semana (clave `YYYY-MM-DD`, hora Bogota) a la que pertenece un instante.
+ * Semana lunes→domingo, que es como el equipo habla de "esta semana" — no la del
+ * `getUTCDay()` crudo, que arranca en domingo y parte los fines de semana en dos.
+ */
+export function bogotaWeekStartKey(ms: number): string {
+  const { weekday } = bogotaWeekdayHour(ms);
+  // weekday: 0=Dom … 6=Sáb → días a retroceder hasta el lunes.
+  const back = (weekday + 6) % 7;
+  return bogotaDayKey(ms - back * DAY_MS);
+}
+
+/** Cuántos chats trajo un agente en una semana (para la barra apilada). */
+export interface WeeklyAgentSlice {
+  agentId: string;
+  name: string;
+  chats: number;
+}
+
+export interface WeekBucket {
+  /** Lunes de la semana, `YYYY-MM-DD` en Bogota. */
+  weekStart: string;
+  /** Chats de la semana (conversaciones con al menos un inbound). */
+  chats: number;
+  /** Desglose por agente, en el mismo orden para todas las semanas. */
+  byAgent: WeeklyAgentSlice[];
+  /** Órdenes NO canceladas creadas en la semana. */
+  orders: number;
+  /** Plata de esas órdenes, homologada a la moneda de lectura. */
+  revenue: number;
+  /** orders / chats. null sin chats — no es 0%, es "no hay base". */
+  conversion: number | null;
+  /** true en la semana en curso: va incompleta y no se compara de igual a igual. */
+  partial: boolean;
+}
+
+export interface WeeklyReport {
+  /** Semanas más reciente primero (mismo orden que el resto de gráficos). */
+  weeks: WeekBucket[];
+  /** Agentes con actividad en el periodo, en orden estable (para el color). */
+  agents: Array<{ id: string; name: string }>;
+  currency: CurrencyCode;
+  /** true si hubo que convertir ventas de otra moneda. */
+  converted: boolean;
+}
+
+/**
+ * La foto semanal: cuántos chats entraron (y de qué agente salió cada uno) contra
+ * cuántas ventas cerraron esa misma semana.
+ *
+ * El día a día de una operación de WhatsApp es ruido —un festivo, un día que la
+ * pauta arrancó tarde— y el mes tarda demasiado en decir algo. La semana es la
+ * unidad en la que se decide subir o bajar presupuesto, y partirla por agente
+ * muestra CUÁL mercado está creciendo, no solo que "hay más chats".
+ *
+ * Un chat se cuenta el día que ENTRÓ (`created_at` de la conversación, cuando se
+ * pagó el lead) y una orden el día que se creó: las mismas bases que ROAS y
+ * "Órdenes generadas", para que los números cuadren entre secciones.
+ */
+export function summarizeWeekly(
+  agents: AgentCostConfig[],
+  chats: ChatFact[],
+  orders: RoasOrderFact[],
+  display: CurrencyCode = DEFAULT_CURRENCY,
+  weeksBack = 8,
+  nowMs: number = Date.now(),
+): WeeklyReport {
+  const nameById = new Map(agents.map((a) => [a.id, a.name]));
+  // Tasa de venta de cada agente hacia la moneda de lectura. Sin tasa → la plata
+  // de ese agente no entra (no se suma como si ya estuviera en la moneda destino).
+  const rateById = new Map<string, number | null>(
+    agents.map((a) => [a.id, convertMoney(1, a.saleCurrency, display)]),
+  );
+
+  const weekKeys: string[] = [];
+  for (let i = 0; i < weeksBack; i++) weekKeys.push(bogotaWeekStartKey(nowMs - i * 7 * DAY_MS));
+  const currentWeek = weekKeys[0];
+  const index = new Map<string, WeekBucket>();
+  for (const key of weekKeys) {
+    index.set(key, {
+      weekStart: key,
+      chats: 0,
+      byAgent: [],
+      orders: 0,
+      revenue: 0,
+      conversion: null,
+      partial: key === currentWeek,
+    });
+  }
+  // Chats por semana y agente. Se acumula en un mapa aparte y al final se vuelca en
+  // el MISMO orden para todas las semanas: si el orden variara, el color de cada
+  // agente cambiaría de fila en fila y el gráfico dejaría de leerse.
+  const chatsByWeekAgent = new Map<string, Map<string, number>>();
+  const activeAgents = new Set<string>();
+
+  for (const c of chats) {
+    if (!c.isChat || !c.agentId || !nameById.has(c.agentId)) continue;
+    const ms = Date.parse(c.createdAt);
+    if (!Number.isFinite(ms)) continue;
+    const key = bogotaWeekStartKey(ms);
+    const bucket = index.get(key);
+    if (!bucket) continue;
+    bucket.chats += 1;
+    activeAgents.add(c.agentId);
+    const perAgent = chatsByWeekAgent.get(key) ?? new Map<string, number>();
+    perAgent.set(c.agentId, (perAgent.get(c.agentId) ?? 0) + 1);
+    chatsByWeekAgent.set(key, perAgent);
+  }
+
+  let converted = false;
+  for (const o of orders) {
+    if (o.status === "cancelled" || !o.agentId || !nameById.has(o.agentId)) continue;
+    const ms = Date.parse(o.createdAt);
+    if (!Number.isFinite(ms)) continue;
+    const bucket = index.get(bogotaWeekStartKey(ms));
+    if (!bucket) continue;
+    bucket.orders += 1;
+    const rate = rateById.get(o.agentId);
+    if (rate != null) {
+      bucket.revenue += (Number(o.total) || 0) * rate;
+      if (rate !== 1) converted = true;
+    }
+  }
+
+  // Orden estable de agentes: por chats totales del periodo, de mayor a menor.
+  const totalByAgent = new Map<string, number>();
+  for (const perAgent of chatsByWeekAgent.values()) {
+    for (const [id, n] of perAgent) totalByAgent.set(id, (totalByAgent.get(id) ?? 0) + n);
+  }
+  const ordered = [...activeAgents].sort(
+    (a, b) =>
+      (totalByAgent.get(b) ?? 0) - (totalByAgent.get(a) ?? 0) ||
+      (nameById.get(a) ?? "").localeCompare(nameById.get(b) ?? ""),
+  );
+
+  for (const key of weekKeys) {
+    const bucket = index.get(key)!;
+    const perAgent = chatsByWeekAgent.get(key);
+    bucket.byAgent = ordered.map((id) => ({
+      agentId: id,
+      name: nameById.get(id) ?? id,
+      chats: perAgent?.get(id) ?? 0,
+    }));
+    bucket.revenue = roundForCurrency(bucket.revenue, display);
+    bucket.conversion = bucket.chats > 0 ? bucket.orders / bucket.chats : null;
+  }
+
+  return {
+    weeks: weekKeys.map((k) => index.get(k)!),
+    agents: ordered.map((id) => ({ id, name: nameById.get(id) ?? id })),
+    currency: display,
+    converted,
   };
 }
 
