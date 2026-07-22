@@ -29,6 +29,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Fixed
+- **Llamadas con IA: no se podían apagar desde el dashboard** (ADR-0072). El guardado
+  sincronizaba los extractores con Synthflow **antes** de escribir en Supabase y el cliente
+  HTTP no tenía timeout: con su API lenta o caída, la server action se quedaba colgada hasta
+  que moría la función, la base nunca se escribía y el checkbox volvía a aparecer prendido.
+  Ahora **se guarda primero en Supabase** y la sincronización queda como mejor esfuerzo
+  posterior (con un segundo update chico si cambian los `action_id`); **apagar ni siquiera
+  llama a Synthflow**, y toda petición a su API tiene tope de 30s con error legible. El
+  mensaje de confirmación al apagar lo dice explícito: "Llamadas apagadas: no se agendará
+  ninguna más.".
 - **Conversaciones: el último mensaje ya no dice `[other]`.** Cuando lo último fue una
   llamada con IA, la lista muestra la primera línea de la nota ("Llamada con IA —
   Completada · 2m 10s") en vez del tipo crudo, que se confundía con un mensaje del

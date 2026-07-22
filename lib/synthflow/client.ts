@@ -14,6 +14,9 @@ import {
  * su documentación tiene al menos tres errores que rompen la integración.
  */
 
+/** Tope por petición. Sus 500 tardan, pero medio minuto ya es "no responde". */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export interface SynthflowCreds {
   apiKey: string;
   /** Base regional. La cuenta vive en la global; `api.us`/`api.eu` dan 401. */
@@ -43,15 +46,34 @@ async function call(
     if (v != null && v !== "") url.searchParams.set(k, v);
   }
 
-  const res = await fetch(url.toString(), {
-    method: init?.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${creds.apiKey}`,
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: init?.body ? JSON.stringify(init.body) : undefined,
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      method: init?.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${creds.apiKey}`,
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: init?.body ? JSON.stringify(init.body) : undefined,
+      cache: "no-store",
+      // Sin esto, un Synthflow colgado se lleva puesta la petición entera del
+      // dashboard hasta que la función serverless muere sin decir nada.
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (e) {
+    const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+    throw new SynthflowError(
+      timedOut
+        ? `Synthflow ${init?.method ?? "GET"} ${path} no respondió en ${
+            REQUEST_TIMEOUT_MS / 1000
+          }s.`
+        : `Synthflow ${init?.method ?? "GET"} ${path} falló: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+      0,
+      "",
+    );
+  }
 
   const text = await res.text();
   if (!res.ok) {

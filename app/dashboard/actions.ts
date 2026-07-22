@@ -1286,6 +1286,12 @@ export async function triggerVoiceCall(
  * Synthflow** (crear / actualizar / adjuntar / quitar). La sincronización puede
  * fallar por red: en ese caso se guarda igual la config local y se devuelve el
  * aviso, para no perder lo que el operador escribió. Ver ADR-0062.
+ *
+ * ORDEN: primero se escribe en Supabase, después se sincroniza. Al revés, un
+ * Synthflow lento o caído dejaba el guardado colgado hasta que la función moría,
+ * y **apagar las llamadas no se guardaba** aunque no tenga nada que ver con su
+ * API. Además, si se están apagando, no se sincroniza nada: no hay para qué
+ * hablar con Synthflow para dejar de llamar.
  */
 export async function saveVoiceConfig(
   agentId: string,
@@ -1313,19 +1319,7 @@ export async function saveVoiceConfig(
   const newKey = (input.apiKey ?? "").trim();
   if (newKey.length > 0) patch.synthflow_api_key = newKey;
 
-  // Sincronizar extractores ANTES de guardar, para persistir los `actionId`.
-  let warning: string | undefined;
-  let synced = extractors;
-  if (input.modelId && extractors.length > 0) {
-    try {
-      synced = await syncExtractorsWithSynthflow(supabase, agentId, input.modelId, extractors);
-    } catch (e) {
-      warning = `La config se guardó, pero no se pudieron sincronizar los extractores con Synthflow: ${
-        e instanceof Error ? e.message : String(e)
-      }`;
-    }
-  }
-  patch.voice_extractors = (synced.length > 0 ? synced : null) as unknown as Json;
+  patch.voice_extractors = (extractors.length > 0 ? extractors : null) as unknown as Json;
 
   const { error } = await supabase
     .from("agents")
@@ -1336,6 +1330,27 @@ export async function saveVoiceConfig(
       throw new Error("Falta aplicar la migración 0027 (llamadas con IA) en Supabase.");
     }
     throw new Error(`saveVoiceConfig: ${error.message}`);
+  }
+
+  // Ya está guardado lo que el operador pidió. Ahora, mejor esfuerzo: sincronizar
+  // los extractores con Synthflow y persistir los `actionId` que devuelva.
+  let warning: string | undefined;
+  let synced = extractors;
+  if (input.voiceEnabled && input.modelId && extractors.length > 0) {
+    try {
+      synced = await syncExtractorsWithSynthflow(supabase, agentId, input.modelId, extractors);
+      const changed = synced.some((e, i) => e.actionId !== extractors[i]?.actionId);
+      if (changed) {
+        await supabase
+          .from("agents")
+          .update({ voice_extractors: synced as unknown as Json } as never)
+          .eq("id", agentId);
+      }
+    } catch (e) {
+      warning = `La config se guardó, pero no se pudieron sincronizar los extractores con Synthflow: ${
+        e instanceof Error ? e.message : String(e)
+      }`;
+    }
   }
 
   await supabase.from("events_log").insert({

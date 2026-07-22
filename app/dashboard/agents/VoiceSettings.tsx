@@ -143,7 +143,12 @@ export function VoiceSettings({
         setStatus(
           result.warning
             ? { kind: "warn", text: result.warning }
-            : { kind: "ok", text: "Config de llamadas guardada." },
+            : {
+                kind: "ok",
+                text: enabled
+                  ? "Config de llamadas guardada."
+                  : "Llamadas apagadas: no se agendará ninguna más.",
+              },
         );
         router.refresh();
       } catch (e) {
