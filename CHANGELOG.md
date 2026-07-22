@@ -66,6 +66,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   redondeo al final. Aplica a titulares, ventanas Hoy/7/30, cortes por estado y método, y
   la serie de 14 días. Lo que no tiene tasa **no se cuela**: cuenta como orden, no como
   plata, y se avisa.
+- **La pantalla siempre dice en qué moneda está leída** (ADR-0078), y delata el mercado sin
+  configurar. Resultó que la homologación de ADR-0077 no se veía en producción por un dato,
+  no por el código: los **cuatro agentes tenían `agents.currency = 'COP'`**, incluidos
+  Vitasei Mexico y Vitasei USA. Como la columna es `not null default 'COP'`, "vende en
+  pesos" y "nadie lo configuró" se ven IGUAL en la base — nada avisaba. Ahora, viendo todos
+  los agentes con una sola moneda entre varios mercados, sale un aviso con enlace a
+  Agentes; viendo todos con monedas distintas, el aviso de homologación con la tasa; y
+  **filtrando un agente, la nota de que se está leyendo en SU moneda, sin conversiones**
+  (que es como se quiere ver un mercado por dentro: el ROAS de EE.UU. en dólares).
 - **El total ahora dice que está homologado.** Aviso arriba de los titulares —"Total de
   todos los mercados homologado a COP · 1 USD = 3.500 COP · 1 MXN = 175 COP"— que también
   viaja en el resumen que se copia al equipo por WhatsApp. Filtrando un agente se lee en

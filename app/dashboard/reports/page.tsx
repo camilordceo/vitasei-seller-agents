@@ -20,7 +20,7 @@ import {
   type ScalingReport,
   type SalesReport,
 } from "@/lib/dashboard/report";
-import { rateNote, type CurrencyCode } from "@/lib/dashboard/currency";
+import { CURRENCY_LABELS, rateNote, type CurrencyCode } from "@/lib/dashboard/currency";
 import {
   formatMinutes,
   formatMoney,
@@ -59,35 +59,86 @@ function ReportCard({
 }
 
 /**
- * Aviso de homologación: dice que un total suma varios mercados y con qué tasa.
- * Solo aparece cuando de verdad hubo conversión — en un alcance de una sola
- * moneda sería ruido. Ver ADR-0068.
+ * En qué moneda está leída la pantalla, y por qué.
+ *
+ * Tres estados, y los tres importan:
+ *  - **Un agente filtrado** → se lee en SU moneda, sin convertir nada. Es la foto
+ *    real de ese mercado (un ROAS de EE.UU. en pesos no dice nada a quien compra
+ *    la pauta en dólares), así que se enuncia para que nadie lea USD como COP.
+ *  - **Todos los agentes con monedas distintas** → total homologado + la tasa a la
+ *    vista: un total convertido sin la tasa se lee como plata en caja.
+ *  - **Todos los agentes con la MISMA moneda** → normalmente no hay nada que decir,
+ *    salvo que haya varios mercados: ahí es sospechoso, y es exactamente el error
+ *    que tuvimos (México y EE.UU. marcados en COP, y sus ventas sumadas crudas).
+ *    `agents.currency` trae `default 'COP'`, así que "sin configurar" y "vende en
+ *    pesos" se ven IGUAL en la base — la única defensa es decirlo en pantalla.
+ *
+ * Ver ADR-0068 y ADR-0077.
  */
 function CurrencyNote({
   currency,
   converted,
   excluded = 0,
-  scope,
+  selected,
+  marketCurrencies,
+  agentCount,
 }: {
   currency: CurrencyCode;
   converted: boolean;
   excluded?: number;
-  scope?: string | null;
+  /** Nombre del agente filtrado, o null viendo todos. */
+  selected?: string | null;
+  /** Monedas DISTINTAS configuradas entre los agentes del sistema. */
+  marketCurrencies?: CurrencyCode[];
+  agentCount?: number;
 }) {
-  if (!converted && excluded === 0) return null;
+  const sospechoso =
+    !selected && !converted && (marketCurrencies?.length ?? 0) === 1 && (agentCount ?? 0) > 1;
+
+  const cuerpo = selected ? (
+    <>
+      <span className="font-medium">
+        Leyendo en {currency} · {CURRENCY_LABELS[currency]}
+      </span>{" "}
+      — la moneda de {selected}. Sin conversiones: son sus precios tal cual.
+    </>
+  ) : converted ? (
+    <>
+      <span className="font-medium">Todos los mercados sumados en {currency}.</span> Las ventas en
+      otra moneda se convierten para poder sumarlas: {rateNote(currency)}. Filtra un agente arriba
+      para ver su mercado en su propia moneda.
+    </>
+  ) : sospechoso ? (
+    <>
+      <span className="font-medium">
+        Los {agentCount} agentes están configurados en {currency}
+      </span>
+      , así que no hay nada que homologar. Si algún mercado vende en otra moneda, ponlo en{" "}
+      <Link href="/dashboard/agents" className="font-medium underline underline-offset-2">
+        Agentes
+      </Link>{" "}
+      → &quot;En qué moneda vende&quot;: hasta entonces sus ventas se suman como si fueran{" "}
+      {currency}.
+    </>
+  ) : null;
+
+  if (!cuerpo && excluded === 0) return null;
+
+  // Ámbar = hay algo que revisar (una conversión de por medio o un mercado sin
+  // configurar). Gris = solo estás informado de en qué moneda estás parado.
+  const alerta = converted || sospechoso || excluded > 0;
   return (
-    <p className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
-      {converted && (
-        <>
-          <span className="font-medium">
-            Total de {scope ?? "todos los mercados"} homologado a {currency}.
-          </span>{" "}
-          Las ventas en otra moneda se convierten para poder sumarlas: {rateNote(currency)}.
-        </>
-      )}
+    <p
+      className={
+        alerta
+          ? "rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900"
+          : "rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+      }
+    >
+      {cuerpo}
       {excluded > 0 && (
         <>
-          {converted ? " " : ""}
+          {cuerpo ? " " : ""}
           {excluded} {excluded === 1 ? "orden quedó" : "órdenes quedaron"} fuera del monto por
           estar en una moneda sin tasa (sí cuentan como órdenes).
         </>
@@ -206,7 +257,17 @@ function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
 }
 
 /** Sección de retorno: tabla por agente + barras de inversión vs. ventas por día. */
-function RoasSection({ roas }: { roas: RoasReport }) {
+function RoasSection({
+  roas,
+  selected,
+  marketCurrencies,
+  agentCount,
+}: {
+  roas: RoasReport;
+  selected: string | null;
+  marketCurrencies: CurrencyCode[];
+  agentCount: number;
+}) {
   const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
   const chartCurrency = roas.currency;
   const invTotal14 = roas.perDay.reduce((s, d) => s + d.investment, 0);
@@ -243,8 +304,9 @@ function RoasSection({ roas }: { roas: RoasReport }) {
         <CurrencyNote
           currency={roas.currency}
           converted={roas.converted}
-          excluded={0}
-          scope="todos los mercados"
+          selected={selected}
+          marketCurrencies={marketCurrencies}
+          agentCount={agentCount}
         />
         {roas.excludedAgents > 0 ? (
           <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
@@ -660,6 +722,9 @@ export default async function ReportsPage({
   const scope = selected
     ? `${selected.name}${selected.brand ? ` · ${selected.brand}` : ""}`
     : "Todos los agentes";
+  // Monedas DISTINTAS configuradas entre los agentes. Si hay varios mercados y
+  // todos dicen lo mismo, huele a moneda sin configurar (ver `CurrencyNote`).
+  const marketCurrencies = [...new Set(agents.map((a) => a.currency))];
 
   const [r, conv, ai, products, voice, roas, topProducts, speed] = await Promise.all([
     getSalesReport(agentId),
@@ -725,7 +790,9 @@ export default async function ReportsPage({
           currency={r.currency}
           converted={r.converted}
           excluded={r.excluded}
-          scope={selected ? scope : "todos los mercados"}
+          selected={selected ? scope : null}
+          marketCurrencies={marketCurrencies}
+          agentCount={agents.length}
         />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ReportCard
@@ -813,7 +880,12 @@ export default async function ReportsPage({
       </section>
 
       {/* Retorno sobre el costo de adquirir cada chat (ADR-0065) */}
-      <RoasSection roas={roas} />
+      <RoasSection
+        roas={roas}
+        selected={selected ? scope : null}
+        marketCurrencies={marketCurrencies}
+        agentCount={agents.length}
+      />
 
       {/* Economía por chat, proyección del mes y crecimiento semanal (ADR-0070) */}
       <ScalingSection scaling={roas.scaling} currency={roas.currency} />
