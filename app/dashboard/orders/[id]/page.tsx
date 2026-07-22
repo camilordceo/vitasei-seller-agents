@@ -87,6 +87,24 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                   {order.contact?.phone ?? "—"}
                 </dd>
               </div>
+              {/* De qué pauta/producto llegó el cliente. Se edita en la conversación
+                  (es un dato de ella, no de la orden). Ver ADR-0076. */}
+              <div className="flex justify-between gap-2">
+                <dt className="text-slate-500">Producto / fuente</dt>
+                <dd className="text-right text-slate-900">
+                  {order.productCategory ? (
+                    <Link
+                      href={`/dashboard/conversations?product=${encodeURIComponent(order.productCategory)}`}
+                      title="Ver todas las conversaciones de esta fuente"
+                      className="rounded underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                      {order.productCategory}
+                    </Link>
+                  ) : (
+                    <span className="text-slate-400">Sin categorizar</span>
+                  )}
+                </dd>
+              </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-slate-500">Cliente llegó</dt>
                 <dd className="text-right text-slate-900">

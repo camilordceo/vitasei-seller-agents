@@ -80,3 +80,40 @@ export async function resolveProductImage(
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
   return { imageUrl: data.publicUrl };
 }
+
+/** Extensión por content-type; lo desconocido cae a `.jpg` (WhatsApp lo acepta). */
+const EXT_BY_TYPE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+/**
+ * Hospeda una imagen que un humano adjunta desde el chat del dashboard y devuelve
+ * su URL pública. El proveedor (Callbell/Kapso) solo sabe mandar **links**, así que
+ * el archivo tiene que vivir en algún lado antes de poder enviarse.
+ *
+ * Ruta por conversación + digest del contenido: dos envíos de la misma foto reusan
+ * el objeto, y una foto distinta estrena URL (nunca se sirve la vieja del CDN).
+ */
+export async function uploadChatImage(
+  supabase: SupabaseClient<Database>,
+  bytes: Buffer,
+  contentType: string,
+  conversationId: string,
+): Promise<string> {
+  const ext = EXT_BY_TYPE[contentType.toLowerCase()] ?? "jpg";
+  const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+  const path = `chat/${conversationId}/${digest}.${ext}`;
+
+  const { error } = await supabase.storage.from(BUCKET).upload(path, bytes, {
+    contentType,
+    upsert: true,
+  });
+  if (error) throw new Error(`No se pudo guardar la imagen: ${error.message}`);
+
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}

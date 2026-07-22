@@ -29,6 +29,23 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Imágenes manuales en el chat de la conversación** (ADR-0075): el compositor ahora manda
+  fotos, por dos caminos. **Subir imagen** hospeda el archivo en el bucket
+  (`chat/{conversación}/{digest}`, JPG/PNG/WebP hasta 7 MB) y **Foto del inventario** abre un
+  buscador del catálogo del agente (por nombre o SKU, con miniatura y precio) que manda el link
+  del producto tal cual, sin re-hospedarlo. Lo que se escriba viaja como texto de la foto: sale
+  **un** mensaje, no dos. Todo pasa por el puerto `MessagingProvider` y queda en `messages`
+  (`type: "image"`, tag `manual`) + `events_log` como `manual_image_sent`.
+- **La fuente de la conversación se ve en la orden** (ADR-0076): cada orden muestra el
+  **producto / fuente** de la conversación que la originó (`conversations.product_category`,
+  de qué pauta o palabra clave llegó el cliente) — chip teal en la lista de Órdenes y fila
+  propia en el detalle, que enlaza a las conversaciones de esa misma fuente. El dato no se
+  copia a `orders`: se resuelve por conversación, así que corregir la fuente allá arregla
+  también sus órdenes. Si falta la migración 0018 la lista se muestra sin fuente, sin romperse.
+- **El producto se ve sin abrir la orden** (ADR-0075): la lista de Órdenes muestra el nombre del
+  producto (el primero + "+N más" cuando hay varios) sobre la línea de "N ítems", y el panel de
+  órdenes de la conversación lista todos los productos pedidos. Si el ítem no guardó nombre, se
+  muestra el SKU.
 - **Botón "Probar" en Videos** (ADR-0073): envía el video a un número de WhatsApp al
   instante, por el proveedor del mercado del video, sin esperar a que un cliente escriba la
   palabra clave y sin que la regla de una-vez-por-conversación lo bloquee. Queda en

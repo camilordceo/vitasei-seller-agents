@@ -889,6 +889,8 @@ export interface ConversationOrder {
   status: OrderStatus;
   total: number | null;
   itemsCount: number;
+  /** Nombres de los productos pedidos (sin repetir), para saber QUÉ se compró. */
+  productNames: string[];
   shippingName: string | null;
   shippingCity: string | null;
   method: FulfillmentMethod;
@@ -951,14 +953,22 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   // Puede haber varias (p. ej. una cancelada + una nueva); el panel las lista todas.
   const orderRows = orderRes.error ? [] : orderRes.data ?? [];
   const itemsByOrder = new Map<string, number>();
+  const namesByOrder = new Map<string, Set<string>>();
   if (orderRows.length > 0) {
     const orderIds = orderRows.map((o) => o.id);
     const { data: itemRows } = await supabase
       .from("order_items")
-      .select("order_id")
+      .select("order_id, sku, name")
       .in("order_id", orderIds);
     for (const it of itemRows ?? []) {
       itemsByOrder.set(it.order_id, (itemsByOrder.get(it.order_id) ?? 0) + 1);
+      // Sin nombre guardado el SKU es lo único que identifica al producto.
+      const label = it.name?.trim() || it.sku;
+      if (label) {
+        const set = namesByOrder.get(it.order_id) ?? new Set<string>();
+        set.add(label);
+        namesByOrder.set(it.order_id, set);
+      }
     }
   }
   const orders: ConversationOrder[] = orderRows.map((o) => ({
@@ -966,6 +976,7 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
     status: o.status,
     total: o.total,
     itemsCount: itemsByOrder.get(o.id) ?? 0,
+    productNames: [...(namesByOrder.get(o.id) ?? [])],
     shippingName: o.shipping_name,
     shippingCity: o.shipping_city,
     method: o.fulfillment_method,
@@ -1043,6 +1054,14 @@ export interface OrderRow {
   /** Moneda NATIVA de la orden (la del agente que la generó). Ver ADR-0068. */
   currency: string;
   itemsCount: number;
+  /** Nombres de los productos de la orden (sin repetir), para verla sin abrirla. */
+  productNames: string[];
+  /**
+   * Producto/fuente de la conversación que originó la orden (`conversations.product_category`):
+   * de qué pauta o palabra clave llegó el cliente. `null` si no se categorizó o si falta
+   * la migración 0018. Ver ADR-0076.
+   */
+  productCategory: string | null;
   shippingCity: string | null;
   createdAt: string;
   /** Agente dueño (vía la conversación). null en órdenes manuales sueltas. */
@@ -1079,18 +1098,27 @@ export async function getOrders(opts?: {
 
   const contactIds = [...new Set(rows.map((r) => r.contact_id))];
   const orderIds = rows.map((r) => r.id);
+  const convoIds = [...new Set(rows.map((r) => r.conversation_id))];
 
-  const [contactsRes, itemsRes] = await Promise.all([
+  const [contactsRes, itemsRes, categoryByConvo] = await Promise.all([
     supabase.from("contacts").select("id, name, phone").in("id", contactIds),
-    supabase.from("order_items").select("order_id").in("order_id", orderIds),
+    supabase.from("order_items").select("order_id, sku, name").in("order_id", orderIds),
+    categoriesByConversation(supabase, convoIds),
   ]);
   if (contactsRes.error) throw new Error(`getOrders contacts: ${contactsRes.error.message}`);
   if (itemsRes.error) throw new Error(`getOrders items: ${itemsRes.error.message}`);
 
   const contactById = new Map((contactsRes.data ?? []).map((c) => [c.id, c]));
   const itemsByOrder = new Map<string, number>();
+  const namesByOrder = new Map<string, Set<string>>();
   for (const it of itemsRes.data ?? []) {
     itemsByOrder.set(it.order_id, (itemsByOrder.get(it.order_id) ?? 0) + 1);
+    const label = it.name?.trim() || it.sku;
+    if (label) {
+      const set = namesByOrder.get(it.order_id) ?? new Set<string>();
+      set.add(label);
+      namesByOrder.set(it.order_id, set);
+    }
   }
 
   return rows.map((r) => {
@@ -1105,6 +1133,8 @@ export async function getOrders(opts?: {
       total: r.total,
       currency: r.currency,
       itemsCount: itemsByOrder.get(r.id) ?? 0,
+      productNames: [...(namesByOrder.get(r.id) ?? [])],
+      productCategory: categoryByConvo.get(r.conversation_id) ?? null,
       shippingCity: r.shipping_city,
       createdAt: r.created_at,
     };
@@ -1147,6 +1177,40 @@ export interface OrdersSummary {
    * decirlo en pantalla: un total que esconde filas descartadas miente.
    */
   excluded: number;
+}
+
+/**
+ * Producto/fuente por conversación (`conversations.product_category`) — de qué pauta o
+ * palabra clave llegó el cliente. Es lo que conecta una orden con la campaña que la trajo.
+ *
+ * Best-effort a propósito: si falta la migración 0018 la columna no existe y la consulta
+ * falla; ahí devuelve un mapa vacío y las órdenes se listan sin fuente, en vez de dejar la
+ * página en error. Mismo criterio que en `getConversation`. Ver ADR-0076.
+ *
+ * `ids` acota la consulta cuando ya se sabe qué conversaciones interesan; sin él, barre todas.
+ */
+async function categoriesByConversation(
+  supabase: ReturnType<typeof createServiceClient>,
+  ids?: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    if (ids && ids.length === 0) return out;
+    const rows = ids
+      ? (await supabase.from("conversations").select("id, product_category").in("id", ids)).data
+      : await fetchAllRows(
+          (from, to) =>
+            supabase.from("conversations").select("id, product_category").range(from, to),
+          "categoriesByConversation",
+        );
+    for (const r of rows ?? []) {
+      const value = r.product_category?.trim();
+      if (value) out.set(r.id, value);
+    }
+  } catch {
+    // Sin columna (migración 0018 pendiente): se lista sin fuente y ya.
+  }
+  return out;
 }
 
 export interface OrdersPage {
@@ -1206,14 +1270,28 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
   const agentByConvo = new Map(convos.map((c) => [c.id, c.agent_id as string | null]));
   const agentById = new Map(agents.map((a) => [a.id, a]));
 
-  // Ítems por orden: conteo (para la lista), SKUs (para el filtro de producto) y
-  // el catálogo de opciones del selector (sku → nombre más reciente que se vio).
-  const itemsByOrder = new Map<string, { count: number; skus: Set<string> }>();
+  // Producto/fuente de cada conversación (de qué pauta llegó el cliente). Va en
+  // consulta aparte: si falta la migración 0018 (columna), esta falla y se ignora
+  // sin tumbar la lista de órdenes. Mismo criterio que en `getConversation`.
+  const categoryByConvo = await categoriesByConversation(supabase);
+
+  // Ítems por orden: conteo (para la lista), SKUs (para el filtro de producto),
+  // nombres (para ver QUÉ se pidió sin abrir la orden) y el catálogo de opciones
+  // del selector (sku → nombre más reciente que se vio).
+  const itemsByOrder = new Map<
+    string,
+    { count: number; skus: Set<string>; names: Set<string> }
+  >();
   const productBySku = new Map<string, string>();
   for (const it of items) {
-    const entry = itemsByOrder.get(it.order_id) ?? { count: 0, skus: new Set<string>() };
+    const entry =
+      itemsByOrder.get(it.order_id) ??
+      { count: 0, skus: new Set<string>(), names: new Set<string>() };
     entry.count += 1;
     if (it.sku) entry.skus.add(it.sku);
+    // Sin nombre guardado el SKU es lo único que identifica al producto.
+    const label = it.name?.trim() || it.sku;
+    if (label) entry.names.add(label);
     itemsByOrder.set(it.order_id, entry);
     if (it.sku && !productBySku.has(it.sku)) productBySku.set(it.sku, it.name ?? it.sku);
   }
@@ -1297,6 +1375,8 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
         total: r.total,
         currency: native,
         itemsCount: itemsByOrder.get(r.id)?.count ?? 0,
+        productNames: [...(itemsByOrder.get(r.id)?.names ?? [])],
+        productCategory: categoryByConvo.get(r.conversation_id) ?? null,
         shippingCity: r.shipping_city,
         createdAt: r.created_at,
         agentId,
@@ -1351,6 +1431,8 @@ export interface OrderDetail {
   updatedAt: string;
   /** `created_at` de la conversación = cuándo llegó el cliente (analítica de horarios). */
   clientArrivedAt: string | null;
+  /** Producto/fuente de la conversación de origen: de qué pauta llegó. Ver ADR-0076. */
+  productCategory: string | null;
   contact: { name: string | null; phone: string } | null;
   items: OrderItemDetail[];
 }
@@ -1367,7 +1449,7 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
   if (error) throw new Error(`getOrder: ${error.message}`);
   if (!order) return null;
 
-  const [contactRes, itemsRes, convoRes] = await Promise.all([
+  const [contactRes, itemsRes, convoRes, categoryByConvo] = await Promise.all([
     supabase.from("contacts").select("name, phone").eq("id", order.contact_id).maybeSingle(),
     supabase
       .from("order_items")
@@ -1376,6 +1458,8 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
       .order("created_at", { ascending: true }),
     // Hora de llegada del cliente = created_at de la conversación de origen.
     supabase.from("conversations").select("created_at").eq("id", order.conversation_id).maybeSingle(),
+    // Producto/fuente de la conversación, resiliente a que falte la migración 0018.
+    categoriesByConversation(supabase, [order.conversation_id]),
   ]);
   if (itemsRes.error) throw new Error(`getOrder items: ${itemsRes.error.message}`);
 
@@ -1394,6 +1478,7 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     clientArrivedAt: convoRes.data?.created_at ?? null,
+    productCategory: categoryByConvo.get(order.conversation_id) ?? null,
     contact: contactRes.data
       ? { name: contactRes.data.name, phone: contactRes.data.phone }
       : null,
@@ -1465,26 +1550,49 @@ export async function getCallRequests(opts?: {
  */
 export async function getSalesReport(agentId?: string): Promise<SalesReport> {
   const supabase = createServiceClient();
-  const convoIds = agentId ? await getAgentConversationIds(agentId) : null;
-  // Paginado: sin esto, PostgREST corta en 1000 filas y el reporte subcuenta.
-  const rows = await fetchAllRows(
-    (from, to) =>
-      supabase
-        .from("orders")
-        .select("status, fulfillment_method, total, created_at, conversation_id")
-        .range(from, to),
-    "getSalesReport",
-  );
+  const [rows, convos, agents] = await Promise.all([
+    // Paginado: sin esto, PostgREST corta en 1000 filas y el reporte subcuenta.
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from("orders")
+          .select("status, fulfillment_method, total, currency, created_at, conversation_id")
+          .range(from, to),
+      "getSalesReport",
+    ),
+    fetchAllRows(
+      (from, to) => supabase.from("conversations").select("id, agent_id").range(from, to),
+      "getSalesReport conversations",
+    ),
+    getAgents(),
+  ]);
+
+  const agentById = new Map(agents.map((a) => [a.id, a]));
+  const agentByConvo = new Map(convos.map((c) => [c.id, c.agent_id as string | null]));
+  // Moneda de LECTURA: la del agente filtrado; consolidando todos los mercados,
+  // el peso colombiano (mercado original). Mismo criterio que Órdenes (ADR-0068).
+  const display: CurrencyCode = agentId
+    ? (agentById.get(agentId)?.currency ?? DEFAULT_CURRENCY)
+    : DEFAULT_CURRENCY;
 
   const facts: OrderFact[] = rows
-    .filter((o) => !convoIds || convoIds.has(o.conversation_id))
-    .map((o) => ({
-      status: o.status,
-      method: o.fulfillment_method,
-      total: o.total,
-      createdAt: o.created_at,
-    }));
-  return summarizeOrders(facts);
+    .filter((o) => !agentId || agentByConvo.get(o.conversation_id) === agentId)
+    .map((o) => {
+      // La moneda nativa manda la del AGENTE, no `orders.currency`: esa columna
+      // quedó envenenada con 'COP' en órdenes viejas de otros mercados (ADR-0068).
+      const aId = agentByConvo.get(o.conversation_id);
+      const native = aId
+        ? (agentById.get(aId)?.currency ?? normalizeCurrency(o.currency))
+        : normalizeCurrency(o.currency);
+      return {
+        status: o.status,
+        method: o.fulfillment_method,
+        total: o.total,
+        currency: native,
+        createdAt: o.created_at,
+      };
+    });
+  return summarizeOrders(facts, Date.now(), display);
 }
 
 /**
@@ -1665,7 +1773,17 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
     addCost(r.agent_id, Number(r.cost_usd ?? 0));
   }
 
-  const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent);
+  // Moneda de lectura del consolidado: la del agente filtrado, o COP al mirar
+  // todos los mercados juntos (mismo criterio que el resto de Reportes).
+  const display: CurrencyCode = agentId
+    ? normalizeCurrency(
+        // `currency` llega con la migración 0029; sin ella cae al default.
+        ((agentRows.data ?? []).find((a) => a.id === agentId) as { currency?: string | null })
+          ?.currency,
+      )
+    : DEFAULT_CURRENCY;
+
+  const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent, display);
   return { ...report, scaling: summarizeScaling(report, chats, orderFacts) };
 }
 

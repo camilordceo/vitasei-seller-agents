@@ -11,10 +11,12 @@ import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
 import { callbellProviderFromEnv } from "@/lib/messaging/callbell";
 import { loadAgent, loadAgentForConversation, providerForAgent } from "@/lib/agent/agents";
 import { normalizePhone } from "@/lib/messaging/phone";
+import { uploadChatImage } from "@/lib/supabase/storage";
 import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
 import type { CallRequestStatus, Json } from "@/lib/supabase/types";
 import type { OrderEditInput } from "./orders/types";
+import type { ProductPick } from "./conversations/types";
 import type { AgentEditInput, AgentCatalogInput, VoiceConfigInput } from "./agents/types";
 import {
   credsFor,
@@ -722,6 +724,141 @@ export async function sendManualMessage(conversationId: string, text: string): P
     conversation_id: conversationId,
     type: "manual_message_sent",
     payload: { uuid: sent.uuid, status: sent.status, chars: clean.length } as unknown as Json,
+  });
+
+  revalidatePath(`/dashboard/conversations/${conversationId}`);
+  revalidatePath("/dashboard/conversations");
+  revalidatePath("/dashboard");
+}
+
+/** Tipos de imagen que WhatsApp acepta; lo demás se rechaza antes de subir nada. */
+const CHAT_IMAGE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+/** Tope de la Server Action (ver `next.config.mjs`), con margen para el overhead del multipart. */
+const CHAT_IMAGE_MAX_BYTES = 7 * 1024 * 1024;
+
+/**
+ * Sube al bucket la imagen que un humano adjuntó en el chat y devuelve su URL pública.
+ * No envía nada: el envío es `sendManualImage`, que solo entiende de links.
+ */
+export async function uploadChatImageAction(formData: FormData): Promise<string> {
+  const conversationId = String(formData.get("conversationId") ?? "");
+  if (!conversationId) throw new Error("Falta la conversación.");
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) throw new Error("No llegó ninguna imagen.");
+  if (!CHAT_IMAGE_TYPES.has(file.type.toLowerCase())) {
+    throw new Error("Formato no soportado. Usa JPG, PNG o WebP.");
+  }
+  if (file.size > CHAT_IMAGE_MAX_BYTES) {
+    throw new Error("La imagen pesa más de 7 MB. Comprímela e intenta de nuevo.");
+  }
+
+  const supabase = createServiceClient();
+  const bytes = Buffer.from(await file.arrayBuffer());
+  return uploadChatImage(supabase, bytes, file.type.toLowerCase(), conversationId);
+}
+
+/**
+ * Productos del agente de la conversación, para adjuntar su foto sin tener que
+ * volver a subirla. Filtra por nombre/SKU en Postgres (`ilike`) y devuelve solo
+ * los que TIENEN imagen: los demás no sirven para lo que abre este buscador.
+ */
+export async function searchAgentProducts(
+  conversationId: string,
+  query: string,
+): Promise<ProductPick[]> {
+  const supabase = createServiceClient();
+
+  const { data: convo } = await supabase
+    .from("conversations")
+    .select("agent_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (!convo?.agent_id) return [];
+
+  let q = supabase
+    .from("products")
+    .select("sku, name, price, currency, image_url, in_stock")
+    .eq("agent_id", convo.agent_id)
+    .not("image_url", "is", null)
+    .order("name")
+    .limit(40);
+
+  const term = query.trim().slice(0, 60);
+  if (term) {
+    // `,` y `%` romperían el filtro `or(...)` de PostgREST: fuera antes de armarlo.
+    const safe = term.replace(/[,%()]/g, " ").trim();
+    if (safe) q = q.or(`name.ilike.%${safe}%,sku.ilike.%${safe}%`);
+  }
+
+  const { data, error } = await q;
+  if (error) throw new Error(`searchAgentProducts: ${error.message}`);
+
+  return (data ?? []).map((p) => ({
+    sku: p.sku,
+    name: p.name,
+    price: p.price,
+    currency: p.currency,
+    imageUrl: p.image_url,
+    inStock: p.in_stock,
+  }));
+}
+
+/**
+ * Envía una imagen manual (adjunta o del catálogo) al cliente por WhatsApp.
+ * Mismo camino que `sendManualMessage`: puerto `MessagingProvider` + registro en
+ * `messages`, para que el hilo del dashboard muestre exactamente lo que se mandó.
+ */
+export async function sendManualImage(
+  conversationId: string,
+  imageUrl: string,
+  caption?: string,
+): Promise<void> {
+  const url = imageUrl.trim();
+  if (!/^https?:\/\//i.test(url)) throw new Error("La imagen no tiene una URL válida.");
+  const cap = (caption ?? "").trim();
+
+  const supabase = createServiceClient();
+
+  const { data: convo, error: convoErr } = await supabase
+    .from("conversations")
+    .select("id, contact_id, agent_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (convoErr) throw new Error(`sendManualImage convo: ${convoErr.message}`);
+  if (!convo) throw new Error("La conversación no existe.");
+
+  const { data: contact, error: contactErr } = await supabase
+    .from("contacts")
+    .select("phone")
+    .eq("id", convo.contact_id)
+    .maybeSingle();
+  if (contactErr) throw new Error(`sendManualImage contact: ${contactErr.message}`);
+  if (!contact?.phone) throw new Error("El contacto no tiene teléfono.");
+
+  const agent = await loadAgentForConversation(supabase, convo.agent_id);
+  const messaging = agent ? providerForAgent(agent) : callbellProviderFromEnv();
+
+  const sent = await messaging.sendImage(contact.phone, url, cap || null, {
+    metadata: { conversation_id: conversationId, source: "dashboard-manual" },
+  });
+
+  const { error: msgErr } = await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    direction: "outbound",
+    role: "assistant",
+    type: "image",
+    content: cap || null,
+    media_url: url,
+    tags: ["manual"] as unknown as Json,
+    callbell_message_uuid: sent.uuid,
+  });
+  if (msgErr) throw new Error(`sendManualImage save: ${msgErr.message}`);
+
+  await supabase.from("events_log").insert({
+    conversation_id: conversationId,
+    type: "manual_image_sent",
+    payload: { uuid: sent.uuid, status: sent.status, url, chars: cap.length } as unknown as Json,
   });
 
   revalidatePath(`/dashboard/conversations/${conversationId}`);

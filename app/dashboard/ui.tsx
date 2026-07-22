@@ -60,6 +60,25 @@ export function MethodPill({ method }: { method: FulfillmentMethod }) {
   );
 }
 
+/**
+ * Píldora de producto/fuente: de qué pauta o palabra clave llegó el cliente
+ * (`conversations.product_category`). Es la conexión entre la orden y la campaña
+ * que la trajo — lo que permite ver qué pauta rinde. Ver ADR-0076.
+ */
+export function SourcePill({ source }: { source: string }) {
+  return (
+    <span
+      className="inline-flex max-w-[14rem] items-center gap-1 truncate rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800"
+      title={`Producto / fuente de la conversación: ${source}`}
+    >
+      <svg className="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <path d="M3 12h4l3 8 4-16 3 8h4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <span className="truncate">{source}</span>
+    </span>
+  );
+}
+
 /** Píldora "Manual": la IA está pausada y un humano atiende la conversación. */
 export function ManualPill() {
   return (
@@ -191,7 +210,18 @@ export function OrderList({ rows }: { rows: OrderRow[] }) {
                 </span>
                 <OrderStatusPill status={o.status} />
                 <MethodPill method={o.method} />
+                {/* De qué pauta/producto llegó el cliente: es lo que dice QUÉ campaña
+                    está vendiendo, no solo qué se pidió. Ver ADR-0076. */}
+                {o.productCategory ? <SourcePill source={o.productCategory} /> : null}
               </div>
+              {/* Qué se pidió, sin abrir la orden. Con varios productos se nombra el
+                  primero y se cuenta el resto: la fila no puede crecer sin control. */}
+              {o.productNames.length > 0 ? (
+                <p className="mt-0.5 truncate text-sm font-medium text-slate-700">
+                  {o.productNames[0]}
+                  {o.productNames.length > 1 ? ` +${o.productNames.length - 1} más` : ""}
+                </p>
+              ) : null}
               <p className="mt-0.5 truncate text-sm text-slate-500">
                 {o.itemsCount} {o.itemsCount === 1 ? "ítem" : "ítems"}
                 {o.shippingCity ? ` · ${o.shippingCity}` : ""} · {formatDate(o.createdAt)}

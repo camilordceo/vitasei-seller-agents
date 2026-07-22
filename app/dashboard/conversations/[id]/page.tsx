@@ -167,6 +167,15 @@ export default async function ConversationDetailPage({ params }: { params: { id:
                         {formatCOP(order.total)}
                       </span>
                     </div>
+                    {order.productNames.length > 0 ? (
+                      <ul className="mt-2 space-y-0.5">
+                        {order.productNames.map((n) => (
+                          <li key={n} className="truncate text-sm text-slate-800" title={n}>
+                            {n}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                     <dl className="mt-2 space-y-1 text-xs text-slate-600">
                       <div className="flex justify-between gap-2">
                         <dt className="text-slate-400">Creada</dt>
