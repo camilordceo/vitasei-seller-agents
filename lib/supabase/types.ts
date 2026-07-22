@@ -538,6 +538,64 @@ export interface Database {
         };
         Relationships: [];
       };
+      /** Gasto real en pauta recibido por API (migración 0031, ADR-0082). */
+      ad_spend: {
+        Row: {
+          id: string;
+          agent_id: string;
+          date: string;
+          platform: string;
+          account_id: string | null;
+          campaign_id: string;
+          campaign_name: string | null;
+          spend: number;
+          currency: string;
+          impressions: number | null;
+          clicks: number | null;
+          leads: number | null;
+          source: string;
+          raw: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          agent_id: string;
+          date: string;
+          platform?: string;
+          account_id?: string | null;
+          campaign_id?: string;
+          campaign_name?: string | null;
+          spend?: number;
+          currency: string;
+          impressions?: number | null;
+          clicks?: number | null;
+          leads?: number | null;
+          source?: string;
+          raw?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          agent_id?: string;
+          date?: string;
+          platform?: string;
+          account_id?: string | null;
+          campaign_id?: string;
+          campaign_name?: string | null;
+          spend?: number;
+          currency?: string;
+          impressions?: number | null;
+          clicks?: number | null;
+          leads?: number | null;
+          source?: string;
+          raw?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       voice_calls: {
         Row: {
           id: string;

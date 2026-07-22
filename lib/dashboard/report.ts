@@ -184,13 +184,19 @@ export function summarizeOrders(
   facts: OrderFact[],
   nowMs: number = Date.now(),
   display: CurrencyCode = DEFAULT_CURRENCY,
+  /**
+   * Métodos configurados en el/los agente(s): aparecen SIEMPRE en el corte "por
+   * método", aunque todavía no tengan órdenes. Sin esto, un método recién agregado
+   * (p. ej. "Link de pago") no existía en Reportes hasta la primera venta. Ver ADR-0080.
+   */
+  configuredMethods: ReadonlyArray<string> = [],
 ): SalesReport {
   const byStatus = Object.fromEntries(
     ORDER_STATUSES.map((s) => [s, emptyBucket()]),
   ) as Record<OrderStatus, Bucket>;
   // Métodos a mostrar: los conocidos (siempre) + los presentes en las órdenes NO
   // canceladas (texto libre por agente). Ordenados para el despliegue.
-  const presentMethods = new Set<string>(FULFILLMENT_METHODS);
+  const presentMethods = new Set<string>([...FULFILLMENT_METHODS, ...configuredMethods]);
   for (const f of facts) {
     if (f.status !== "cancelled") presentMethods.add(methodKey(f.method));
   }
@@ -705,6 +711,22 @@ export interface ChatFact {
   isChat: boolean;
 }
 
+/**
+ * Gasto REAL de pauta de un agente en un día, tal como lo reportó la plataforma
+ * (tabla `ad_spend`, ADR-0082). Puede haber varias filas por agente/día —una por
+ * campaña— y acá se suman.
+ */
+export interface AdSpendFact {
+  agentId: string;
+  /** Día calendario `YYYY-MM-DD` (el que reportó la plataforma). */
+  date: string;
+  spend: number;
+  /** Moneda en la que se PAGÓ (se convierte a la de venta del agente para leerla). */
+  currency: string;
+  /** Leads que reporta la plataforma. Referencia, no reemplaza los chats. */
+  leads: number;
+}
+
 /** Orden atribuida a un agente, para el retorno. */
 export interface RoasOrderFact {
   agentId: string | null;
@@ -769,7 +791,26 @@ export interface RoasRow {
   aiCostPerChat: number | null;
   /** ROAIS (return on AI spend) = revenue / aiCost. null sin gasto IA. */
   roais: number | null;
+  /** Parte de `investment` que viene del gasto REAL reportado (ADR-0082), en `currency`. */
+  realInvestment: number;
+  /** Parte estimada con `costPerChat × chats` de los días sin dato real. */
+  estimatedInvestment: number;
+  /** Nº de días con gasto real reportado. 0 = la fila es 100% estimación. */
+  realDays: number;
+  /** Leads que reportó la plataforma en esos días. null si no reportó ninguno. */
+  platformLeads: number | null;
+  /** De dónde sale la inversión de esta fila. Lo que la UI tiene que decir en voz alta. */
+  spendSource: SpendSource;
 }
+
+/**
+ * De dónde salió la inversión que se está mostrando. Se calcula, no se configura:
+ * `real` = todos los días con plata tienen dato reportado; `estimated` = ninguno;
+ * `mixed` = unos sí y otros no (lo normal mientras Roberto arranca o si un día
+ * falla el envío); `none` = no hay ni costo por chat ni gasto real, y entonces la
+ * pantalla NO muestra un ROAS inventado.
+ */
+export type SpendSource = "real" | "estimated" | "mixed" | "none";
 
 export interface RoasDay {
   /** Clave de día en Bogota, YYYY-MM-DD. */
@@ -778,6 +819,8 @@ export interface RoasDay {
   investment: number;
   revenue: number;
   roas: number | null;
+  /** true si la inversión de ESE día es gasto reportado y no una estimación. */
+  real: boolean;
 }
 
 export interface RoasReport {
@@ -797,10 +840,29 @@ export interface RoasReport {
   excludedAgents: number;
   /** true si al menos un agente del alcance tiene costo por chat configurado. */
   configured: boolean;
+  /** De dónde sale la inversión del alcance completo. Ver `SpendSource`. */
+  spendSource: SpendSource;
+  /** Días distintos con gasto real reportado en el alcance. */
+  realSpendDays: number;
+  /** Día más reciente con gasto reportado (`YYYY-MM-DD`), o null. Delata un feed caído. */
+  lastRealSpendDate: string | null;
 }
 
 function ratio(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
+}
+
+/**
+ * De dónde viene la plata que se está mostrando como inversión. Se decide por los
+ * MONTOS y no por los días: un agente con 29 días reportados y uno estimado de $500
+ * no debería leerse como "mitad y mitad" — lo que importa es cuánta de la plata en
+ * pantalla es dato duro.
+ */
+function classifySpend(real: number, estimated: number): SpendSource {
+  if (real > 0 && estimated > 0) return "mixed";
+  if (real > 0) return "real";
+  if (estimated > 0) return "estimated";
+  return "none";
 }
 
 /**
@@ -818,6 +880,14 @@ function ratio(numerator: number, denominator: number): number | null {
  * `aiCostUsdByAgent` es el gasto de IA de cada agente EN USD (tokens + audios +
  * llamadas); acá se convierte a la moneda del agente para leer Costo IA/chat y
  * ROAIS al lado de la pauta, en las mismas unidades. Ver ADR-0070.
+ *
+ * `adSpend` es el gasto REAL reportado por la plataforma de anuncios (ADR-0082) y
+ * **manda día a día**: para cada día, si hay gasto reportado se usa ese; si no, se
+ * cae al estimado `costPerChat × chats de ese día`. La mezcla es a propósito y no
+ * un estado transitorio: un día que falle el envío no puede apagar el retorno de
+ * todo el mes, y un mes entero de dato real no debe seguir leyéndose con un
+ * promedio tecleado a mano. Los días con gasto reportado y CERO chats también
+ * suman inversión —se pagó pauta y no llegó nadie, que es justo lo que hay que ver.
  */
 export function summarizeRoas(
   agents: AgentCostConfig[],
@@ -825,6 +895,7 @@ export function summarizeRoas(
   orders: RoasOrderFact[],
   aiCostUsdByAgent: Map<string, number> = new Map(),
   display: CurrencyCode = DEFAULT_CURRENCY,
+  adSpend: AdSpendFact[] = [],
 ): RoasReport {
   const byAgent = new Map<string, RoasRow>();
   for (const a of agents) {
@@ -856,13 +927,49 @@ export function summarizeRoas(
       aiCost: 0,
       aiCostPerChat: null,
       roais: null,
+      realInvestment: 0,
+      estimatedInvestment: 0,
+      realDays: 0,
+      platformLeads: null,
+      spendSource: "none",
     });
   }
 
+  // --- Gasto real por agente y día, YA en la moneda de venta de ese agente ------
+  // Se agrupa una sola vez y lo usan tanto las filas como la serie de 14 días, para
+  // que el gráfico y la tabla no puedan contar historias distintas. Una fila cuya
+  // moneda no tenga tasa se DESCARTA (no se suma como si ya estuviera en destino).
+  const saleCurrencyOf = new Map(agents.map((a) => [a.id, a.saleCurrency]));
+  const realByAgentDay = new Map<string, Map<string, { spend: number; leads: number }>>();
+  for (const s of adSpend) {
+    const sale = saleCurrencyOf.get(s.agentId);
+    if (!sale) continue; // gasto de un agente fuera del alcance (o borrado)
+    const amount = convertMoney(s.spend, s.currency, sale);
+    if (amount === null) continue;
+    let days = realByAgentDay.get(s.agentId);
+    if (!days) {
+      days = new Map();
+      realByAgentDay.set(s.agentId, days);
+    }
+    const prev = days.get(s.date) ?? { spend: 0, leads: 0 };
+    days.set(s.date, { spend: prev.spend + amount, leads: prev.leads + (s.leads || 0) });
+  }
+
+  // Chats por agente y día: el estimado se arma día a día (no con el total), porque
+  // el gasto real reemplaza días sueltos y hay que saber cuáles quedaron sin dato.
+  const chatsByAgentDay = new Map<string, Map<string, number>>();
   for (const c of chats) {
     if (!c.isChat) continue;
     const row = c.agentId ? byAgent.get(c.agentId) : undefined;
-    if (row) row.chats += 1;
+    if (!row || !c.agentId) continue;
+    row.chats += 1;
+    let days = chatsByAgentDay.get(c.agentId);
+    if (!days) {
+      days = new Map();
+      chatsByAgentDay.set(c.agentId, days);
+    }
+    const key = bogotaDayKey(Date.parse(c.createdAt));
+    days.set(key, (days.get(key) ?? 0) + 1);
   }
   for (const o of orders) {
     if (o.status === "cancelled") continue;
@@ -875,7 +982,26 @@ export function summarizeRoas(
 
   const rows = [...byAgent.values()];
   for (const row of rows) {
-    row.investment = (row.costPerChat ?? 0) * row.chats;
+    const id = row.agentId ?? "";
+    const realDays = realByAgentDay.get(id) ?? new Map<string, { spend: number; leads: number }>();
+    const chatDays = chatsByAgentDay.get(id) ?? new Map<string, number>();
+
+    let leads = 0;
+    for (const d of realDays.values()) {
+      row.realInvestment += d.spend;
+      leads += d.leads;
+    }
+    // Solo los días SIN gasto reportado se estiman. Sumar los dos sobre el mismo
+    // día contaría la pauta dos veces, que era el riesgo obvio de esta mezcla.
+    for (const [day, count] of chatDays) {
+      if (realDays.has(day)) continue;
+      row.estimatedInvestment += (row.costPerChat ?? 0) * count;
+    }
+    row.realDays = realDays.size;
+    row.platformLeads = realDays.size > 0 ? leads : null;
+    row.investment = row.realInvestment + row.estimatedInvestment;
+    row.spendSource = classifySpend(row.realInvestment, row.estimatedInvestment);
+
     row.roas = ratio(row.revenue, row.investment);
     row.confirmedRoas = ratio(row.confirmedRevenue, row.investment);
     row.costPerOrder = ratio(row.investment, row.orders);
@@ -906,6 +1032,9 @@ export function summarizeRoas(
     const confirmedRevenue = sumIn((r) => r.confirmedRevenue);
     const ordersTotal = usable.reduce((s, r) => s + r.orders, 0);
     const aiCostTotal = sumIn((r) => r.aiCost);
+    const realTotal = sumIn((r) => r.realInvestment);
+    const estimatedTotal = sumIn((r) => r.estimatedInvestment);
+    const leadsTotal = usable.reduce((s, r) => s + (r.platformLeads ?? 0), 0);
     total = {
       agentId: null,
       name: "Todos los agentes",
@@ -928,6 +1057,15 @@ export function summarizeRoas(
       aiCost: aiCostTotal,
       aiCostPerChat: ratio(aiCostTotal, chatsTotal),
       roais: ratio(revenue, aiCostTotal),
+      realInvestment: realTotal,
+      estimatedInvestment: estimatedTotal,
+      // Días DISTINTOS con dato en todo el alcance: si dos agentes reportaron el
+      // mismo martes, el alcance tiene un martes cubierto, no dos.
+      realDays: new Set(
+        usable.flatMap((r) => [...(realByAgentDay.get(r.agentId ?? "")?.keys() ?? [])]),
+      ).size,
+      platformLeads: usable.some((r) => r.platformLeads != null) ? leadsTotal : null,
+      spendSource: classifySpend(realTotal, estimatedTotal),
     };
   }
 
@@ -944,17 +1082,34 @@ export function summarizeRoas(
     const dayChats = new Map<string, number>();
     const dayInvestment = new Map<string, number>();
     const dayRevenue = new Map<string, number>();
+    /** Días del gráfico donde AL MENOS un agente aportó gasto reportado. */
+    const dayHasReal = new Set<string>();
 
     const dayKeys: string[] = [];
     const now = Date.now();
     for (let i = 0; i < 14; i++) dayKeys.push(bogotaDayKey(now - i * DAY_MS));
     const window = new Set(dayKeys);
 
+    // El gasto real entra PRIMERO y por agente/día, para poder saltarse después el
+    // estimado de exactamente esos pares (misma regla que las filas: nunca los dos).
+    for (const r of usable) {
+      const id = r.agentId ?? "";
+      const rate = (rateOf.get(r.agentId) as number | null) ?? 0;
+      for (const [day, d] of realByAgentDay.get(id) ?? []) {
+        if (!window.has(day)) continue;
+        dayInvestment.set(day, (dayInvestment.get(day) ?? 0) + d.spend * rate);
+        dayHasReal.add(day);
+      }
+    }
+
     for (const c of chats) {
       if (!c.isChat || !c.agentId || !inScope.has(c.agentId)) continue;
       const key = bogotaDayKey(Date.parse(c.createdAt));
       if (!window.has(key)) continue;
       dayChats.set(key, (dayChats.get(key) ?? 0) + 1);
+      // Los chats se cuentan siempre; el costo estimado, solo si ESE agente no
+      // reportó gasto ESE día.
+      if (realByAgentDay.get(c.agentId)?.has(key)) continue;
       dayInvestment.set(key, (dayInvestment.get(key) ?? 0) + (costById.get(c.agentId) ?? 0));
     }
     for (const o of orders) {
@@ -974,7 +1129,17 @@ export function summarizeRoas(
         investment,
         revenue,
         roas: ratio(revenue, investment),
+        real: dayHasReal.has(key),
       });
+    }
+  }
+
+  // Última fecha con gasto reportado en TODO el alcance (no solo en los 14 días):
+  // es el semáforo del feed — si dice "hace 6 días", el envío se cayó.
+  let lastRealSpendDate: string | null = null;
+  for (const days of realByAgentDay.values()) {
+    for (const day of days.keys()) {
+      if (lastRealSpendDate === null || day > lastRealSpendDate) lastRealSpendDate = day;
     }
   }
 
@@ -985,7 +1150,12 @@ export function summarizeRoas(
     currency: display,
     converted,
     excludedAgents,
-    configured: rows.some((r) => r.costPerChat != null && r.costPerChat > 0),
+    configured: rows.some(
+      (r) => (r.costPerChat != null && r.costPerChat > 0) || r.realInvestment > 0,
+    ),
+    spendSource: total ? total.spendSource : classifySpend(0, 0),
+    realSpendDays: new Set([...realByAgentDay.values()].flatMap((d) => [...d.keys()])).size,
+    lastRealSpendDate,
   };
 }
 

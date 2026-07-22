@@ -233,6 +233,14 @@ export const env = {
     return Number.isFinite(n) && n > 0 ? n : 0.2;
   },
 
+  // Gasto real en pauta (ADR-0082). Token Bearer que usa el producto de anuncios
+  // para mandarnos el gasto por día. SIN esta variable el endpoint queda CERRADO
+  // (503, no abierto): es una entrada de escritura pública en internet, y un
+  // "abierto en dev" acá significa que cualquiera puede envenenar el ROAS.
+  get AD_SPEND_API_KEY() {
+    return optional("AD_SPEND_API_KEY");
+  },
+
   // Supabase
   get SUPABASE_URL() {
     return required("NEXT_PUBLIC_SUPABASE_URL");

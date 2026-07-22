@@ -14,6 +14,7 @@ import {
   summarizeScaling,
   summarizeTopProducts,
   summarizeWeekly,
+  type AdSpendFact,
   type AgentCostConfig,
   type ChatFact,
   type CloseSpeedFact,
@@ -585,6 +586,148 @@ describe("summarizeRoas", () => {
     expect(r.total!.aiCost).toBe(3500);
     expect(r.total!.aiCostPerChat).toBe(1750); // 3.500 / 2 chats
     expect(r.total!.roais).toBe(10);
+  });
+});
+
+describe("summarizeRoas con gasto REAL en pauta (ADR-0082)", () => {
+  const agent = (id: string, costPerChat: number | null, sale = "COP", cost = sale): AgentCostConfig => ({
+    id,
+    name: `Agente ${id}`,
+    brand: null,
+    costPerChat,
+    costCurrency: cost,
+    saleCurrency: sale,
+  });
+  // Día fijo dentro del histórico (fuera de la ventana de 14 días de `perDay`,
+  // que se mueve con el reloj): estas pruebas miran las FILAS, no el gráfico.
+  const chatOn = (agentId: string, dayKey: string): ChatFact => ({
+    agentId,
+    createdAt: `${dayKey}T15:00:00Z`,
+    isChat: true,
+  });
+  const order = (agentId: string, total: number): RoasOrderFact => ({
+    agentId,
+    status: "confirmed",
+    total,
+    createdAt: "2026-07-02T15:00:00Z",
+  });
+  const spend = (agentId: string, date: string, amount: number, currency = "COP", leads = 0): AdSpendFact => ({
+    agentId,
+    date,
+    spend: amount,
+    currency,
+    leads,
+  });
+
+  it("el gasto reportado REEMPLAZA la estimación de ese día", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000)],
+      [chatOn("a", "2026-06-01"), chatOn("a", "2026-06-01"), chatOn("a", "2026-06-01")],
+      [order("a", 500_000)],
+      new Map(),
+      "COP",
+      [spend("a", "2026-06-01", 90_000)],
+    );
+    const row = r.rows[0];
+    // 3 chats × 1.000 = 3.000 estimados que NO se usan: ese día tiene dato real.
+    expect(row.investment).toBe(90_000);
+    expect(row.realInvestment).toBe(90_000);
+    expect(row.estimatedInvestment).toBe(0);
+    expect(row.spendSource).toBe("real");
+    expect(row.roas).toBeCloseTo(500_000 / 90_000, 6);
+  });
+
+  it("mezcla: día con dato manda, día sin dato cae al costo por chat", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000)],
+      [chatOn("a", "2026-06-01"), chatOn("a", "2026-06-02"), chatOn("a", "2026-06-02")],
+      [],
+      new Map(),
+      "COP",
+      [spend("a", "2026-06-01", 90_000)],
+    );
+    const row = r.rows[0];
+    expect(row.realInvestment).toBe(90_000);
+    expect(row.estimatedInvestment).toBe(2000); // solo el 2 de junio (2 chats)
+    expect(row.investment).toBe(92_000);
+    expect(row.spendSource).toBe("mixed");
+    expect(row.realDays).toBe(1);
+  });
+
+  it("un día pagado SIN chats sí cuenta como inversión (plata quemada)", () => {
+    const r = summarizeRoas([agent("a", 1000)], [], [], new Map(), "COP", [
+      spend("a", "2026-06-05", 40_000),
+    ]);
+    expect(r.rows[0].chats).toBe(0);
+    expect(r.rows[0].investment).toBe(40_000);
+    expect(r.rows[0].roas).toBe(0); // vendió 0 sobre 40.000: el retorno es cero, no "sin dato"
+  });
+
+  it("varias campañas del mismo día se SUMAN, y sus leads también", () => {
+    const r = summarizeRoas([agent("a", null)], [], [], new Map(), "COP", [
+      spend("a", "2026-06-01", 30_000, "COP", 12),
+      spend("a", "2026-06-01", 20_000, "COP", 8),
+    ]);
+    expect(r.rows[0].investment).toBe(50_000);
+    expect(r.rows[0].platformLeads).toBe(20);
+    expect(r.rows[0].realDays).toBe(1);
+  });
+
+  it("el gasto se convierte a la moneda de VENTA del agente", () => {
+    // Vende en MXN, Meta le cobra en USD: 100 USD × (20 MXN/USD) = 2.000 MXN.
+    const r = summarizeRoas([agent("a", null, "MXN")], [], [order("a", 10_000)], new Map(), "MXN", [
+      spend("a", "2026-06-01", 100, "USD"),
+    ]);
+    expect(r.rows[0].investment).toBe(2000);
+    expect(r.rows[0].roas).toBe(5);
+  });
+
+  it("sin gasto reportado, todo queda EXACTAMENTE como antes", () => {
+    const chats = [chatOn("a", "2026-06-01"), chatOn("a", "2026-06-02")];
+    const conReal = summarizeRoas([agent("a", 1000)], chats, [order("a", 50_000)], new Map(), "COP", []);
+    expect(conReal.rows[0].investment).toBe(2000);
+    expect(conReal.rows[0].spendSource).toBe("estimated");
+    expect(conReal.realSpendDays).toBe(0);
+    expect(conReal.lastRealSpendDate).toBeNull();
+  });
+
+  it("sin costo por chat, el gasto real POR SÍ SOLO ya da un retorno legible", () => {
+    // Este es el punto de toda la función: el dueño que nunca tecleó el promedio
+    // igual ve su ROAS en cuanto llega el primer envío.
+    const r = summarizeRoas(
+      [agent("a", null)],
+      [chatOn("a", "2026-06-01")],
+      [order("a", 300_000)],
+      new Map(),
+      "COP",
+      [spend("a", "2026-06-01", 100_000)],
+    );
+    expect(r.rows[0].roas).toBe(3);
+    expect(r.configured).toBe(true);
+  });
+
+  it("el consolidado suma real y estimado por separado y recuerda el último día con dato", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000), agent("b", 500)],
+      [chatOn("a", "2026-06-01"), chatOn("b", "2026-06-03")],
+      [],
+      new Map(),
+      "COP",
+      [spend("a", "2026-06-01", 70_000), spend("a", "2026-06-04", 10_000)],
+    );
+    expect(r.total!.realInvestment).toBe(80_000);
+    expect(r.total!.estimatedInvestment).toBe(500); // el chat de "b", sin dato real
+    expect(r.total!.spendSource).toBe("mixed");
+    expect(r.lastRealSpendDate).toBe("2026-06-04");
+    expect(r.realSpendDays).toBe(2);
+  });
+
+  it("ignora el gasto de un agente fuera del alcance (filtro por agente)", () => {
+    const r = summarizeRoas([agent("a", null)], [], [], new Map(), "COP", [
+      spend("b", "2026-06-01", 99_000),
+    ]);
+    expect(r.rows[0].investment).toBe(0);
+    expect(r.realSpendDays).toBe(0);
   });
 });
 

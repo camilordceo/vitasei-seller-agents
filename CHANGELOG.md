@@ -29,6 +29,24 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **API de gasto REAL en pauta + inversión que deja de ser una hipótesis** (ADR-0082,
+  `docs/28-api-gasto-en-pauta.md`, migración 0031). Nuevo endpoint
+  `POST /api/ingest/ad-spend` (Bearer `AD_SPEND_API_KEY`) para que el producto que tiene
+  conectadas las cuentas de anuncios nos mande gasto, impresiones, clics y leads por
+  **día × agente × plataforma × campaña**; el envío **reemplaza** por esa llave, así que
+  reenviar los últimos días —que es lo que toca hacer, porque las plataformas reexpresan el
+  gasto reciente— corrige en vez de duplicar. Una fila mala no tumba el lote: vuelve con su
+  índice y su motivo. `GET` del mismo endpoint devuelve lo guardado para cuadrar contra la
+  plataforma. En **Reportes → Retorno (ROAS)** la inversión se resuelve **día a día**: si hay
+  gasto reportado manda ese, si no cae al `costo por chat` configurado a mano (que se queda
+  como promedio de respaldo, no desaparece). La pantalla dice de dónde salió cada peso
+  —etiqueta `real` / `mixto` / `estimado` por fila y en el consolidado, punto lleno en los
+  días reportados del gráfico de 14 días— y avisa en ámbar si el último dato tiene 2 días o
+  más, porque un reporte desactualizado se ve igual de bien que uno al día. Se muestra
+  además la brecha **leads de la plataforma vs. chats que de verdad escribieron**. Un día
+  pagado sin chats ahora suma inversión (plata quemada visible); un agente sin costo por
+  chat obtiene ROAS en cuanto llega el primer envío. Sin gasto reportado, todos los números
+  quedan exactamente como estaban.
 - **Gráfico "Semana a semana · chats por agente y ventas"** en Reportes (ADR-0079). Semanas
   de lunes a domingo: barra apilada con los chats que entraron partidos por el agente que
   los atendió, y al lado las ventas cerradas esa semana con el % de chats que terminó en
@@ -81,6 +99,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
     con el link configurado o si pide más variables de las que mandamos. **Enviar prueba** manda
     la plantilla a un número ahora, con o sin imagen, y muestra el desenlace real consultado a
     Callbell — sirve para validar el **día 15 antes de que venza el primero** (25/07).
+- **Un método de pago nuevo en el agente no llegaba a Órdenes** (ADR-0080). Agregar "Link
+  de pago" en el agente no servía de nada fuera del bot: el selector de método del detalle
+  de orden ofrecía **solo contra entrega / Addi / sin definir** (cableado), así que la
+  orden no se podía corregir a mano; y la píldora de método traducía con esas tres claves
+  y **cualquier otra la mostraba como "Sin definir"** — una venta por Zelle o por link de
+  pago se leía en pantalla como si el cliente no hubiera elegido nada. Ahora hay un solo
+  lugar que resuelve `método → etiqueta` y `agente → opciones` (`lib/dashboard/methodLabels.ts`):
+  el selector se arma con los métodos del **agente que vendió** (más "Sin definir" y el
+  método actual de la orden, para no perderlo si se quitó de la config), las píldoras de
+  Órdenes, Conversaciones y sus detalles muestran la etiqueta del agente, y en Reportes los
+  métodos configurados aparecen en el corte "por método" **desde el minuto cero**, aunque
+  todavía no tengan ventas.
 - **Reportes sumaba dólares y pesos mexicanos como si fueran pesos colombianos**
   (ADR-0077). "Ventas confirmadas $1.156" metía una orden de **USD 96 contada como 96
   pesos** y órdenes de México contadas como COP. Ahora `summarizeOrders` recibe la moneda

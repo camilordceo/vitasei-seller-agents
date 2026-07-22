@@ -13,6 +13,8 @@ import {
 import type { RoasScalingReport } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
+  bogotaDayKey,
+  type SpendSource,
   type CloseSpeedReport,
   type ConversionReport,
   type RoasReport,
@@ -35,15 +37,9 @@ import { Collapsible } from "../Collapsible";
 import { Kpi, PageHeader } from "../ui-kit";
 import { CopySummaryButton } from "./CopySummaryButton";
 import { AgentFilter } from "./AgentFilter";
+import { buildMethodLabels, methodLabel } from "@/lib/dashboard/methodLabels";
 
 export const dynamic = "force-dynamic";
-
-/** Etiquetas de método conocidas (fallback cuando el agente no las define). */
-const METHOD_LABEL_FALLBACK: Record<string, string> = {
-  addi: "Addi",
-  cod: "Contra entrega",
-  undecided: "Sin definir",
-};
 
 function ReportCard({
   label,
@@ -160,7 +156,9 @@ function buildSummary(
   const roasLine =
     roas.total && roas.total.roas != null
       ? [
-          `Retorno (ROAS): ${new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 }).format(roas.total.roas)}× · ${formatMoney(roas.total.revenue, roas.total.currency)} sobre ${formatMoney(roas.total.investment, roas.total.currency)} de pauta (${formatNumber(roas.total.chats)} chats)`,
+          // La FUENTE de la inversión va en el texto que se comparte: quien recibe
+          // el resumen por WhatsApp no ve la etiqueta de la pantalla.
+          `Retorno (ROAS): ${new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 }).format(roas.total.roas)}× · ${formatMoney(roas.total.revenue, roas.total.currency)} sobre ${formatMoney(roas.total.investment, roas.total.currency)} de pauta ${SPEND_SOURCE_STYLE[roas.spendSource] ? `(${SPEND_SOURCE_STYLE[roas.spendSource]!.text})` : ""} (${formatNumber(roas.total.chats)} chats)`,
         ]
       : [];
   const speedLine =
@@ -207,6 +205,100 @@ function roasTone(roas: number | null): string {
   return "text-rose-700";
 }
 
+/**
+ * De dónde salió la plata que se muestra como inversión. Va pegado al número y no
+ * en una nota al pie a propósito: "$4.200.000 de pauta" significa cosas MUY
+ * distintas si es lo que cobró Meta o si es un promedio tecleado hace tres meses,
+ * y quien mira la cifra tiene que enterarse ahí mismo. Ver ADR-0082.
+ */
+const SPEND_SOURCE_STYLE: Record<SpendSource, { text: string; cls: string; title: string } | null> = {
+  real: {
+    text: "real",
+    cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    title: "Gasto reportado por la plataforma de anuncios.",
+  },
+  mixed: {
+    text: "mixto",
+    cls: "border-amber-200 bg-amber-50 text-amber-800",
+    title: "Unos días con gasto reportado y otros estimados con el costo por chat.",
+  },
+  estimated: {
+    text: "estimado",
+    cls: "border-slate-200 bg-slate-50 text-slate-500",
+    title: "Calculado como chats × costo por chat configurado a mano.",
+  },
+  none: null,
+};
+
+function SpendSourceBadge({ source }: { source: SpendSource }) {
+  const style = SPEND_SOURCE_STYLE[source];
+  if (!style) return null;
+  return (
+    <span
+      title={style.title}
+      className={`ml-1 rounded-full border px-1.5 py-px align-middle text-[10px] font-medium ${style.cls}`}
+    >
+      {style.text}
+    </span>
+  );
+}
+
+/**
+ * Estado del feed de gasto real: si llega, hasta qué día llegó, y cuántos leads
+ * dice la plataforma frente a los chats que de verdad escribieron.
+ *
+ * La brecha leads↔chats NO es un error a corregir: la plataforma cuenta clics en
+ * el anuncio y nosotros contamos gente que abrió conversación. Verla es el punto.
+ */
+function AdSpendNote({ roas }: { roas: RoasReport }) {
+  const today = bogotaDayKey(Date.now());
+  if (roas.realSpendDays === 0) {
+    return (
+      <p className="mt-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        Todavía no llega <strong>gasto real de pauta</strong>: la inversión de arriba es una
+        estimación (chats × costo por chat). Cuando la plataforma de anuncios empiece a mandar el
+        gasto a la API, estos números pasan a ser el dinero que se pagó de verdad.
+      </p>
+    );
+  }
+
+  // "Hace cuántos días" contra hoy en Bogota. Si el último dato es de anteayer o
+  // antes, el envío se cayó y hay que decirlo — el reporte se ve igual de bonito
+  // con datos viejos, que es exactamente el problema.
+  const lastMs = Date.parse(`${roas.lastRealSpendDate}T12:00:00-05:00`);
+  const todayMs = Date.parse(`${today}T12:00:00-05:00`);
+  const daysBehind = Math.round((todayMs - lastMs) / 86_400_000);
+  const stale = daysBehind >= 2;
+  const leads = roas.total?.platformLeads ?? null;
+
+  return (
+    <p
+      className={`mt-2 rounded-xl border px-3 py-2 text-xs ${
+        stale
+          ? "border-amber-200 bg-amber-50/70 text-amber-900"
+          : "border-emerald-200 bg-emerald-50/70 text-emerald-900"
+      }`}
+    >
+      <span className="font-medium">
+        Gasto real de pauta: {formatNumber(roas.realSpendDays)}{" "}
+        {roas.realSpendDays === 1 ? "día reportado" : "días reportados"}
+      </span>
+      , el último el {formatDayKeyShort(roas.lastRealSpendDate!)}
+      {stale ? ` (hace ${daysBehind} días — revisa el envío)` : ""}.
+      {leads != null && roas.total ? (
+        <>
+          {" "}
+          La plataforma reporta <strong>{formatNumber(leads)}</strong>{" "}
+          {leads === 1 ? "lead" : "leads"} y llegaron{" "}
+          <strong>{formatNumber(roas.total.chats)}</strong> chats
+          {leads > 0 ? ` (${formatPercent(roas.total.chats / leads)} de los leads escribió)` : ""}.
+        </>
+      ) : null}{" "}
+      Los días sin dato se estiman con el costo por chat del agente.
+    </p>
+  );
+}
+
 function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
   const cell = strong ? "py-2 font-medium text-slate-900" : "py-2 text-slate-700";
   return (
@@ -232,6 +324,7 @@ function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
       </td>
       <td className={`${cell} text-right tabular-nums`}>
         {formatMoney(row.investment, row.currency)}
+        <SpendSourceBadge source={row.spendSource} />
       </td>
       <td className={`${cell} text-right tabular-nums`}>
         {formatMoney(row.revenue, row.currency)}
@@ -282,8 +375,10 @@ function RoasSection({
           <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">Retorno (ROAS)</h2>
           <p className="max-w-prose text-xs text-slate-400">
             Ventas generadas ÷ lo que costó traer los chats. Un <strong>chat</strong> es una
-            conversación en la que el cliente escribió; el costo por chat lo define cada agente en
-            su moneda. <strong>ROAS 3×</strong> = por cada $1 de pauta entran $3.{" "}
+            conversación en la que el cliente escribió. La inversión sale del{" "}
+            <strong>gasto real</strong> que reporta la plataforma de anuncios cuando lo hay, y de
+            lo contrario del costo por chat que cada agente tiene configurado (un promedio).{" "}
+            <strong>ROAS 3×</strong> = por cada $1 de pauta entran $3.{" "}
             <strong>Costo IA/chat</strong> = todo el gasto de IA del agente (tokens, imágenes,
             audios y llamadas, convertido de USD) ÷ chats, y <strong>ROAIS</strong> = ventas ÷ ese
             gasto de IA. No incluye la tarifa de plantillas de Meta (aún no se registra).
@@ -297,6 +392,7 @@ function RoasSection({
             <p className="text-xs text-slate-500">
               {formatMoney(roas.total.revenue, roas.total.currency)} sobre{" "}
               {formatMoney(roas.total.investment, roas.total.currency)}
+              <SpendSourceBadge source={roas.spendSource} />
             </p>
           </div>
         ) : null}
@@ -310,6 +406,7 @@ function RoasSection({
           marketCurrencies={marketCurrencies}
           agentCount={agentCount}
         />
+        <AdSpendNote roas={roas} />
         {roas.excludedAgents > 0 ? (
           <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
             {roas.excludedAgents}{" "}
@@ -341,14 +438,18 @@ function RoasSection({
 
       {!roas.configured ? (
         <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
-          Ningún agente tiene <strong>costo por chat</strong> configurado todavía. Ponlo en{" "}
+          No hay de dónde sacar la inversión todavía. Dos caminos, y se pueden usar los dos: manda
+          el <strong>gasto real</strong> desde la plataforma de anuncios a la API (
+          <code className="rounded bg-slate-100 px-1 py-px text-[11px]">POST /api/ingest/ad-spend</code>
+          ), o configura un <strong>costo por chat</strong> promedio en{" "}
           <Link
             href="/dashboard/agents"
             className="font-medium text-slate-900 underline underline-offset-2"
           >
             Agentes
           </Link>{" "}
-          (por ejemplo, 1.000 COP por chat en Colombia) y este cuadro calcula el retorno.
+          (por ejemplo, 1.000 COP por chat en Colombia). Con cualquiera de los dos, este cuadro
+          calcula el retorno; si llegan los dos, manda el gasto real día por día.
         </div>
       ) : null}
 
@@ -402,6 +503,15 @@ function RoasSection({
               <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" aria-hidden="true" />
               Ventas
             </span>
+            {roas.perDay.some((d) => d.real) ? (
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="h-1.5 w-1.5 rounded-full border border-emerald-500 bg-emerald-500"
+                  aria-hidden="true"
+                />
+                Gasto reportado
+              </span>
+            ) : null}
             {/* El total del periodo, a la vista: el gráfico dice el día a día y
                 esta línea dice cuánto fue en plata. */}
             <span className="ml-auto tabular-nums">
@@ -414,9 +524,18 @@ function RoasSection({
               <li
                 key={d.date}
                 className="flex items-center gap-3"
-                title={`${formatDayKeyShort(d.date)} · Inversión ${formatMoney(d.investment, chartCurrency)} · Ventas ${formatMoney(d.revenue, chartCurrency)} · ${d.chats} chats · ROAS ${formatRoas(d.roas)}`}
+                title={`${formatDayKeyShort(d.date)} · Inversión ${formatMoney(d.investment, chartCurrency)} (${d.real ? "gasto reportado" : "estimada"}) · Ventas ${formatMoney(d.revenue, chartCurrency)} · ${d.chats} chats · ROAS ${formatRoas(d.roas)}`}
               >
-                <span className="w-14 shrink-0 text-xs text-slate-500">
+                <span className="flex w-14 shrink-0 items-center gap-1 text-xs text-slate-500">
+                  {/* Punto lleno = ese día la inversión es plata reportada; hueco =
+                      estimada. Sin esto, dos barras idénticas cuentan historias
+                      distintas y no hay forma de saber cuál es cuál. */}
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full border ${
+                      d.real ? "border-emerald-500 bg-emerald-500" : "border-slate-300 bg-transparent"
+                    }`}
+                  />
                   {formatDayKeyShort(d.date)}
                 </span>
                 {/* Dos barras a la misma escala: se ve de un vistazo si el verde
@@ -847,11 +966,8 @@ export default async function ReportsPage({
 }) {
   const agents = await getAgents();
   // Etiquetas de método por su clave: las configuradas por los agentes (ADR-0055)
-  // sobre los fallbacks conocidos (cod/addi/undecided).
-  const methodLabels: Record<string, string> = {
-    ...METHOD_LABEL_FALLBACK,
-    ...Object.fromEntries(agents.flatMap((a) => a.paymentMethods).map((m) => [m.method, m.label])),
-  };
+  // sobre los fallbacks históricos. Mismo helper que Órdenes y Conversaciones.
+  const methodLabels = buildMethodLabels(agents);
   // Agente seleccionado: el del query (?agent=) si existe, o undefined = consolidado.
   const selected =
     searchParams.agent && agents.some((a) => a.id === searchParams.agent)
@@ -1245,7 +1361,7 @@ export default async function ReportsPage({
             <tbody className="divide-y divide-slate-100">
               {r.methodKeys.map((m) => (
                 <tr key={m}>
-                  <td className="py-2 text-slate-700">{methodLabels[m] ?? m}</td>
+                  <td className="py-2 text-slate-700">{methodLabel(m, methodLabels)}</td>
                   <td className="py-2 text-right tabular-nums text-slate-900">
                     {formatNumber(r.byMethod[m].count)}
                   </td>

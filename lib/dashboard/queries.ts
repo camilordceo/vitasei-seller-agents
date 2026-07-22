@@ -20,6 +20,7 @@ import {
   summarizeTopProducts,
   matchesSearch,
   searchKey,
+  type AdSpendFact,
   type AgentCostConfig,
   type ChatFact,
   type CloseSpeedFact,
@@ -58,6 +59,7 @@ import { normalizeProviderId, type MessagingProviderId } from "@/lib/messaging/t
 import { findHotmartAgentId } from "@/lib/agent/agents";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
+import { buildMethodLabels } from "@/lib/dashboard/methodLabels";
 import {
   convertMoney,
   DEFAULT_CURRENCY,
@@ -1224,6 +1226,8 @@ export interface OrdersPage {
   products: Array<{ sku: string; name: string }>;
   /** Agentes con órdenes (para el selector), con su moneda. */
   agents: Array<{ id: string; name: string; brand: string | null; currency: CurrencyCode }>;
+  /** `method → etiqueta` de todos los agentes (la lista mezcla marcas). Ver ADR-0080. */
+  methodLabels: Record<string, string>;
 }
 
 /**
@@ -1406,6 +1410,8 @@ export async function getOrdersPage(opts: OrderListFilters = {}): Promise<Orders
         .map((a) => ({ id: a.id, name: a.name, brand: a.brand, currency: a.currency }))
         .sort((a, b) => a.name.localeCompare(b.name, "es"));
     })(),
+    // `method → etiqueta` de TODOS los agentes: la lista mezcla marcas. Ver ADR-0080.
+    methodLabels: buildMethodLabels(agents),
   };
 }
 
@@ -1437,6 +1443,10 @@ export interface OrderDetail {
   productCategory: string | null;
   contact: { name: string | null; phone: string } | null;
   items: OrderItemDetail[];
+  /** Agente que vendió (vía la conversación): manda los métodos de pago. Ver ADR-0080. */
+  agentId: string | null;
+  /** Métodos de pago configurados en ese agente (vacío si la orden no tiene agente). */
+  paymentMethods: PaymentMethodConfig[];
 }
 
 export async function getOrder(id: string): Promise<OrderDetail | null> {
@@ -1458,14 +1468,40 @@ export async function getOrder(id: string): Promise<OrderDetail | null> {
       .select("id, sku, name, qty, unit_price, created_at")
       .eq("order_id", id)
       .order("created_at", { ascending: true }),
-    // Hora de llegada del cliente = created_at de la conversación de origen.
-    supabase.from("conversations").select("created_at").eq("id", order.conversation_id).maybeSingle(),
+    // Hora de llegada del cliente = created_at de la conversación de origen; y su
+    // `agent_id`, que es quien define los métodos de pago del selector (ADR-0080).
+    supabase
+      .from("conversations")
+      .select("created_at, agent_id")
+      .eq("id", order.conversation_id)
+      .maybeSingle(),
     // Producto/fuente de la conversación, resiliente a que falte la migración 0018.
     categoriesByConversation(supabase, [order.conversation_id]),
   ]);
   if (itemsRes.error) throw new Error(`getOrder items: ${itemsRes.error.message}`);
 
+  // Métodos de pago del agente que vendió. Consulta aparte y best-effort: si falta
+  // la migración 0025 (columna `payment_methods`) el detalle de la orden igual abre.
+  const agentId = (convoRes.data as { agent_id?: string | null } | null)?.agent_id ?? null;
+  let paymentMethods: PaymentMethodConfig[] = [];
+  if (agentId) {
+    try {
+      const { data: agent } = await supabase
+        .from("agents")
+        .select("payment_methods")
+        .eq("id", agentId)
+        .maybeSingle();
+      paymentMethods = parsePaymentMethods(
+        (agent as { payment_methods?: unknown } | null)?.payment_methods,
+      );
+    } catch {
+      paymentMethods = [];
+    }
+  }
+
   return {
+    agentId,
+    paymentMethods,
     id: order.id,
     conversationId: order.conversation_id,
     status: order.status,
@@ -1594,7 +1630,12 @@ export async function getSalesReport(agentId?: string): Promise<SalesReport> {
         createdAt: o.created_at,
       };
     });
-  return summarizeOrders(facts, Date.now(), display);
+  // Los métodos configurados en el agente (o en todos, consolidando) siempre salen
+  // en el corte "por método", aunque no tengan órdenes todavía. Ver ADR-0080.
+  const configuredMethods = agents
+    .filter((a) => !agentId || a.id === agentId)
+    .flatMap((a) => a.paymentMethods.map((m) => m.method));
+  return summarizeOrders(facts, Date.now(), display, configuredMethods);
 }
 
 /**
@@ -1676,6 +1717,15 @@ export async function getConversionReport(agentId?: string): Promise<ConversionR
  * columnas Costo IA/chat y ROAIS, y deriva el reporte de escala (ADR-0070) de
  * los MISMOS hechos, para que todo cuadre entre secciones.
  */
+/** Fila de `ad_spend` tal como la trae la query del reporte (ver migración 0031). */
+interface AdSpendRow {
+  agent_id: string | null;
+  date: string;
+  spend: number | string | null;
+  currency: string;
+  leads: number | null;
+}
+
 export interface RoasScalingReport extends RoasReport {
   scaling: ScalingReport;
   weekly: WeeklyReport;
@@ -1684,7 +1734,7 @@ export interface RoasScalingReport extends RoasReport {
 export async function getRoasReport(agentId?: string): Promise<RoasScalingReport> {
   const supabase = createServiceClient();
 
-  const [agentRows, convos, orders, tokenRows, audioRows, voiceRows] = await Promise.all([
+  const [agentRows, convos, orders, tokenRows, audioRows, voiceRows, spendRows] = await Promise.all([
     supabase.from("agents").select("*").order("created_at", { ascending: true }),
     fetchAllRows(
       (from, to) =>
@@ -1720,6 +1770,15 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
     // Llamadas con IA: tabla de la migración 0027; si no existe aún, cuentan 0.
     (async () => {
       const { data, error } = await supabase.from("voice_calls").select("agent_id, cost_usd");
+      return error ? [] : (data ?? []);
+    })(),
+    // Gasto REAL en pauta (migración 0031, ADR-0082). Si la tabla no existe todavía
+    // el reporte sigue funcionando con el estimado de siempre: la lectura no puede
+    // depender de que ya hayan corrido la migración.
+    (async () => {
+      const { data, error } = await supabase
+        .from("ad_spend")
+        .select("agent_id, date, spend, currency, leads");
       return error ? [] : (data ?? []);
     })(),
   ]);
@@ -1791,7 +1850,20 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
       )
     : DEFAULT_CURRENCY;
 
-  const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent, display);
+  // Gasto real, ya como hechos del reporte. El filtro por agente se aplica acá
+  // (no en la query) porque la lista de agentes del alcance ya está resuelta arriba.
+  const inScope = new Set(agents.map((a) => a.id));
+  const adSpend: AdSpendFact[] = (spendRows as AdSpendRow[])
+    .filter((s) => s.agent_id && inScope.has(s.agent_id))
+    .map((s) => ({
+      agentId: s.agent_id as string,
+      date: s.date,
+      spend: Number(s.spend) || 0,
+      currency: s.currency,
+      leads: Number(s.leads) || 0,
+    }));
+
+  const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent, display, adSpend);
   return {
     ...report,
     scaling: summarizeScaling(report, chats, orderFacts),
