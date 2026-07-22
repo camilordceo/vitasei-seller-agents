@@ -29,6 +29,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Mapa de calor "Cuándo se vende · día × hora"** en Reportes (ADR-0077). Matriz 7×24 en
+  hora Colombia con la plata vendida en cada franja, la **mejor franja** destacada y qué
+  porcentaje de las ventas concentran las 3 mejores bloques de 3 horas. Responde a qué
+  hora empujar pauta, cuándo tener a alguien atento y a qué hora mandar los retargets —
+  algo que los cortes sueltos por día y por hora escondían al promediar la otra dimensión
+  (esos pasan a un desplegable).
 - **Imágenes manuales en el chat de la conversación** (ADR-0075): el compositor ahora manda
   fotos, por dos caminos. **Subir imagen** hospeda el archivo en el bucket
   (`chat/{conversación}/{digest}`, JPG/PNG/WebP hasta 7 MB) y **Foto del inventario** abre un
@@ -52,6 +58,25 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `events_log` como `video_test_sent`.
 
 ### Fixed
+- **Reportes sumaba dólares y pesos mexicanos como si fueran pesos colombianos**
+  (ADR-0077). "Ventas confirmadas $1.156" metía una orden de **USD 96 contada como 96
+  pesos** y órdenes de México contadas como COP. Ahora `summarizeOrders` recibe la moneda
+  nativa de cada orden —la del **agente** dueño de la conversación, no `orders.currency`,
+  que quedó envenenada con `'COP'` (ADR-0068)— y **convierte antes de sumar**, con un solo
+  redondeo al final. Aplica a titulares, ventanas Hoy/7/30, cortes por estado y método, y
+  la serie de 14 días. Lo que no tiene tasa **no se cuela**: cuenta como orden, no como
+  plata, y se avisa.
+- **El total ahora dice que está homologado.** Aviso arriba de los titulares —"Total de
+  todos los mercados homologado a COP · 1 USD = 3.500 COP · 1 MXN = 175 COP"— que también
+  viaja en el resumen que se copia al equipo por WhatsApp. Filtrando un agente se lee en
+  SU moneda y el aviso desaparece (no hay nada que convertir).
+- **El ROAS consolidado dejó de apagarse al tener varios mercados** (ADR-0077). Antes, con
+  más de una moneda en el alcance, el consolidado, el gráfico de 14 días y toda la sección
+  de escala (economía por chat, proyección del mes, semana contra semana) simplemente no
+  salían — justo al internacionalizarse. Ahora las filas siguen en la moneda de cada
+  agente y el consolidado se homologa; un agente con moneda sin tasa queda fuera y se dice
+  cuántos son.
+
 - **Mensajes que el dashboard daba por enviados y nunca llegaron a Callbell ni al cliente**
   (ADR-0074). Con `maxDuration = 60` la invocación se moría entre la generación y el envío
   (rastro real: `reply_generated` a los 46–59 s y después nada, ni siquiera `process_error`),

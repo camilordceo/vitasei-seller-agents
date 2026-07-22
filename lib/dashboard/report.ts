@@ -1,5 +1,5 @@
 ﻿import type { FulfillmentMethod, OrderStatus } from "@/lib/supabase/types";
-import { convertMoney } from "./currency";
+import { convertMoney, DEFAULT_CURRENCY, roundForCurrency, type CurrencyCode } from "./currency";
 
 /**
  * Agregación PURA de órdenes para los reportes de ventas (Sprint 6 — órdenes).
@@ -51,6 +51,12 @@ export interface OrderFact {
   status: OrderStatus;
   method: FulfillmentMethod;
   total: number | null;
+  /**
+   * Moneda NATIVA de la orden (la del mercado que la vendió). Se homologa a la
+   * moneda de lectura dentro de `summarizeOrders`; sin esto, una orden de USD 96
+   * se sumaba como si fueran 96 pesos. Ver ADR-0068.
+   */
+  currency?: string | null;
   /** ISO del `created_at` de la orden. */
   createdAt: string;
 }
@@ -69,6 +75,12 @@ export interface DayBucket {
 
 export interface SalesReport {
   totalOrders: number;
+  /** Moneda de lectura: TODOS los montos del reporte están homologados acá. */
+  currency: CurrencyCode;
+  /** true si al menos una orden venía en otra moneda (los montos son equivalencias). */
+  converted: boolean;
+  /** Órdenes con monto en una moneda sin tasa: cuentan como orden, no como plata. */
+  excluded: number;
   /** status === 'confirmed' — ventas confirmadas por el equipo. */
   confirmed: Bucket;
   /** pending_handoff + handed_off — en curso. */
@@ -94,6 +106,13 @@ export interface SalesReport {
   byWeekday: Bucket[];
   /** Órdenes generadas por hora del día (índice 0..23), hora Bogota. */
   byHour: Bucket[];
+  /**
+   * Matriz día de la semana × hora (7×24), hora Bogota: `byWeekdayHour[d][h]`.
+   * Es el mapa de calor de "cuándo se vende": los cortes sueltos por día y por
+   * hora esconden la franja (un martes fuerte y un pico a las 8pm no dicen que
+   * el martes a las 8pm sea el momento).
+   */
+  byWeekdayHour: Bucket[][];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -155,8 +174,17 @@ function add(bucket: Bucket, total: number | null): void {
 /**
  * Construye el reporte de ventas a partir de los hechos de cada orden.
  * `nowMs` se inyecta (determinismo en tests); default = ahora.
+ *
+ * `display` es la moneda de LECTURA: cada monto se convierte desde la moneda
+ * nativa de su orden ANTES de entrar a cualquier suma, porque el dashboard
+ * consolida mercados (Colombia, México, EE.UU.) en un solo número. Lo que no
+ * tiene tasa no se suma: se cuenta en `excluded` para poder decirlo en pantalla.
  */
-export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()): SalesReport {
+export function summarizeOrders(
+  facts: OrderFact[],
+  nowMs: number = Date.now(),
+  display: CurrencyCode = DEFAULT_CURRENCY,
+): SalesReport {
   const byStatus = Object.fromEntries(
     ORDER_STATUSES.map((s) => [s, emptyBucket()]),
   ) as Record<OrderStatus, Bucket>;
@@ -180,6 +208,11 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
   const last30 = emptyBucket();
   const byWeekday = Array.from({ length: 7 }, emptyBucket);
   const byHour = Array.from({ length: 24 }, emptyBucket);
+  const byWeekdayHour = Array.from({ length: 7 }, () =>
+    Array.from({ length: 24 }, emptyBucket),
+  );
+  let converted = false;
+  let excluded = 0;
 
   // Claves de los últimos 14 días (índice para acumular perDay).
   const dayKeys: string[] = [];
@@ -192,41 +225,73 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
   const todayKey = dayKeys[0];
 
   for (const f of facts) {
-    if (byStatus[f.status]) add(byStatus[f.status], f.total);
+    // Monto YA en la moneda de lectura. `null` = no sumable (sin total, o en una
+    // moneda sin tasa); de acá para abajo nadie vuelve a mirar `f.total`, así no
+    // se cuela un monto crudo en una suma de otra moneda.
+    const native = f.currency ?? display;
+    const amount = convertMoney(f.total, native, display);
+    if (amount === null && f.total !== null && f.total !== undefined) excluded += 1;
+    if (amount !== null && String(native).trim().toUpperCase() !== display) converted = true;
+
+    if (byStatus[f.status]) add(byStatus[f.status], amount);
 
     const isCancelled = f.status === "cancelled";
     if (isCancelled) {
-      add(cancelled, f.total);
+      add(cancelled, amount);
       continue; // las canceladas no cuentan como ventas ni entran a cortes/método
     }
 
     // No canceladas = generadas.
-    add(generated, f.total);
+    add(generated, amount);
     const mk = methodKey(f.method);
-    if (byMethod[mk]) add(byMethod[mk], f.total);
-    if (f.status === "confirmed") add(confirmed, f.total);
-    if (f.status === "pending_handoff" || f.status === "handed_off") add(pipeline, f.total);
+    if (byMethod[mk]) add(byMethod[mk], amount);
+    if (f.status === "confirmed") add(confirmed, amount);
+    if (f.status === "pending_handoff" || f.status === "handed_off") add(pipeline, amount);
 
     const createdMs = Date.parse(f.createdAt);
     if (Number.isFinite(createdMs)) {
-      if (bogotaDayKey(createdMs) === todayKey) add(today, f.total);
-      if (createdMs >= nowMs - 7 * DAY_MS) add(last7, f.total);
-      if (createdMs >= nowMs - 30 * DAY_MS) add(last30, f.total);
+      if (bogotaDayKey(createdMs) === todayKey) add(today, amount);
+      if (createdMs >= nowMs - 7 * DAY_MS) add(last7, amount);
+      if (createdMs >= nowMs - 30 * DAY_MS) add(last30, amount);
       const dayBucket = dayIndex.get(bogotaDayKey(createdMs));
       if (dayBucket) {
         dayBucket.count += 1;
-        dayBucket.revenue += Number.isFinite(f.total) ? (f.total as number) : 0;
+        dayBucket.revenue += amount ?? 0;
       }
       // Analítica de horarios (hora Colombia): ¿qué día de la semana y a qué hora
       // se generan las ventas? Solo cuenta generadas (no canceladas).
       const { weekday, hour } = bogotaWeekdayHour(createdMs);
-      add(byWeekday[weekday], f.total);
-      add(byHour[hour], f.total);
+      add(byWeekday[weekday], amount);
+      add(byHour[hour], amount);
+      add(byWeekdayHour[weekday][hour], amount);
     }
+  }
+
+  // Redondeo de presentación UNA vez, sobre los totales ya sumados (redondear
+  // fila por fila arrastra el error y el total deja de cuadrar con la lista).
+  for (const b of [
+    confirmed,
+    pipeline,
+    cancelled,
+    generated,
+    today,
+    last7,
+    last30,
+    ...Object.values(byStatus),
+    ...Object.values(byMethod),
+    ...byWeekday,
+    ...byHour,
+    ...byWeekdayHour.flat(),
+    ...dayIndex.values(),
+  ]) {
+    b.revenue = roundForCurrency(b.revenue, display);
   }
 
   return {
     totalOrders: facts.length,
+    currency: display,
+    converted,
+    excluded,
     confirmed,
     pipeline,
     cancelled,
@@ -240,6 +305,7 @@ export function summarizeOrders(facts: OrderFact[], nowMs: number = Date.now()):
     perDay: dayKeys.map((k) => dayIndex.get(k)!),
     byWeekday,
     byHour,
+    byWeekdayHour,
   };
 }
 
@@ -699,12 +765,18 @@ export interface RoasDay {
 export interface RoasReport {
   rows: RoasRow[];
   /**
-   * Consolidado de todos los agentes del alcance. null si conviven varias monedas
-   * (sumar pesos con dólares daría un número falso).
+   * Consolidado de todos los agentes del alcance, con los montos homologados a
+   * `currency`. null solo si ningún agente del alcance tiene una moneda con tasa.
    */
   total: RoasRow | null;
-  /** Últimos 14 días del alcance. Vacío si el alcance mezcla monedas. */
+  /** Últimos 14 días del alcance, homologados a `currency`. */
   perDay: RoasDay[];
+  /** Moneda de lectura del consolidado y del gráfico (las filas van en la suya). */
+  currency: CurrencyCode;
+  /** true si el consolidado mezcla monedas (es una equivalencia, no una caja). */
+  converted: boolean;
+  /** Agentes dejados fuera del consolidado por no tener tasa para su moneda. */
+  excludedAgents: number;
   /** true si al menos un agente del alcance tiene costo por chat configurado. */
   configured: boolean;
 }
@@ -716,9 +788,12 @@ function ratio(numerator: number, denominator: number): number | null {
 /**
  * Retorno por agente: cuánto costó traer los chats vs. cuánto vendieron.
  *
- * El costo por chat lo define cada agente en su moneda (ADR-0065), así que las
- * filas NUNCA se suman entre monedas distintas: el consolidado y el gráfico solo
- * salen cuando todo el alcance comparte moneda. Un agente sin costo configurado
+ * El costo por chat lo define cada agente en su moneda (ADR-0065), así que cada
+ * FILA se lee en la suya; el consolidado y el gráfico homologan todo a `display`
+ * con las tasas fijas de `currency.ts` (antes, con mercados mezclados, el
+ * consolidado simplemente no salía y el dueño se quedaba sin la foto). Un agente
+ * cuya moneda no tenga tasa queda fuera del consolidado y se cuenta en
+ * `excludedAgents` — no se suma como si ya estuviera en la moneda destino. Un agente sin costo configurado
  * aparece igual (con sus chats y ventas) pero con inversión 0 y ROAS null: se ve
  * que falta configurarlo en vez de mostrar un retorno inventado.
  *
@@ -731,6 +806,7 @@ export function summarizeRoas(
   chats: ChatFact[],
   orders: RoasOrderFact[],
   aiCostUsdByAgent: Map<string, number> = new Map(),
+  display: CurrencyCode = DEFAULT_CURRENCY,
 ): RoasReport {
   const byAgent = new Map<string, RoasRow>();
   for (const a of agents) {
@@ -784,18 +860,24 @@ export function summarizeRoas(
   }
   rows.sort((a, b) => b.revenue - a.revenue);
 
-  // Una sola moneda en TODO el alcance → se puede consolidar y graficar.
-  const currencies = new Set(rows.map((r) => r.currency));
-  const singleCurrency = currencies.size === 1 ? [...currencies][0] : null;
+  // Tasa de CADA fila hacia la moneda de lectura. `null` = sin tasa: esa fila no
+  // entra al consolidado (ni su plata ni sus chats, o el ROAS saldría torcido).
+  const rateOf = new Map<string | null, number | null>();
+  for (const r of rows) rateOf.set(r.agentId, convertMoney(1, r.currency, display));
+  const usable = rows.filter((r) => rateOf.get(r.agentId) != null);
+  const excludedAgents = rows.length - usable.length;
+  const converted = usable.some((r) => r.currency !== display);
+  const sumIn = (pick: (r: RoasRow) => number): number =>
+    usable.reduce((s, r) => s + pick(r) * (rateOf.get(r.agentId) as number), 0);
 
   let total: RoasRow | null = null;
-  if (singleCurrency) {
-    const chatsTotal = rows.reduce((s, r) => s + r.chats, 0);
-    const investment = rows.reduce((s, r) => s + r.investment, 0);
-    const revenue = rows.reduce((s, r) => s + r.revenue, 0);
-    const confirmedRevenue = rows.reduce((s, r) => s + r.confirmedRevenue, 0);
-    const ordersTotal = rows.reduce((s, r) => s + r.orders, 0);
-    const aiCostTotal = rows.reduce((s, r) => s + r.aiCost, 0);
+  if (usable.length > 0) {
+    const chatsTotal = usable.reduce((s, r) => s + r.chats, 0);
+    const investment = sumIn((r) => r.investment);
+    const revenue = sumIn((r) => r.revenue);
+    const confirmedRevenue = sumIn((r) => r.confirmedRevenue);
+    const ordersTotal = usable.reduce((s, r) => s + r.orders, 0);
+    const aiCostTotal = sumIn((r) => r.aiCost);
     total = {
       agentId: null,
       name: "Todos los agentes",
@@ -803,7 +885,7 @@ export function summarizeRoas(
       // Costo por chat MEZCLADO del alcance (inversión / chats), no un promedio
       // simple: si un agente trae 10× más chats, pesa 10× más.
       costPerChat: ratio(investment, chatsTotal),
-      currency: singleCurrency,
+      currency: display,
       chats: chatsTotal,
       investment,
       orders: ordersTotal,
@@ -822,8 +904,16 @@ export function summarizeRoas(
   // Serie de 14 días, MÁS RECIENTE PRIMERO: el gráfico es una lista vertical de
   // filas (igual que "Órdenes generadas" y "Conversión") y todas ponen hoy arriba.
   const perDay: RoasDay[] = [];
-  if (singleCurrency) {
-    const costById = new Map(agents.map((a) => [a.id, a.costPerChat ?? 0]));
+  if (usable.length > 0) {
+    // Costo por chat de cada agente YA homologado: el gráfico y el consolidado
+    // tienen que salir de la misma conversión o no cuadran entre sí.
+    const inScope = new Set(usable.map((r) => r.agentId));
+    const costById = new Map(
+      agents.map((a) => [
+        a.id,
+        (a.costPerChat ?? 0) * ((rateOf.get(a.id) as number | null | undefined) ?? 0),
+      ]),
+    );
     const dayChats = new Map<string, number>();
     const dayInvestment = new Map<string, number>();
     const dayRevenue = new Map<string, number>();
@@ -834,17 +924,18 @@ export function summarizeRoas(
     const window = new Set(dayKeys);
 
     for (const c of chats) {
-      if (!c.isChat || !c.agentId) continue;
+      if (!c.isChat || !c.agentId || !inScope.has(c.agentId)) continue;
       const key = bogotaDayKey(Date.parse(c.createdAt));
       if (!window.has(key)) continue;
       dayChats.set(key, (dayChats.get(key) ?? 0) + 1);
       dayInvestment.set(key, (dayInvestment.get(key) ?? 0) + (costById.get(c.agentId) ?? 0));
     }
     for (const o of orders) {
-      if (o.status === "cancelled" || !o.agentId) continue;
+      if (o.status === "cancelled" || !o.agentId || !inScope.has(o.agentId)) continue;
       const key = bogotaDayKey(Date.parse(o.createdAt));
       if (!window.has(key)) continue;
-      dayRevenue.set(key, (dayRevenue.get(key) ?? 0) + (Number(o.total) || 0));
+      const rate = (rateOf.get(o.agentId) as number | null) ?? 0;
+      dayRevenue.set(key, (dayRevenue.get(key) ?? 0) + (Number(o.total) || 0) * rate);
     }
 
     for (const key of dayKeys) {
@@ -864,6 +955,9 @@ export function summarizeRoas(
     rows,
     total,
     perDay,
+    currency: display,
+    converted,
+    excludedAgents,
     configured: rows.some((r) => r.costPerChat != null && r.costPerChat > 0),
   };
 }
@@ -927,7 +1021,16 @@ export function summarizeScaling(
   nowMs: number = Date.now(),
 ): ScalingReport {
   const total = report.total;
-  const inScope = new Set(report.rows.map((r) => r.agentId));
+  // Mismo criterio que el consolidado: solo los agentes cuya moneda tiene tasa, y
+  // cada monto multiplicado por ella. Si acá se sumara `total` crudo, la
+  // proyección del mes volvería a mezclar dólares con pesos.
+  const rateOf = new Map<string | null, number>();
+  for (const r of report.rows) {
+    const rate = convertMoney(1, r.currency, report.currency);
+    if (rate != null) rateOf.set(r.agentId, rate);
+  }
+  const inScope = new Set(rateOf.keys());
+  const rate = (agentId: string | null): number => rateOf.get(agentId) ?? 0;
 
   const perChat =
     total && total.chats > 0
@@ -959,11 +1062,12 @@ export function summarizeScaling(
       const ms = Date.parse(o.createdAt);
       if (!Number.isFinite(ms)) continue;
       const key = bogotaDayKey(ms);
+      const amount = (Number(o.total) || 0) * rate(o.agentId);
       if (key.startsWith(monthKey)) {
-        revenueMtd += Number(o.total) || 0;
+        revenueMtd += amount;
         ordersMtd += 1;
       } else if (key.startsWith(prevKey)) {
-        prevRevenue += Number(o.total) || 0;
+        prevRevenue += amount;
         prevOrders += 1;
       }
     }
@@ -999,8 +1103,9 @@ export function summarizeScaling(
       if (o.status === "cancelled" || !inScope.has(o.agentId)) continue;
       const ms = Date.parse(o.createdAt);
       if (!Number.isFinite(ms)) continue;
-      if (ms >= nowMs - week) revenue7 += Number(o.total) || 0;
-      else if (ms >= nowMs - 2 * week) revenuePrev7 += Number(o.total) || 0;
+      const amount = (Number(o.total) || 0) * rate(o.agentId);
+      if (ms >= nowMs - week) revenue7 += amount;
+      else if (ms >= nowMs - 2 * week) revenuePrev7 += amount;
     }
   }
 

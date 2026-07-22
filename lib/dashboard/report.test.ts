@@ -112,6 +112,56 @@ describe("summarizeOrders", () => {
     expect(r.byWeekday).toHaveLength(7);
     expect(r.byWeekday.reduce((s, b) => s + b.count, 0)).toBe(4);
   });
+
+  it("byWeekdayHour cruza día × hora y cuadra con los cortes sueltos", () => {
+    expect(r.byWeekdayHour).toHaveLength(7);
+    expect(r.byWeekdayHour[0]).toHaveLength(24);
+    // 2026-07-02 14:00Z = jueves (4) 09h en Bogota.
+    expect(r.byWeekdayHour[4][9].count).toBe(1);
+    expect(r.byWeekdayHour[4][9].revenue).toBe(100000);
+    const flat = r.byWeekdayHour.flat();
+    expect(flat.reduce((s, b) => s + b.count, 0)).toBe(4);
+    expect(flat.reduce((s, b) => s + b.revenue, 0)).toBe(r.generated.revenue);
+  });
+
+  it("sin moneda mezclada el reporte se declara en la moneda de lectura", () => {
+    expect(r.currency).toBe("COP");
+    expect(r.converted).toBe(false);
+    expect(r.excluded).toBe(0);
+  });
+});
+
+describe("summarizeOrders con varios mercados", () => {
+  const facts: OrderFact[] = [
+    { status: "confirmed", method: "cod", total: 100000, currency: "COP", createdAt: day("2026-07-02T14:00:00Z") },
+    { status: "confirmed", method: "cod", total: 96, currency: "USD", createdAt: day("2026-07-02T14:00:00Z") },
+    { status: "handed_off", method: "cod", total: 200, currency: "MXN", createdAt: day("2026-07-02T14:00:00Z") },
+  ];
+
+  it("homologa cada monto a la moneda de lectura antes de sumar", () => {
+    const r = summarizeOrders(facts, NOW, "COP");
+    // USD 96 × 3500 = 336.000, no "96 pesos".
+    expect(r.confirmed.revenue).toBe(100000 + 96 * 3500);
+    expect(r.pipeline.revenue).toBe(200 * 175); // MXN → COP vía USD
+    expect(r.converted).toBe(true);
+    expect(r.currency).toBe("COP");
+  });
+
+  it("leído en USD el mismo hecho da el equivalente en dólares", () => {
+    const r = summarizeOrders(facts, NOW, "USD");
+    expect(r.confirmed.revenue).toBeCloseTo(100000 / 3500 + 96, 2);
+  });
+
+  it("un monto sin tasa no se cuela en la suma: se cuenta como excluido", () => {
+    const r = summarizeOrders(
+      [{ status: "confirmed", method: "cod", total: 50, currency: "EUR", createdAt: day("2026-07-02T14:00:00Z") }],
+      NOW,
+      "COP",
+    );
+    expect(r.confirmed.revenue).toBe(0);
+    expect(r.confirmed.count).toBe(1);
+    expect(r.excluded).toBe(1);
+  });
 });
 
 describe("bogotaWeekdayHour", () => {
@@ -453,15 +503,35 @@ describe("summarizeRoas", () => {
     expect(r.total!.costPerChat).toBeCloseTo(666.67, 1);
   });
 
-  it("NO consolida ni grafica cuando hay monedas distintas", () => {
+  it("consolida mercados distintos homologando a la moneda de lectura", () => {
     const r = summarizeRoas(
       [agent("a", 1000, "COP"), agent("b", 2, "USD")],
       [chat("a"), chat("b")],
       [order("a", 10_000), order("b", 30)],
+      new Map(),
+      "COP",
     );
-    expect(r.total).toBeNull();
-    expect(r.perDay).toEqual([]);
     expect(r.rows).toHaveLength(2);
+    // Las FILAS siguen en su moneda nativa; el consolidado va en COP.
+    expect(r.rows.find((x) => x.agentId === "b")!.revenue).toBe(30);
+    expect(r.currency).toBe("COP");
+    expect(r.converted).toBe(true);
+    expect(r.total!.investment).toBe(1000 + 2 * 3500);
+    expect(r.total!.revenue).toBe(10_000 + 30 * 3500); // USD 30 → COP
+    expect(r.perDay).toHaveLength(14);
+  });
+
+  it("deja fuera del consolidado al agente con una moneda sin tasa (y lo dice)", () => {
+    const r = summarizeRoas(
+      [agent("a", 1000, "COP"), agent("b", 2, "EUR")],
+      [chat("a"), chat("b")],
+      [order("a", 10_000), order("b", 30)],
+      new Map(),
+      "COP",
+    );
+    expect(r.excludedAgents).toBe(1);
+    expect(r.total!.revenue).toBe(10_000); // los 30 EUR NO se cuelan como pesos
+    expect(r.total!.chats).toBe(1);
   });
 
   it("ignora chats y órdenes de agentes fuera del alcance", () => {
@@ -577,17 +647,18 @@ describe("summarizeScaling", () => {
     expect(s.wow.revenueGrowth).toBeCloseTo(1.5, 5);
   });
 
-  it("con monedas mezcladas no consolida plata, pero los chats sí se cuentan", () => {
+  it("con mercados mezclados la plata se homologa (no se suma cruda)", () => {
     const mixedAgents: AgentCostConfig[] = [
       agent("a"),
       { id: "b", name: "B", brand: null, costPerChat: 2, currency: "USD" },
     ];
-    const mixedReport = summarizeRoas(mixedAgents, chats, orders);
+    const mixedReport = summarizeRoas(mixedAgents, chats, orders, new Map(), "COP");
     const mixed = summarizeScaling(mixedReport, chats, orders, NOW);
-    expect(mixed.perChat).toBeNull();
-    expect(mixed.month).toBeNull();
-    expect(mixed.wow.revenue7).toBeNull();
+    expect(mixed.perChat!.currency).toBe("COP");
+    expect(mixed.month).not.toBeNull();
     expect(mixed.wow.chats7).toBe(2);
+    // La plata ya no desaparece por mezclar mercados: se lee homologada.
+    expect(mixed.wow.revenue7).not.toBeNull();
   });
 
   it("semana anterior en 0 → crecimiento null (no infinito)", () => {

@@ -20,9 +20,8 @@ import {
   type ScalingReport,
   type SalesReport,
 } from "@/lib/dashboard/report";
-import { rateNote } from "@/lib/dashboard/currency";
+import { rateNote, type CurrencyCode } from "@/lib/dashboard/currency";
 import {
-  formatCOP,
   formatMinutes,
   formatMoney,
   formatNumber,
@@ -59,6 +58,44 @@ function ReportCard({
   return <Kpi label={label} value={value} sub={sub} valueClassName={accent} />;
 }
 
+/**
+ * Aviso de homologación: dice que un total suma varios mercados y con qué tasa.
+ * Solo aparece cuando de verdad hubo conversión — en un alcance de una sola
+ * moneda sería ruido. Ver ADR-0068.
+ */
+function CurrencyNote({
+  currency,
+  converted,
+  excluded = 0,
+  scope,
+}: {
+  currency: CurrencyCode;
+  converted: boolean;
+  excluded?: number;
+  scope?: string | null;
+}) {
+  if (!converted && excluded === 0) return null;
+  return (
+    <p className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+      {converted && (
+        <>
+          <span className="font-medium">
+            Total de {scope ?? "todos los mercados"} homologado a {currency}.
+          </span>{" "}
+          Las ventas en otra moneda se convierten para poder sumarlas: {rateNote(currency)}.
+        </>
+      )}
+      {excluded > 0 && (
+        <>
+          {converted ? " " : ""}
+          {excluded} {excluded === 1 ? "orden quedó" : "órdenes quedaron"} fuera del monto por
+          estar en una moneda sin tasa (sí cuentan como órdenes).
+        </>
+      )}
+    </p>
+  );
+}
+
 function buildSummary(
   r: SalesReport,
   c: ConversionReport,
@@ -89,15 +126,18 @@ function buildSummary(
       : [];
   return [
     `Reporte de ventas — ${scope}`,
-    `Ventas confirmadas: ${r.confirmed.count} · ${formatCOP(r.confirmed.revenue)}`,
-    `En curso (sin confirmar): ${r.pipeline.count} · ${formatCOP(r.pipeline.revenue)}`,
-    `Órdenes generadas: ${r.generated.count} · ${formatCOP(r.generated.revenue)}`,
+    `Ventas confirmadas: ${r.confirmed.count} · ${formatMoney(r.confirmed.revenue, r.currency)}`,
+    `En curso (sin confirmar): ${r.pipeline.count} · ${formatMoney(r.pipeline.revenue, r.currency)}`,
+    `Órdenes generadas: ${r.generated.count} · ${formatMoney(r.generated.revenue, r.currency)}`,
     `Canceladas: ${r.cancelled.count}`,
     `Conversión: ${formatPercent(c.total.rate)} (${c.total.transactions}/${c.total.conversations} conversaciones)`,
     ...roasLine,
     ...speedLine,
     ...projLine,
-    `Hoy: ${r.today.count} (${formatCOP(r.today.revenue)}) · 7 días: ${r.last7.count} (${formatCOP(r.last7.revenue)}) · 30 días: ${r.last30.count} (${formatCOP(r.last30.revenue)})`,
+    `Hoy: ${r.today.count} (${formatMoney(r.today.revenue, r.currency)}) · 7 días: ${r.last7.count} (${formatMoney(r.last7.revenue, r.currency)}) · 30 días: ${r.last30.count} (${formatMoney(r.last30.revenue, r.currency)})`,
+    // Si el alcance mezcla mercados, el resumen que se comparte por WhatsApp tiene
+    // que decir en qué moneda está leído: si no, alguien lee dólares como pesos.
+    ...(r.converted ? [`Todos los mercados sumados en ${r.currency} · ${rateNote(r.currency)}`] : []),
   ].join("\n");
 }
 
@@ -168,7 +208,7 @@ function RoasTableRow({ row, strong }: { row: RoasRow; strong?: boolean }) {
 /** Sección de retorno: tabla por agente + barras de inversión vs. ventas por día. */
 function RoasSection({ roas }: { roas: RoasReport }) {
   const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
-  const chartCurrency = roas.total?.currency ?? "COP";
+  const chartCurrency = roas.currency;
   const invTotal14 = roas.perDay.reduce((s, d) => s + d.investment, 0);
   const revTotal14 = roas.perDay.reduce((s, d) => s + d.revenue, 0);
 
@@ -196,6 +236,22 @@ function RoasSection({ roas }: { roas: RoasReport }) {
               {formatMoney(roas.total.investment, roas.total.currency)}
             </p>
           </div>
+        ) : null}
+      </div>
+
+      <div className="mb-3">
+        <CurrencyNote
+          currency={roas.currency}
+          converted={roas.converted}
+          excluded={0}
+          scope="todos los mercados"
+        />
+        {roas.excludedAgents > 0 ? (
+          <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+            {roas.excludedAgents}{" "}
+            {roas.excludedAgents === 1 ? "agente quedó" : "agentes quedaron"} fuera del consolidado:
+            su moneda no tiene tasa configurada.
+          </p>
         ) : null}
       </div>
 
@@ -438,6 +494,151 @@ const WEEKDAYS: Array<{ i: number; l: string }> = [
   { i: 0, l: "Dom" },
 ];
 
+/** Nombre largo del día, para la frase de la mejor franja. */
+const WEEKDAY_LONG = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+/** Franja de 3 horas: `[8,11)` se lee "8–11h". */
+const BLOCK_HOURS = 3;
+
+/**
+ * Mapa de calor "cuándo se vende": día de la semana × hora (Colombia). Los cortes
+ * sueltos por día y por hora que ya existían promedian la otra dimensión y
+ * esconden lo único accionable — la FRANJA. Con esto se decide a qué hora
+ * empujar pauta, cuándo reforzar la atención humana y a qué hora mandar los
+ * retargets, en vez de repartir presupuesto plano las 24 horas.
+ */
+function SalesHeatmap({ report }: { report: SalesReport }) {
+  const grid = report.byWeekdayHour;
+  const maxCell = Math.max(1, ...grid.flat().map((b) => b.revenue));
+  const totalRevenue = grid.flat().reduce((s, b) => s + b.revenue, 0);
+  const totalCount = grid.flat().reduce((s, b) => s + b.count, 0);
+
+  // Mejores franjas de 3 h: una hora suelta es ruido estadístico con pocas
+  // órdenes; un bloque de 3 h es una decisión ("pauta de 6 a 9 de la noche").
+  const blocks: Array<{ weekday: number; start: number; revenue: number; count: number }> = [];
+  for (let d = 0; d < 7; d++) {
+    for (let h = 0; h < 24; h += BLOCK_HOURS) {
+      let revenue = 0;
+      let count = 0;
+      for (let k = 0; k < BLOCK_HOURS; k++) {
+        revenue += grid[d][h + k].revenue;
+        count += grid[d][h + k].count;
+      }
+      blocks.push({ weekday: d, start: h, revenue, count });
+    }
+  }
+  blocks.sort((a, b) => b.revenue - a.revenue || b.count - a.count);
+  const top = blocks.filter((b) => b.count > 0).slice(0, 3);
+  const topShare = totalRevenue > 0 ? top.reduce((s, b) => s + b.revenue, 0) / totalRevenue : 0;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-[15px] font-semibold tracking-tight text-slate-900">
+            Cuándo se vende · día × hora
+          </h2>
+          <p className="max-w-prose text-xs text-slate-400">
+            Cada celda es una hora de un día de la semana (hora Colombia): más oscuro = más plata
+            vendida ahí. Sirve para decidir a qué hora empujar pauta, cuándo tener a alguien
+            atento y a qué hora salen los retargets. Órdenes generadas (sin canceladas)
+            {report.converted ? `, homologadas a ${report.currency}` : ""}.
+          </p>
+        </div>
+        {top.length > 0 ? (
+          <div className="text-right">
+            <p className="text-xs font-medium text-slate-500">Mejor franja</p>
+            <p className="font-display text-lg font-semibold tracking-tight text-slate-900">
+              {WEEKDAY_LONG[top[0].weekday]} {String(top[0].start).padStart(2, "0")}–
+              {String(top[0].start + BLOCK_HOURS).padStart(2, "0")}h
+            </p>
+            <p className="text-xs text-slate-500">
+              {formatMoney(top[0].revenue, report.currency)} · {formatNumber(top[0].count)}{" "}
+              {top[0].count === 1 ? "orden" : "órdenes"}
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {totalCount === 0 ? (
+        <p className="py-2 text-sm text-slate-400">Aún no hay órdenes para dibujar el mapa.</p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <div className="min-w-[40rem]">
+              {/* Regla de horas: cada 3 h, alineada con las columnas de abajo. */}
+              <div className="mb-1 flex items-center gap-1 pl-10">
+                {Array.from({ length: 24 }, (_, h) => (
+                  <div key={h} className="flex-1 text-center text-[10px] tabular-nums text-slate-400">
+                    {h % BLOCK_HOURS === 0 ? String(h).padStart(2, "0") : ""}
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-1">
+                {WEEKDAYS.map(({ i, l }) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <span className="w-10 shrink-0 text-xs text-slate-500">{l}</span>
+                    {grid[i].map((cell, h) => {
+                      // Escala relativa al mejor momento del periodo. Piso de 0,08
+                      // para que una celda con UNA venta no se lea como vacía.
+                      const intensity =
+                        cell.revenue > 0 ? 0.08 + 0.92 * (cell.revenue / maxCell) : 0;
+                      return (
+                        <div
+                          key={h}
+                          title={`${l} ${String(h).padStart(2, "0")}:00 · ${formatNumber(cell.count)} ${cell.count === 1 ? "orden" : "órdenes"} · ${formatMoney(cell.revenue, report.currency)}`}
+                          className={`h-6 flex-1 rounded-[3px] ${
+                            cell.count === 0 ? "bg-slate-100" : "ring-1 ring-inset ring-emerald-900/5"
+                          }`}
+                          style={
+                            intensity > 0
+                              ? { backgroundColor: `rgba(5, 150, 105, ${intensity.toFixed(3)})` }
+                              : undefined
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <span>Menos</span>
+              {[0, 0.25, 0.5, 0.75, 1].map((v) => (
+                <span
+                  key={v}
+                  className="h-3 w-6 rounded-[3px]"
+                  style={{
+                    backgroundColor:
+                      v === 0 ? "rgb(241, 245, 249)" : `rgba(5, 150, 105, ${0.08 + 0.92 * v})`,
+                  }}
+                />
+              ))}
+              <span>Más</span>
+            </div>
+            {top.length > 0 ? (
+              <p className="text-xs text-slate-500">
+                Las 3 mejores franjas concentran{" "}
+                <span className="font-medium text-slate-900">{formatPercent(topShare)}</span> de la
+                plata:{" "}
+                {top
+                  .map(
+                    (b) =>
+                      `${WEEKDAY_LONG[b.weekday].slice(0, 3)} ${String(b.start).padStart(2, "0")}–${String(b.start + BLOCK_HOURS).padStart(2, "0")}h`,
+                  )
+                  .join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export default async function ReportsPage({
   searchParams,
 }: {
@@ -516,23 +717,33 @@ export default async function ReportsPage({
       )}
 
       {/* Titulares */}
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="space-y-2">
+        {/* El aviso va ARRIBA de los números, no en letra chica al final: quien
+            lee "$1.156" tiene que saber, antes de creerlo, que ahí adentro hay
+            dólares y pesos mexicanos convertidos. */}
+        <CurrencyNote
+          currency={r.currency}
+          converted={r.converted}
+          excluded={r.excluded}
+          scope={selected ? scope : "todos los mercados"}
+        />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ReportCard
           label="Ventas confirmadas"
-          value={formatCOP(r.confirmed.revenue)}
+          value={formatMoney(r.confirmed.revenue, r.currency)}
           sub={`${formatNumber(r.confirmed.count)} ${r.confirmed.count === 1 ? "orden" : "órdenes"}`}
           accent="text-emerald-700"
         />
         <ReportCard
           label="En curso (sin confirmar)"
-          value={formatCOP(r.pipeline.revenue)}
+          value={formatMoney(r.pipeline.revenue, r.currency)}
           sub={`${formatNumber(r.pipeline.count)} en pipeline`}
           accent="text-indigo-700"
         />
         <ReportCard
           label="Órdenes generadas"
           value={formatNumber(r.generated.count)}
-          sub={`${formatCOP(r.generated.revenue)} · sin canceladas`}
+          sub={`${formatMoney(r.generated.revenue, r.currency)} · sin canceladas`}
         />
         <ReportCard
           label="Canceladas"
@@ -540,6 +751,7 @@ export default async function ReportsPage({
           sub={`de ${formatNumber(r.totalOrders)} en total`}
           accent="text-rose-700"
         />
+      </div>
       </section>
 
       {/* Ventanas de tiempo */}
@@ -552,7 +764,7 @@ export default async function ReportsPage({
           <div key={w.label} className="rounded-2xl border border-slate-200 bg-white p-5">
             <p className="text-xs font-medium text-slate-500">{w.label}</p>
             <p className="mt-1 font-display text-xl font-semibold tracking-tight text-slate-900">
-              {formatCOP(w.b.revenue)}
+              {formatMoney(w.b.revenue, r.currency)}
             </p>
             <p className="mt-0.5 text-xs text-slate-500">
               {formatNumber(w.b.count)} {w.b.count === 1 ? "orden generada" : "órdenes generadas"}
@@ -604,7 +816,7 @@ export default async function ReportsPage({
       <RoasSection roas={roas} />
 
       {/* Economía por chat, proyección del mes y crecimiento semanal (ADR-0070) */}
-      <ScalingSection scaling={roas.scaling} currency={roas.total?.currency ?? "COP"} />
+      <ScalingSection scaling={roas.scaling} currency={roas.currency} />
 
       {/* Conversión: conversaciones → transacciones */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -796,7 +1008,7 @@ export default async function ReportsPage({
                     {formatNumber(r.byStatus[s].count)}
                   </td>
                   <td className="py-2 text-right tabular-nums text-slate-900">
-                    {formatCOP(r.byStatus[s].revenue)}
+                    {formatMoney(r.byStatus[s].revenue, r.currency)}
                   </td>
                 </tr>
               ))}
@@ -824,7 +1036,7 @@ export default async function ReportsPage({
                     {formatNumber(r.byMethod[m].count)}
                   </td>
                   <td className="py-2 text-right tabular-nums text-slate-900">
-                    {formatCOP(r.byMethod[m].revenue)}
+                    {formatMoney(r.byMethod[m].revenue, r.currency)}
                   </td>
                 </tr>
               ))}
@@ -854,16 +1066,20 @@ export default async function ReportsPage({
                 {d.count}
               </span>
               <span className="w-24 shrink-0 text-right text-xs tabular-nums text-slate-700">
-                {formatCOP(d.revenue)}
+                {formatMoney(d.revenue, r.currency)}
               </span>
             </li>
           ))}
         </ul>
       </section>
 
+      {/* Mapa de calor día × hora: la lectura accionable de los horarios, así que
+          va abierta; los cortes sueltos quedan abajo, en el desplegable. */}
+      <SalesHeatmap report={r} />
+
       {/* Analítica de horarios: día de la semana + hora del día (hora Colombia) */}
       <Collapsible
-        title="Horarios de venta"
+        title="Horarios de venta · cortes sueltos"
         subtitle="Órdenes generadas por día de la semana y por hora (hora Colombia)."
       >
       <div className="grid gap-4 lg:grid-cols-2">
@@ -886,7 +1102,7 @@ export default async function ReportsPage({
                     {b.count}
                   </span>
                   <span className="w-24 shrink-0 text-right text-xs tabular-nums text-slate-700">
-                    {formatCOP(b.revenue)}
+                    {formatMoney(b.revenue, r.currency)}
                   </span>
                 </li>
               );
