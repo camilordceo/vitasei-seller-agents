@@ -29,6 +29,18 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Link de pago de PayPal automático al cerrar con `#paypal`** (ADR-0088, migración
+  `0034`). Antes el link se armaba a mano por cada cliente; ahora, cuando el modelo
+  cierra con el tag `#paypal` y hay orden, el backend genera el cobro con la **API de
+  PayPal (Invoicing v2)** —productos con precio, impuesto (%) y envío de la config del
+  agente— y manda el link (pagable con PayPal o tarjeta, sin email de por medio) junto a
+  un **mensaje configurable** (`{link}` como placeholder). Todo POR AGENTE desde el
+  dashboard: Client ID, Client Secret (write-only), modo Sandbox, tax, envío y mensaje.
+  Idempotente por orden (`orders.payment_link`): nunca dos invoices por la misma venta;
+  si el cliente pide el link otra vez, se reenvía el mismo. Best-effort: un fallo de
+  PayPal se loguea (`paypal_link_*` en `events_log`) y jamás rompe la respuesta ni la
+  orden. Con config puesta, el tag se reconoce aunque no esté en los métodos de pago
+  (nunca se le escapa al cliente).
 - **Filtro de fechas global en Reportes + conversaciones por día por agente** (ADR-0087).
   Arriba de Reportes hay ahora un control de fechas con atajos (14 / 30 / 90 días) y rango
   exacto Desde/Hasta (hora Colombia, ambos inclusivos). Con un rango activo, **toda** la

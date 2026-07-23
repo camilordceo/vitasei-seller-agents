@@ -34,6 +34,13 @@ const BLANK: AgentEditorInitial = {
   schedule: { days: emptyWeek(), holidays: [] },
   // Métodos por defecto (Colombia); se editan/quitan según el mercado del agente.
   paymentMethods: DEFAULT_PAYMENT_METHODS,
+  // PayPal apagado por defecto: se configura solo en el agente de EE.UU. (ADR-0088).
+  paypalClientId: "",
+  hasPaypalSecret: false,
+  paypalSandbox: false,
+  paypalTaxPercent: "",
+  paypalShipping: "",
+  paypalMessage: "",
   // Costo por chat vacío a propósito: cada mercado tiene el suyo y un default
   // heredado saldría en el reporte de retorno como si fuera un dato real.
   costPerChat: "",

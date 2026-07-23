@@ -16,6 +16,7 @@ import type { MessagingProvider } from "@/lib/messaging/types";
 import {
   loadAgentForConversation,
   loadPaymentMethods,
+  loadPaypalConfig,
   agentMediaAuth,
   agentTeamUuid,
   agentVectorStoreId,
@@ -24,6 +25,8 @@ import {
   type Agent,
 } from "@/lib/agent/agents";
 import { methodLabelMap, UNDECIDED_METHOD } from "@/lib/agent/paymentMethods";
+import { PAYPAL_METHOD } from "@/lib/paypal/config";
+import { sendPaypalLinkForOrder } from "@/lib/agent/paypalLink";
 import { extractOrder } from "@/lib/openai/extractOrder";
 import { scheduleRetargets, cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { sendKeywordVideos } from "@/lib/agent/videos";
@@ -744,6 +747,15 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // Métodos de pago del agente (tags de compra por mercado: contra-entrega/addi en
   // CO, Zelle en EE.UU., etc.). Resiliente a que falte la columna. Ver ADR-0055.
   const paymentMethods = await loadPaymentMethods(supabase, agent.id);
+
+  // PayPal (ADR-0088): con credenciales puestas, el tag `#paypal` SIEMPRE se
+  // reconoce aunque el operador no lo haya agregado a los métodos — si no, el tag
+  // se le escaparía al cliente en el texto. Inyección virtual (no se guarda).
+  const paypalConfig = await loadPaypalConfig(supabase, agent.id);
+  if (paypalConfig && !paymentMethods.some((m) => m.method === PAYPAL_METHOD)) {
+    paymentMethods.push({ tag: "#paypal", label: "PayPal", method: PAYPAL_METHOD });
+  }
+
   const methodLabels = methodLabelMap(paymentMethods);
 
   // Contexto del contacto: su nombre (de Callbell, en `contacts.name`) se antepone
@@ -1169,6 +1181,9 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
   // orden cancelada NO bloquea la nueva: se crea otra (deja la cancelada como está
   // y avisa al dueño de la nueva venta). Ver ADR-0059.
   let orderId: string | null = null;
+  // Método con el que se CREÓ la orden en este turno (para el disparo del link de
+  // PayPal aunque el tag #paypal haya salido en un turno anterior). Ver ADR-0088.
+  let createdOrderMethod: string | null = null;
   if (shouldCreateOrder) {
     const { data: existingOrder, error: existErr } = await supabase
       .from("orders")
@@ -1228,6 +1243,7 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         .single();
       if (ordErr) throw new Error(`create-order insert: ${ordErr.message}`);
       orderId = order.id;
+      createdOrderMethod = method;
 
       if (draft.items.length > 0) {
         const rows = draft.items.map((it) => {
@@ -1298,6 +1314,26 @@ async function generateAndSend(ctx: GenerateContext): Promise<void> {
         draft,
       });
     }
+  }
+
+  // PayPal (ADR-0088): cierre con método `paypal` + orden → generar el invoice
+  // (ítems + tax/envío de la config del agente) y mandar el link con el mensaje
+  // configurado. Dispara SOLO con señal de ESTE turno —el tag `#paypal` o una
+  // orden recién creada con ese método—, no en cada mensaje posterior aunque la
+  // conversación siga en paypal. Best-effort: jamás rompe la respuesta.
+  if (
+    paypalConfig &&
+    orderId &&
+    (parsed.tags.paymentMethod === PAYPAL_METHOD || createdOrderMethod === PAYPAL_METHOD)
+  ) {
+    await sendPaypalLinkForOrder(supabase, messaging, {
+      conversationId,
+      orderId,
+      phone,
+      brand: agent.brand ?? agent.name,
+      currency: agentCurrency(agent),
+      config: paypalConfig,
+    });
   }
 
   // Handoff: apagar el bot en nuestra DB y cerrar la orden.

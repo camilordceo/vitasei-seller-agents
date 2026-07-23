@@ -63,6 +63,13 @@ export interface AgentEditorInitial {
   scheduleTimezone: string;
   schedule: AgentSchedule;
   paymentMethods: PaymentMethodConfig[];
+  /** PayPal (EE.UU.) — el secreto no viaja: solo `hasPaypalSecret`. Ver ADR-0088. */
+  paypalClientId: string;
+  hasPaypalSecret: boolean;
+  paypalSandbox: boolean;
+  paypalTaxPercent: string;
+  paypalShipping: string;
+  paypalMessage: string;
   /** Costo por chat (pauta) como texto; vacío = sin configurar. Ver ADR-0065. */
   costPerChat: string;
   costCurrency: string;
@@ -151,6 +158,16 @@ export function AgentEditor({
     dirty();
     setPaymentMethods((prev) => prev.map((m, idx) => (idx === i ? { ...m, label: value } : m)));
   };
+
+  // PayPal (EE.UU.): al cerrar con #paypal el backend genera el link de pago con
+  // la API (invoice con precio, tax y envío) y lo manda solo. El Client Secret es
+  // write-only, como las demás credenciales. Ver ADR-0088.
+  const [paypalClientId, setPaypalClientId] = useState(initial.paypalClientId);
+  const [paypalClientSecret, setPaypalClientSecret] = useState("");
+  const [paypalSandbox, setPaypalSandbox] = useState(initial.paypalSandbox);
+  const [paypalTaxPercent, setPaypalTaxPercent] = useState(initial.paypalTaxPercent);
+  const [paypalShipping, setPaypalShipping] = useState(initial.paypalShipping);
+  const [paypalMessage, setPaypalMessage] = useState(initial.paypalMessage);
 
   const buildSchedule = (): AgentSchedule => ({
     days,
@@ -284,6 +301,12 @@ export function AgentEditor({
           method: m.method || slugMethod(m.tag),
         }))
         .filter((m) => m.tag.length > 0),
+      paypalClientId,
+      paypalClientSecret,
+      paypalSandbox,
+      paypalTaxPercent,
+      paypalShipping,
+      paypalMessage,
       costPerChat,
       costCurrency,
       currency,
@@ -981,6 +1004,142 @@ export function AgentEditor({
           >
             + Agregar método
           </button>
+        </div>
+      </fieldset>
+
+      {/* PayPal (EE.UU.): link de pago automático al cerrar con #paypal. Ver ADR-0088. */}
+      <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-slate-50/60 p-4">
+        <legend className="px-1 text-sm font-semibold text-slate-700">
+          PayPal — link de pago automático
+        </legend>
+        <p className="text-xs text-slate-500">
+          Con las credenciales puestas, cuando el modelo cierra con el tag{" "}
+          <code className="font-mono text-slate-600">#paypal</code> el sistema genera el link de
+          pago con la API de PayPal (precio de los productos + impuesto + envío) y se lo manda al
+          cliente junto al mensaje de abajo. Sin credenciales, todo sigue como hoy (link manual).
+          Recuerda instruir el tag en el prompt del agente.
+        </p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="paypal-client-id" className={labelCls}>
+              Client ID (app REST de PayPal)
+            </label>
+            <input
+              id="paypal-client-id"
+              type="text"
+              value={paypalClientId}
+              onChange={(e) => {
+                dirty();
+                setPaypalClientId(e.target.value);
+              }}
+              className={monoCls}
+              placeholder="Pega el Client ID (developer.paypal.com → Apps)"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Vacío = PayPal apagado para este agente (no se genera ningún link).
+            </p>
+          </div>
+          <div>
+            <label htmlFor="paypal-secret" className={labelCls}>
+              Client Secret {initial.hasPaypalSecret ? "(configurado)" : ""}
+            </label>
+            <input
+              id="paypal-secret"
+              type="password"
+              autoComplete="new-password"
+              value={paypalClientSecret}
+              onChange={(e) => {
+                dirty();
+                setPaypalClientSecret(e.target.value);
+              }}
+              className={monoCls}
+              placeholder={
+                initial.hasPaypalSecret
+                  ? "•••• — deja vacío para conservarlo"
+                  : "Pega el Client Secret de la misma app"
+              }
+            />
+            <p className="mt-1 text-xs text-slate-400">No se muestra por seguridad.</p>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <label htmlFor="paypal-tax" className={labelCls}>
+              Impuesto (%) — sales tax
+            </label>
+            <input
+              id="paypal-tax"
+              inputMode="decimal"
+              value={paypalTaxPercent}
+              onChange={(e) => {
+                dirty();
+                setPaypalTaxPercent(e.target.value);
+              }}
+              className={inputCls}
+              placeholder="0 (ej. 7.25)"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Se aplica a cada producto del link. Vacío = sin impuesto.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="paypal-shipping" className={labelCls}>
+              Envío (monto fijo)
+            </label>
+            <input
+              id="paypal-shipping"
+              inputMode="decimal"
+              value={paypalShipping}
+              onChange={(e) => {
+                dirty();
+                setPaypalShipping(e.target.value);
+              }}
+              className={inputCls}
+              placeholder="0 (ej. 5.99)"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              En la moneda de venta del agente. Vacío = envío gratis (no aparece).
+            </p>
+          </div>
+          <div className="flex items-start pt-6">
+            <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={paypalSandbox}
+                onChange={(e) => {
+                  dirty();
+                  setPaypalSandbox(e.target.checked);
+                }}
+                className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+              />
+              Modo Sandbox (pruebas)
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="paypal-message" className={labelCls}>
+            Mensaje que acompaña el link
+          </label>
+          <textarea
+            id="paypal-message"
+            value={paypalMessage}
+            onChange={(e) => {
+              dirty();
+              setPaypalMessage(e.target.value);
+            }}
+            rows={3}
+            className={inputCls}
+            placeholder={
+              "Perfecto ✅ Aquí tienes tu link de pago seguro con PayPal:\n{link}\n\nApenas completes el pago seguimos con tu pedido."
+            }
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            Escribe <code className="font-mono">{"{link}"}</code> donde va el link; si no lo pones,
+            el link se agrega al final. Vacío = mensaje por defecto.
+          </p>
         </div>
       </fieldset>
 

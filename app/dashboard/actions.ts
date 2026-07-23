@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { cancelScheduledRetargets } from "@/lib/agent/retarget";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods } from "@/lib/agent/paymentMethods";
+import { parseDecimal } from "@/lib/paypal/config";
 import { normalizeProviderId } from "@/lib/messaging/types";
 import { DEFAULT_CURRENCY, normalizeCurrency, type CurrencyCode } from "@/lib/dashboard/currency";
 import { computeOrderTotal, normalizeQty } from "@/lib/agent/order";
@@ -779,9 +780,51 @@ function agentPatch(input: AgentEditInput): Record<string, unknown> {
 function missingProviderMigration(error: { code?: string; message?: string }): string | null {
   if (error.code !== "42703") return null;
   // El mensaje de Postgres nombra la columna que falta → se dice QUÉ migración.
-  return /cost_(per_chat|currency)/.test(error.message ?? "")
+  const msg = error.message ?? "";
+  if (/paypal_config/.test(msg)) return "Falta aplicar la migración 0034 (PayPal) en Supabase.";
+  return /cost_(per_chat|currency)/.test(msg)
     ? "Falta aplicar la migración 0028 (costo por chat) en Supabase."
     : "Falta aplicar la migración 0026 (provider + credenciales de Kapso) en Supabase.";
+}
+
+/**
+ * jsonb `agents.paypal_config` a partir del formulario. El Client Secret es
+ * write-only: vacío = conservar el guardado (se relee de la BD, nunca viaja al
+ * browser). Sin Client ID → null (feature apagado; borra la config a propósito).
+ * Ver ADR-0088.
+ */
+async function paypalConfigValue(
+  supabase: ReturnType<typeof createServiceClient>,
+  agentId: string | null,
+  input: AgentEditInput,
+): Promise<Json | null> {
+  const clientId = input.paypalClientId.trim();
+  if (!clientId) return null;
+
+  let secret = input.paypalClientSecret.trim();
+  if (!secret && agentId) {
+    const { data, error } = await supabase
+      .from("agents")
+      .select("paypal_config")
+      .eq("id", agentId)
+      .maybeSingle();
+    if (error && error.code === "42703")
+      throw new Error("Falta aplicar la migración 0034 (PayPal) en Supabase.");
+    const raw = (data as { paypal_config?: unknown } | null)?.paypal_config;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      const prev = (raw as Record<string, unknown>).client_secret;
+      if (typeof prev === "string") secret = prev.trim();
+    }
+  }
+
+  return {
+    client_id: clientId,
+    client_secret: secret,
+    sandbox: input.paypalSandbox === true,
+    message: input.paypalMessage.trim(),
+    tax_percent: Math.min(100, parseDecimal(input.paypalTaxPercent)),
+    shipping: parseDecimal(input.paypalShipping),
+  } as unknown as Json;
 }
 
 /**
@@ -794,9 +837,12 @@ export async function saveAgent(agentId: string, input: AgentEditInput): Promise
   if (input.systemPrompt.trim().length === 0) throw new Error("El prompt es obligatorio.");
 
   const supabase = createServiceClient();
+  const patch = agentPatch(input);
+  // PayPal aparte del patch síncrono: conservar el secreto exige releer la BD.
+  patch.paypal_config = await paypalConfigValue(supabase, agentId, input);
   const { error } = await supabase
     .from("agents")
-    .update(agentPatch(input) as never)
+    .update(patch as never)
     .eq("id", agentId);
   if (error) throw new Error(`saveAgent: ${missingProviderMigration(error) ?? error.message}`);
 
@@ -820,9 +866,11 @@ export async function createAgent(input: AgentEditInput): Promise<string> {
   if (input.systemPrompt.trim().length === 0) throw new Error("El prompt es obligatorio.");
 
   const supabase = createServiceClient();
+  const patch = agentPatch(input);
+  patch.paypal_config = await paypalConfigValue(supabase, null, input);
   const { data, error } = await supabase
     .from("agents")
-    .insert(agentPatch(input) as never)
+    .insert(patch as never)
     .select("id")
     .single();
   if (error) throw new Error(`createAgent: ${missingProviderMigration(error) ?? error.message}`);

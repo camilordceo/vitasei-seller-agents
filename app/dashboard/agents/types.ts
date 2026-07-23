@@ -34,6 +34,18 @@ export interface AgentEditInput {
   schedule: AgentSchedule;
   /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
   paymentMethods: PaymentMethodConfig[];
+  /** PayPal (EE.UU.): Client ID de la app REST; vacío = feature apagado. Ver ADR-0088. */
+  paypalClientId: string;
+  /** Nuevo Client Secret; VACÍO = no cambiar (write-only, no se muestra). */
+  paypalClientSecret: string;
+  /** true = Sandbox de PayPal (pruebas); false = producción (Live). */
+  paypalSandbox: boolean;
+  /** Impuesto (%) por ítem, como texto (viene de un `<input>`); vacío = 0. */
+  paypalTaxPercent: string;
+  /** Costo de envío fijo (moneda del agente), como texto; vacío = 0. */
+  paypalShipping: string;
+  /** Mensaje que acompaña el link de pago (`{link}` = dónde va el link). */
+  paypalMessage: string;
   /**
    * Costo de traer UNA conversación (pauta) en este mercado. Texto porque viene de
    * un `<input>`: vacío = sin configurar. Alimenta el retorno (ROAS). Ver ADR-0065.

@@ -64,6 +64,7 @@ import { normalizeProviderId, type MessagingProviderId } from "@/lib/messaging/t
 import { findHotmartAgentId } from "@/lib/agent/agents";
 import { parseRetargetConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
+import { readPaypalEditorFields, type PaypalEditorFields } from "@/lib/paypal/config";
 import { buildMethodLabels } from "@/lib/dashboard/methodLabels";
 import {
   convertMoney,
@@ -2560,6 +2561,8 @@ export interface AgentDetail {
   schedule: AgentSchedule;
   /** Métodos de pago del agente (tags de compra por mercado). Ver ADR-0055. */
   paymentMethods: PaymentMethodConfig[];
+  /** Config de PayPal para el editor (sin el secreto: solo `hasPaypalSecret`). Ver ADR-0088. */
+  paypal: PaypalEditorFields;
   /** Costo de traer una conversación (pauta). null = sin configurar. Ver ADR-0065. */
   costPerChat: number | null;
   costCurrency: string;
@@ -2607,6 +2610,7 @@ export async function getAgent(id: string): Promise<AgentDetail | null> {
     scheduleTimezone: data.schedule_timezone,
     schedule: parseAgentSchedule(data.schedule),
     paymentMethods: parsePaymentMethods((data as { payment_methods?: unknown }).payment_methods),
+    paypal: readPaypalEditorFields((data as { paypal_config?: unknown }).paypal_config),
     ...readCostConfig(data),
     currency: normalizeCurrency((data as { currency?: string | null }).currency),
     createdAt: data.created_at,

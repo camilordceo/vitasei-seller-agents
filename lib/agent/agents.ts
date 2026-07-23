@@ -19,6 +19,7 @@ import { DEFAULT_TEMPLATE_LANGUAGE } from "@/lib/kapso/templates";
 import type { MediaAuth } from "@/lib/messaging/mediaFetch";
 import { parseRetargetConfig, type RetargetStageConfig } from "@/lib/agent/retargetPlan";
 import { parsePaymentMethods, type PaymentMethodConfig } from "@/lib/agent/paymentMethods";
+import { parsePaypalConfig, type PaypalAgentConfig } from "@/lib/paypal/config";
 import { normalizeCurrency, type CurrencyCode } from "@/lib/dashboard/currency";
 import type { Database } from "@/lib/supabase/types";
 
@@ -375,4 +376,23 @@ export async function loadPaymentMethods(
     .maybeSingle();
   if (error || !data) return [];
   return parsePaymentMethods((data as { payment_methods: unknown }).payment_methods);
+}
+
+/**
+ * Config de PayPal POR AGENTE (credenciales + mensaje + tax/envío del mercado).
+ * Consulta APARTE (no está en `AGENT_COLS`) y resiliente a que falte la columna
+ * (42703, migración 0034 sin aplicar): devuelve null → feature apagado (el link
+ * de pago no se genera; todo lo demás sigue igual). Ver ADR-0088.
+ */
+export async function loadPaypalConfig(
+  supabase: DB,
+  agentId: string,
+): Promise<PaypalAgentConfig | null> {
+  const { data, error } = await supabase
+    .from("agents")
+    .select("paypal_config")
+    .eq("id", agentId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return parsePaypalConfig((data as { paypal_config: unknown }).paypal_config);
 }

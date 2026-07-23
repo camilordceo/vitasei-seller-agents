@@ -258,6 +258,10 @@ export interface Database {
           notes: string | null;
           total: number | null;
           currency: string;
+          /** Link de pago (invoice PayPal) de esta orden. Ver ADR-0088. */
+          payment_link: string | null;
+          /** Id del invoice en PayPal (INV2-...). */
+          payment_link_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -274,6 +278,8 @@ export interface Database {
           notes?: string | null;
           total?: number | null;
           currency?: string;
+          payment_link?: string | null;
+          payment_link_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -290,6 +296,8 @@ export interface Database {
           notes?: string | null;
           total?: number | null;
           currency?: string;
+          payment_link?: string | null;
+          payment_link_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -371,6 +379,8 @@ export interface Database {
           retarget_instruction_2: string | null;
           retarget_config: Json | null;
           payment_methods: Json | null;
+          /** Config de PayPal ({client_id, client_secret, sandbox, message, tax_percent, shipping}). Ver ADR-0088. */
+          paypal_config: Json | null;
           voice_enabled: boolean;
           synthflow_api_key: string | null;
           synthflow_model_id: string | null;
@@ -418,6 +428,7 @@ export interface Database {
           retarget_instruction_2?: string | null;
           retarget_config?: Json | null;
           payment_methods?: Json | null;
+          paypal_config?: Json | null;
           voice_enabled?: boolean;
           synthflow_api_key?: string | null;
           synthflow_model_id?: string | null;
@@ -465,6 +476,7 @@ export interface Database {
           retarget_instruction_2?: string | null;
           retarget_config?: Json | null;
           payment_methods?: Json | null;
+          paypal_config?: Json | null;
           voice_enabled?: boolean;
           synthflow_api_key?: string | null;
           synthflow_model_id?: string | null;
