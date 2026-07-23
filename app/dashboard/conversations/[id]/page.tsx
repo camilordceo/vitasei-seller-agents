@@ -8,7 +8,14 @@ import {
   getVoiceCallsForConversation,
 } from "@/lib/dashboard/queries";
 import { formatCOP, formatDateTime } from "@/lib/dashboard/format";
-import { StatusPill, MethodPill, ManualPill, ManualToggle, OrderStatusPill } from "../../ui";
+import {
+  StatusPill,
+  MethodPill,
+  ManualPill,
+  ManualToggle,
+  OrderStatusPill,
+  AgentPill,
+} from "../../ui";
 import { ChatPanel } from "./ChatPanel";
 import { RetryButton } from "./RetryButton";
 import { CreateOrderButton } from "./CreateOrderButton";
@@ -52,6 +59,11 @@ export default async function ConversationDetailPage({ params }: { params: { id:
   const methodLabels = buildMethodLabels(
     agents.filter((a) => !convo.agentId || a.id === convo.agentId),
   );
+  // De qué agente/marca viene la conversación: en la lista se ve el chip, pero aquí
+  // adentro no se decía en ninguna parte (con varias marcas, el chat quedaba huérfano).
+  const conversationAgent = convo.agentId
+    ? agents.find((a) => a.id === convo.agentId)
+    : undefined;
   // Sugerencias para la fuente de producto = palabras clave configuradas (videos).
   const productSuggestions = [...new Set(videos.map((v) => v.keyword))].sort();
 
@@ -70,6 +82,20 @@ export default async function ConversationDetailPage({ params }: { params: { id:
       <div className="flex flex-wrap items-center gap-2.5">
         <InitialsAvatar name={convo.contact?.name ?? convo.contact?.phone} size="h-10 w-10 text-[13px]" />
         <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
+        {conversationAgent ? (
+          <AgentPill
+            name={conversationAgent.name}
+            brand={conversationAgent.brand}
+            whatsappNumber={conversationAgent.whatsappNumber}
+          />
+        ) : (
+          <span
+            className="inline-flex items-center rounded-full border border-dashed border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-400"
+            title="La conversación no tiene agente asignado (es anterior al multi-agente o el número entrante no está enrutado)."
+          >
+            Sin agente
+          </span>
+        )}
         <StatusPill status={convo.status} />
         <MethodPill method={convo.method} labels={methodLabels} />
         {convo.aiPaused ? <ManualPill /> : null}

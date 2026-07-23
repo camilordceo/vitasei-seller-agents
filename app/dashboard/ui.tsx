@@ -85,6 +85,38 @@ export function SourcePill({ source }: { source: string }) {
   );
 }
 
+/**
+ * Píldora de agente: de qué agente/marca viene la conversación. En la lista basta
+ * el chip pequeño (`AgentChip`), pero al abrir una conversación no había NADA que
+ * lo dijera: con varias marcas en la misma cuenta, el chat se leía sin saber quién
+ * lo atiende. Va con el número de WhatsApp en el `title` porque esa es la otra
+ * mitad de la respuesta: por cuál línea entró el cliente.
+ */
+export function AgentPill({
+  name,
+  brand,
+  whatsappNumber,
+}: {
+  name: string;
+  brand?: string | null;
+  whatsappNumber?: string | null;
+}) {
+  const detail = [brand, whatsappNumber ? `+${whatsappNumber}` : null].filter(Boolean).join(" · ");
+  return (
+    <span
+      className="inline-flex max-w-[16rem] items-center gap-1 truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600"
+      title={detail ? `Agente: ${name} · ${detail}` : `Agente: ${name}`}
+    >
+      <svg className="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <rect x="4" y="8" width="16" height="11" rx="3" />
+        <path d="M12 4v4M9 13h.01M15 13h.01" strokeLinecap="round" />
+      </svg>
+      <span className="truncate">{name}</span>
+      {brand ? <span className="truncate font-medium text-slate-400">· {brand}</span> : null}
+    </span>
+  );
+}
+
 /** Píldora "Manual": la IA está pausada y un humano atiende la conversación. */
 export function ManualPill() {
   return (

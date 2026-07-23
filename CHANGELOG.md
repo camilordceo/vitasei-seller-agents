@@ -28,6 +28,22 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   cedió ante la realidad (un solo nav, sin datos ficticios, sin búsqueda muerta) en
   `docs/vitasei-software-design.md` §8.
 
+### Fixed
+- **Al abrir una conversación no se decía de qué agente venía.** En la lista el chip del agente
+  está desde siempre, pero adentro del chat no había nada: con varias marcas en la misma cuenta,
+  la conversación se leía sin saber quién la atiende (ni por cuál línea entró el cliente). Ahora
+  el encabezado del detalle lleva la **píldora del agente** (nombre · marca, con el número de
+  WhatsApp en el tooltip), junto a estado y método de pago. Si la conversación no tiene agente
+  asignado lo dice explícitamente ("Sin agente") en vez de dejar el vacío de siempre.
+- **Los teléfonos de una campaña llegaban cambiados: el `E+11` de Excel se colaba como dos
+  dígitos más.** Un teléfono guardado como número se exporta en notación científica
+  (`5.732181974E+11`); al quitar los símbolos quedaba `573218197411` — un número que existe, que
+  no es el del cliente, y que solo se habría notado cuando sonara el teléfono equivocado
+  (`573126355788` se convertía en `57312635578811`). Ahora el lector de Excel **expande el valor
+  exacto** antes de tocarlo. En CSV el archivo ya trae el valor *mostrado*: si viene recortado
+  (`5,73218E+11`) la fila se **rechaza diciendo qué hacer** —dar formato de texto a la columna—
+  en vez de inventar los dígitos que faltan y llamar a un desconocido.
+
 ### Added
 - **La llamada que cierra venta ahora genera la orden sola** (ADR-0083,
   `docs/29-resultado-de-llamada-y-campanas.md`, migración 0032). En la ficha del agente,
