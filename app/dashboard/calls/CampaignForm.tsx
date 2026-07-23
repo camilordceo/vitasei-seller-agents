@@ -253,7 +253,9 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
           />
           <span className="mt-1 block text-xs text-slate-500">
             CSV o Excel (.xlsx). Una columna <strong>teléfono</strong> y, si quieres,{" "}
-            <strong>nombre</strong>. Las demás columnas viajan como variables.
+            <strong>nombre</strong>. Las demás columnas viajan como variables. Si exportas a CSV y
+            Excel te muestra los teléfonos como <code className="font-mono">5,73E+11</code>, dale{" "}
+            <strong>formato de texto</strong> a esa columna antes de exportar.
           </span>
         </label>
       </div>

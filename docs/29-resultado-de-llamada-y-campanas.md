@@ -80,6 +80,14 @@ venta. Ver ADR-0083.
 - Teléfonos: 10 dígitos o menos → se les antepone el indicativo; de 11 en adelante se toman como
   internacionales. Tope de **5.000** números por campaña y **1 MB** por archivo.
 
+> **Notación científica (la trampa de Excel).** Un teléfono guardado como número se exporta como
+> `5.732181974E+11`. En un `.xlsx` el lector lo **expande al valor exacto** (`573218197400`)
+> antes de tocarlo — sin eso, al quitar los símbolos quedaba `573218197411`: un número real, de
+> otra persona. En un **CSV** el archivo ya trae el valor *mostrado*: si viene recortado
+> (`5,73218E+11`, 6 dígitos significativos) la fila se **rechaza** con el motivo, porque los
+> dígitos que faltan no se pueden adivinar. Solución: formato de **texto** en la columna de
+> teléfonos antes de exportar.
+
 ```csv
 nombre;telefono;producto
 Ana Pérez;3001112233;Colágeno

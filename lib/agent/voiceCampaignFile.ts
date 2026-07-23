@@ -1,4 +1,4 @@
-import { looksLikeZip, readXlsxRows } from "./xlsx";
+import { expandExponential, looksLikeZip, readXlsxRows } from "./xlsx";
 
 /**
  * De un archivo de la vida real (CSV exportado de cualquier lado, o un Excel) a
@@ -156,19 +156,62 @@ const PHONE_HEADERS = [
 ];
 const NAME_HEADERS = ["nombre", "name", "cliente", "contacto nombre", "nombres", "full name"];
 
+/** Notación exponencial: `5.73218E+11`, `5,73218E11`… */
+const SCIENTIFIC = /^[+-]?(\d+)(?:[.,](\d+))?[eE]\+?(\d+)$/;
+
+export interface PhoneParse {
+  phone: string | null;
+  /** Por qué no sirvió, en palabras que el operador pueda accionar. */
+  reason?: string;
+}
+
 /**
- * Teléfono del archivo → E.164 sin `+`. `defaultPrefix` es el indicativo del
- * país del agente (Colombia `57`).
+ * Celda de teléfono → E.164 sin `+`.
  *
- * Regla: un número de **10 dígitos o menos es local** y se le antepone el
+ * Regla base: un número de **10 dígitos o menos es local** y se le antepone el
  * indicativo; de 11 en adelante ya viene internacional. Cubre los casos reales
- * (`3001112233`, `6015110375`, `573001112233`, `+57 300 111 2233`) sin
- * necesitar una librería de numeración mundial.
+ * (`3001112233`, `6015110375`, `573001112233`, `+57 300 111 2233`).
+ *
+ * Y una trampa que costó caro: **la notación científica de Excel**. Un teléfono
+ * guardado como número se exporta como `5.732181974E+11`; al quitar los símbolos
+ * quedaba `573218197411` —un número real, pero de otra persona—. En un `.xlsx`
+ * la expansión es exacta y se hace al leer la hoja; en un **CSV** el archivo ya
+ * trae el valor *mostrado*, así que si le faltan dígitos significativos NO se
+ * adivinan ceros: la fila se rechaza y se dice qué hacer.
  */
-export function normalizeCampaignPhone(raw: string, defaultPrefix: string): string | null {
+export function parsePhoneCell(raw: string, defaultPrefix: string): PhoneParse {
+  const text = String(raw ?? "").trim().replace(/\s+/g, "");
+
+  const sci = SCIENTIFIC.exec(text);
+  if (sci) {
+    const [, intPart, frac = ""] = sci;
+    const significant = (intPart + frac).replace(/^0+/, "").length;
+    // Dónde está la línea: un valor escrito por una herramienta trae los dígitos
+    // suficientes para reconstruir el número exacto (`5.732181974E+11`, 10
+    // significativos → 573218197400). Lo que Excel MUESTRA en una columna
+    // estrecha viene recortado a 5–6 (`5,73218E+11`), y ahí los dígitos que
+    // faltan no se pueden adivinar: antes que llamar a un desconocido, se
+    // rechaza la fila y se dice cómo arreglar el archivo.
+    if (significant < 9) {
+      return {
+        phone: null,
+        reason:
+          "viene en notación científica y le faltan dígitos: dale formato de TEXTO a la columna " +
+          "de teléfonos y vuelve a exportar",
+      };
+    }
+    return { phone: normalizeDigits(expandExponential(text), defaultPrefix) };
+  }
+
+  const phone = normalizeDigits(text, defaultPrefix);
+  return phone ? { phone } : { phone: null, reason: "teléfono inválido" };
+}
+
+/** La normalización de dígitos pelada (sin la trampa de la notación científica). */
+function normalizeDigits(raw: string, defaultPrefix: string): string | null {
   let digits = String(raw ?? "").replace(/\D/g, "");
   if (!digits) return null;
-  // `0057…` / `0057` — prefijo internacional escrito a la vieja usanza.
+  // `0057…` — prefijo internacional escrito a la vieja usanza.
   digits = digits.replace(/^00+/, "");
   if (!digits) return null;
 
@@ -178,6 +221,11 @@ export function normalizeCampaignPhone(raw: string, defaultPrefix: string): stri
   if (digits.length < 8) return null; // demasiado corto para ser un teléfono
   if (digits.length > 15) return null; // fuera de E.164
   return digits;
+}
+
+/** Atajo de `parsePhoneCell` cuando solo interesa el número. */
+export function normalizeCampaignPhone(raw: string, defaultPrefix: string): string | null {
+  return parsePhoneCell(raw, defaultPrefix).phone;
 }
 
 // --- Filas ------------------------------------------------------------------
@@ -261,9 +309,10 @@ export function parseCampaignRows(
       invalid.push({ line, value: "", reason: "sin teléfono" });
       return;
     }
-    const phone = normalizeCampaignPhone(rawPhone, prefix);
+    const parsedPhone = parsePhoneCell(rawPhone, prefix);
+    const phone = parsedPhone.phone;
     if (!phone) {
-      invalid.push({ line, value: rawPhone, reason: "teléfono inválido" });
+      invalid.push({ line, value: rawPhone, reason: parsedPhone.reason ?? "teléfono inválido" });
       return;
     }
     if (seen.has(phone)) {

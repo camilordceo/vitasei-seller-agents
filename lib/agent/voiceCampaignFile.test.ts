@@ -5,6 +5,7 @@ import {
   normalizeCampaignPhone,
   parseCampaignRows,
   parseDelimitedText,
+  parsePhoneCell,
   readCampaignFile,
 } from "./voiceCampaignFile";
 
@@ -75,6 +76,23 @@ describe("normalizeCampaignPhone", () => {
     expect(normalizeCampaignPhone("123", "57")).toBeNull();
     expect(normalizeCampaignPhone("sin dato", "57")).toBeNull();
     expect(normalizeCampaignPhone("1".repeat(20), "57")).toBeNull();
+  });
+
+  // El error reportado en producción: Excel guardó el teléfono como número y lo
+  // exportó en exponencial. Al quitar los símbolos, el "E+11" dejaba un "11"
+  // pegado y se marcaba a OTRA persona.
+  it("no deja que el 'E+11' se convierta en dos dígitos más", () => {
+    expect(parsePhoneCell("5.732181974E+11", "57").phone).toBe("573218197400");
+    expect(parsePhoneCell("5.73126355788E+11", "57").phone).toBe("573126355788");
+    expect(normalizeCampaignPhone("5.732181974E+11", "57")).not.toBe("573218197411");
+  });
+
+  it("rechaza la exponencial recortada en vez de inventar ceros", () => {
+    // "5,73218E+11" es lo que un CSV exportado de Excel trae cuando la columna
+    // no es texto: los dígitos que faltan NO se pueden adivinar.
+    const result = parsePhoneCell("5,73218E+11", "57");
+    expect(result.phone).toBeNull();
+    expect(result.reason).toContain("notación científica");
   });
 });
 
@@ -200,6 +218,25 @@ describe("readCampaignFile con Excel", () => {
     const parsed = parseCampaignRows(grid, { defaultPrefix: "57" });
     expect(parsed.rows.map((r) => r.phone)).toEqual(["573001112233", "573009998877"]);
     expect(parsed.rows[0].name).toBe("Ana Pérez");
+  });
+
+  it("expande los teléfonos que Excel guardó como número (exponencial)", () => {
+    // Así llegó el archivo real: la celda del teléfono es numérica y el XML
+    // trae 5.732181974E+11 en vez de 573218197400.
+    const sheetSci = `<?xml version="1.0"?><worksheet><sheetData>
+      <row r="1"><c r="A1" t="s"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>5.732181974E+11</v></c></row>
+      <row r="3"><c r="A3"><v>5.73126355788E+11</v></c></row>
+    </sheetData></worksheet>`;
+    const xlsx = makeZip([
+      { name: "xl/sharedStrings.xml", content: sharedStrings },
+      { name: "xl/worksheets/sheet1.xml", content: sheetSci },
+    ]);
+    const parsed = parseCampaignRows(readCampaignFile(xlsx, "base.xlsx"), {
+      defaultPrefix: "57",
+    });
+    expect(parsed.rows.map((r) => r.phone)).toEqual(["573218197400", "573126355788"]);
+    expect(parsed.invalid).toHaveLength(0);
   });
 
   it("un .xls viejo se rechaza con una salida clara", () => {

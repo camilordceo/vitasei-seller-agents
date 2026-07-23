@@ -107,6 +107,27 @@ function readSharedStrings(xml: string): string[] {
   return out;
 }
 
+/**
+ * `5.732181974E+11` → `573218197400`.
+ *
+ * Excel guarda un teléfono sin formato como NÚMERO, y al pasar de 11 dígitos lo
+ * escribe en notación exponencial dentro del XML. Sin expandirlo, el paso
+ * siguiente (quitar todo lo que no sea dígito) convertía `5.732181974E+11` en
+ * `573218197411`: un teléfono que existe, que no es el del cliente, y que nadie
+ * habría notado hasta que sonara el teléfono equivocado.
+ *
+ * La expansión es exacta: quien escribe el XML usa la representación más corta
+ * que reconstruye el mismo `double`, y estos números caben de sobra en uno.
+ */
+export function expandExponential(raw: string): string {
+  const trimmed = raw.trim();
+  if (!/^[+-]?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(trimmed)) return trimmed;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return trimmed;
+  if (Math.abs(n) > Number.MAX_SAFE_INTEGER) return trimmed;
+  return n.toFixed(0);
+}
+
 /** `"BC12"` → 54 (índice de columna, base 0). */
 function columnIndex(ref: string): number {
   const letters = ref.replace(/[^A-Za-z]/g, "").toUpperCase();
@@ -140,8 +161,9 @@ function readSheet(xml: string, shared: string[], maxRows: number): string[][] {
       } else if (type === "inlineStr") {
         value = textOf(body);
       } else {
+        // Celda numérica: puede venir en exponencial (teléfonos largos).
         const raw = /<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? "";
-        value = unescapeXml(raw);
+        value = expandExponential(unescapeXml(raw));
       }
 
       while (cells.length < index) cells.push("");
