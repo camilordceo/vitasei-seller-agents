@@ -10,7 +10,9 @@ import {
   bogotaDayEndIso,
   bogotaDayKey,
   bogotaDayStartIso,
+  isWithinRange,
   summarizeConversationActivity,
+  summarizeConversationsByDay,
   summarizeCloseSpeed,
   summarizeOrders,
   summarizeProductConversion,
@@ -25,8 +27,11 @@ import {
   type ChatFact,
   type CloseSpeedFact,
   type CloseSpeedReport,
+  type ConversationDayFact,
+  type ConversationsByDayReport,
   type RoasOrderFact,
   type RoasReport,
+  type ReportRange,
   type ConversationActivityFact,
   type ConversionReport,
   type OrderFact,
@@ -224,7 +229,10 @@ export interface AiCostReport {
  * la tabla que más crece (un evento por respuesta) y sin esto PostgREST cortaba en
  * 1000, subcontando el costo real. Ver ADR-0053.
  */
-export async function getAiCostReport(agentId?: string): Promise<AiCostReport> {
+export async function getAiCostReport(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<AiCostReport> {
   const supabase = createServiceClient();
   const convoIds = agentId ? await getAgentConversationIds(agentId) : null;
   const [tokenRows, audioRows] = await Promise.all([
@@ -232,7 +240,7 @@ export async function getAiCostReport(agentId?: string): Promise<AiCostReport> {
       (from, to) =>
         supabase
           .from("events_log")
-          .select("payload, conversation_id")
+          .select("payload, conversation_id, created_at")
           .in("type", TOKEN_EVENT_TYPES as unknown as string[])
           .range(from, to),
       "getAiCostReport tokens",
@@ -241,7 +249,7 @@ export async function getAiCostReport(agentId?: string): Promise<AiCostReport> {
       (from, to) =>
         supabase
           .from("events_log")
-          .select("payload, conversation_id")
+          .select("payload, conversation_id, created_at")
           .eq("type", "audio_transcribed")
           .range(from, to),
       "getAiCostReport audio",
@@ -249,13 +257,18 @@ export async function getAiCostReport(agentId?: string): Promise<AiCostReport> {
   ]);
 
   // Sin agente: cuenta todo. Con agente: solo los eventos de SUS conversaciones.
-  const belongs = (cid: string | null) => !convoIds || (cid != null && convoIds.has(cid));
+  // Con rango: solo los eventos ocurridos DENTRO del rango (por su `created_at`).
+  const belongs = (row: { conversation_id: string | null; created_at?: string }) => {
+    if (convoIds && !(row.conversation_id != null && convoIds.has(row.conversation_id))) return false;
+    if (range && !isWithinRange(Date.parse(row.created_at ?? ""), range)) return false;
+    return true;
+  };
 
   let inputTokens = 0;
   let outputTokens = 0;
   let imageCount = 0;
   for (const row of tokenRows) {
-    if (!belongs(row.conversation_id)) continue;
+    if (!belongs(row)) continue;
     const u = readUsage(row.payload);
     inputTokens += u.inputTokens;
     outputTokens += u.outputTokens;
@@ -266,7 +279,7 @@ export async function getAiCostReport(agentId?: string): Promise<AiCostReport> {
   let audioSeconds = 0;
   let audioCount = 0;
   for (const row of audioRows) {
-    if (!belongs(row.conversation_id)) continue;
+    if (!belongs(row)) continue;
     const a = readAudio(row.payload);
     audioCostUsd += a.costUsd;
     audioSeconds += a.durationSec;
@@ -1586,7 +1599,10 @@ export async function getCallRequests(opts?: {
  * Reporte de ventas agregado desde TODAS las órdenes (lógica pura en report.ts).
  * Con `agentId` se restringe a las órdenes de las conversaciones de ese agente.
  */
-export async function getSalesReport(agentId?: string): Promise<SalesReport> {
+export async function getSalesReport(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<SalesReport> {
   const supabase = createServiceClient();
   const [rows, convos, agents] = await Promise.all([
     // Paginado: sin esto, PostgREST corta en 1000 filas y el reporte subcuenta.
@@ -1635,7 +1651,7 @@ export async function getSalesReport(agentId?: string): Promise<SalesReport> {
   const configuredMethods = agents
     .filter((a) => !agentId || a.id === agentId)
     .flatMap((a) => a.paymentMethods.map((m) => m.method));
-  return summarizeOrders(facts, Date.now(), display, configuredMethods);
+  return summarizeOrders(facts, Date.now(), display, configuredMethods, range);
 }
 
 /**
@@ -1650,10 +1666,18 @@ export async function getSalesReport(agentId?: string): Promise<SalesReport> {
  *    aparecía "hoy" si el cliente volvía a escribir).
  * `total` es histórico. Lógica pura en report.ts. Ver ADR-0037. Paginado.
  */
-export async function getConversionReport(agentId?: string): Promise<ConversionReport> {
+export async function getConversionReport(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<ConversionReport> {
   const supabase = createServiceClient();
-  // Las ventanas/gráfico solo miran los últimos 30 días.
-  const sinceIso = new Date(Date.now() - 30 * DAY_MS).toISOString();
+  // La actividad se lee desde los últimos 30 días O el inicio del rango (lo más
+  // viejo): así las ventanas móviles Hoy/7/30 y la serie del rango salen del MISMO
+  // scan, sin dejar días sin datos cuando el rango cae en el pasado.
+  const floorMs = range
+    ? Math.min(Date.now() - 30 * DAY_MS, Date.parse(bogotaDayStartIso(range.fromKey)))
+    : Date.now() - 30 * DAY_MS;
+  const sinceIso = new Date(floorMs).toISOString();
   const convoIds = agentId ? await getAgentConversationIds(agentId) : null;
 
   const [convCountRes, orders, inbound] = await Promise.all([
@@ -1694,10 +1718,22 @@ export async function getConversionReport(agentId?: string): Promise<ConversionR
     .filter((o) => o.status !== "cancelled" && (!convoIds || convoIds.has(o.conversation_id)))
     .map((o) => ({ createdAt: o.created_at }));
 
-  return summarizeConversationActivity(activity, transactions, {
-    conversations: convCountRes.count ?? 0,
-    transactions: transactions.length,
-  });
+  // `total`: con rango cuenta las conversaciones ACTIVAS (con inbound) y las
+  // transacciones DENTRO del rango; sin rango, el histórico (todas las
+  // conversaciones vs todas las órdenes no canceladas) como siempre.
+  const total = range
+    ? {
+        conversations: new Set(
+          activity
+            .filter((a) => isWithinRange(Date.parse(a.createdAt), range))
+            .map((a) => a.conversationId),
+        ).size,
+        transactions: transactions.filter((t) => isWithinRange(Date.parse(t.createdAt), range))
+          .length,
+      }
+    : { conversations: convCountRes.count ?? 0, transactions: transactions.length };
+
+  return summarizeConversationActivity(activity, transactions, total, Date.now(), range);
 }
 
 /**
@@ -1731,7 +1767,10 @@ export interface RoasScalingReport extends RoasReport {
   weekly: WeeklyReport;
 }
 
-export async function getRoasReport(agentId?: string): Promise<RoasScalingReport> {
+export async function getRoasReport(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<RoasScalingReport> {
   const supabase = createServiceClient();
 
   const [agentRows, convos, orders, tokenRows, audioRows, voiceRows, spendRows] = await Promise.all([
@@ -1753,7 +1792,7 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
       (from, to) =>
         supabase
           .from("events_log")
-          .select("payload, conversation_id")
+          .select("payload, conversation_id, created_at")
           .in("type", TOKEN_EVENT_TYPES as unknown as string[])
           .range(from, to),
       "getRoasReport tokens",
@@ -1762,14 +1801,16 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
       (from, to) =>
         supabase
           .from("events_log")
-          .select("payload, conversation_id")
+          .select("payload, conversation_id, created_at")
           .eq("type", "audio_transcribed")
           .range(from, to),
       "getRoasReport audio",
     ),
     // Llamadas con IA: tabla de la migración 0027; si no existe aún, cuentan 0.
     (async () => {
-      const { data, error } = await supabase.from("voice_calls").select("agent_id, cost_usd");
+      const { data, error } = await supabase
+        .from("voice_calls")
+        .select("agent_id, cost_usd, created_at");
       return error ? [] : (data ?? []);
     })(),
     // Gasto REAL en pauta (migración 0031, ADR-0082). Si la tabla no existe todavía
@@ -1823,22 +1864,30 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
   // eventos sin conversación no se pueden atribuir y quedan fuera, igual que en
   // getAiCostReport); las llamadas llevan `agent_id` directo. `tokenCostUsd` es
   // lineal, así que sumar el costo evento por evento da lo mismo que agregarlo.
-  const aiCostUsdByAgent = new Map<string, number>();
-  const addCost = (aId: string | null | undefined, usd: number) => {
-    if (!aId) return;
-    aiCostUsdByAgent.set(aId, (aiCostUsdByAgent.get(aId) ?? 0) + usd);
+  // `keep` acota por fecha del evento: se usa para el histórico (todo) y para el
+  // rango (solo dentro), con las MISMAS filas ya traídas (sin queries extra).
+  const buildAiCost = (keep: (createdAt: string) => boolean): Map<string, number> => {
+    const m = new Map<string, number>();
+    const addCost = (aId: string | null | undefined, usd: number) => {
+      if (!aId) return;
+      m.set(aId, (m.get(aId) ?? 0) + usd);
+    };
+    for (const row of tokenRows) {
+      if (!keep(row.created_at)) continue;
+      const u = readUsage(row.payload);
+      addCost(agentByConvo.get(row.conversation_id ?? ""), tokenCostUsd(u.inputTokens, u.outputTokens));
+    }
+    for (const row of audioRows) {
+      if (!keep(row.created_at)) continue;
+      addCost(agentByConvo.get(row.conversation_id ?? ""), readAudio(row.payload).costUsd);
+    }
+    for (const raw of voiceRows) {
+      const r = raw as { agent_id: string | null; cost_usd: number | null; created_at?: string };
+      if (!keep(r.created_at ?? "")) continue;
+      addCost(r.agent_id, Number(r.cost_usd ?? 0));
+    }
+    return m;
   };
-  for (const row of tokenRows) {
-    const u = readUsage(row.payload);
-    addCost(agentByConvo.get(row.conversation_id ?? ""), tokenCostUsd(u.inputTokens, u.outputTokens));
-  }
-  for (const row of audioRows) {
-    addCost(agentByConvo.get(row.conversation_id ?? ""), readAudio(row.payload).costUsd);
-  }
-  for (const raw of voiceRows) {
-    const r = raw as { agent_id: string | null; cost_usd: number | null };
-    addCost(r.agent_id, Number(r.cost_usd ?? 0));
-  }
 
   // Moneda de lectura del consolidado: la del agente filtrado, o COP al mirar
   // todos los mercados juntos (mismo criterio que el resto de Reportes).
@@ -1853,7 +1902,7 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
   // Gasto real, ya como hechos del reporte. El filtro por agente se aplica acá
   // (no en la query) porque la lista de agentes del alcance ya está resuelta arriba.
   const inScope = new Set(agents.map((a) => a.id));
-  const adSpend: AdSpendFact[] = (spendRows as AdSpendRow[])
+  const adSpendAll: AdSpendFact[] = (spendRows as AdSpendRow[])
     .filter((s) => s.agent_id && inScope.has(s.agent_id))
     .map((s) => ({
       agentId: s.agent_id as string,
@@ -1863,14 +1912,29 @@ export async function getRoasReport(agentId?: string): Promise<RoasScalingReport
       leads: Number(s.leads) || 0,
     }));
 
-  const report = summarizeRoas(agents, chats, orderFacts, aiCostUsdByAgent, display, adSpend);
-  return {
-    ...report,
-    scaling: summarizeScaling(report, chats, orderFacts),
-    // La foto semanal sale de los MISMOS hechos que el ROAS (sin queries extra):
-    // así los chats y las ventas de la semana cuadran con el resto de la página.
-    weekly: summarizeWeekly(agents, chats, orderFacts, display),
-  };
+  // Consolidado histórico (sin rango): de acá sale SIEMPRE la Escala (economía por
+  // chat, proyección del mes y crecimiento semanal), que por definición es relativa
+  // a "ahora" y no encaja en un rango a medida. Ver ADR-0087.
+  const aiCostAll = buildAiCost(() => true);
+  const reportAll = summarizeRoas(agents, chats, orderFacts, aiCostAll, display, adSpendAll);
+  const scaling = summarizeScaling(reportAll, chats, orderFacts);
+
+  // Con rango: el retorno, su serie por día y la foto semanal se recalculan SOLO con
+  // los hechos del rango (chats/órdenes/gasto/IA). Sin rango, todo es el histórico y
+  // `report`/`weekly` reutilizan el consolidado ya calculado.
+  let report = reportAll;
+  let weekly = summarizeWeekly(agents, chats, orderFacts, display);
+  if (range) {
+    const within = (iso: string) => isWithinRange(Date.parse(iso), range);
+    const chatsR = chats.filter((c) => within(c.createdAt));
+    const ordersR = orderFacts.filter((o) => within(o.createdAt));
+    const adSpendR = adSpendAll.filter((s) => s.date >= range.fromKey && s.date <= range.toKey);
+    const aiCostR = buildAiCost(within);
+    report = summarizeRoas(agents, chatsR, ordersR, aiCostR, display, adSpendR, range);
+    weekly = summarizeWeekly(agents, chatsR, ordersR, display, 8, Date.now(), range);
+  }
+
+  return { ...report, scaling, weekly };
 }
 
 export interface ProductConversionReport {
@@ -1889,7 +1953,10 @@ export interface ProductConversionReport {
  * ADR-0068). Resiliente: si falta la migración 0018 (columna), todo cae en
  * "Sin categoría". Lógica pura en report.ts. Ver docs/21. Paginado.
  */
-export async function getProductConversion(agentId?: string): Promise<ProductConversionReport> {
+export async function getProductConversion(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<ProductConversionReport> {
   const supabase = createServiceClient();
 
   const [orders, agents] = await Promise.all([
@@ -1904,19 +1971,32 @@ export async function getProductConversion(agentId?: string): Promise<ProductCon
   // Conversaciones con su categoría y agente. Si falta la columna de categoría
   // (0018), se cae al set con `agent_id` pero sin categoría (todo "Sin categoría")
   // en vez de romper; `agent_id` existe desde 0010 (columna base).
-  let convos: Array<{ id: string; product_category: string | null; agent_id: string | null }>;
+  let convos: Array<{
+    id: string;
+    product_category: string | null;
+    agent_id: string | null;
+    created_at: string;
+  }>;
   try {
     convos = await fetchAllRows(
       (from, to) =>
-        supabase.from("conversations").select("id, product_category, agent_id").range(from, to),
+        supabase
+          .from("conversations")
+          .select("id, product_category, agent_id, created_at")
+          .range(from, to),
       "getProductConversion conversations",
     );
   } catch {
     const ids = await fetchAllRows(
-      (from, to) => supabase.from("conversations").select("id, agent_id").range(from, to),
+      (from, to) => supabase.from("conversations").select("id, agent_id, created_at").range(from, to),
       "getProductConversion conv ids",
     );
-    convos = ids.map((c) => ({ id: c.id, product_category: null, agent_id: c.agent_id }));
+    convos = ids.map((c) => ({
+      id: c.id,
+      product_category: null,
+      agent_id: c.agent_id,
+      created_at: c.created_at,
+    }));
   }
 
   const agentById = new Map(agents.map((a) => [a.id, a]));
@@ -1946,7 +2026,14 @@ export async function getProductConversion(agentId?: string): Promise<ProductCon
   }
 
   const facts: ProductConversionFact[] = convos
-    .filter((c) => !agentId || c.agent_id === agentId)
+    // Cohorte: conversaciones que ENTRARON en el rango (por su `created_at`). Sus
+    // órdenes se cuentan aunque hayan cerrado después — es la conversión de ese
+    // cohorte. Sin rango, todas.
+    .filter(
+      (c) =>
+        (!agentId || c.agent_id === agentId) &&
+        (!range || isWithinRange(Date.parse(c.created_at), range)),
+    )
     .map((c) => {
       const s = statsByConvo.get(c.id);
       return {
@@ -1975,13 +2062,19 @@ export interface TopProductsReport {
  * homologados a una moneda de lectura (mismo criterio que Órdenes, ADR-0068).
  * Lógica pura en report.ts. Paginado.
  */
-export async function getTopProducts(agentId?: string): Promise<TopProductsReport> {
+export async function getTopProducts(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<TopProductsReport> {
   const supabase = createServiceClient();
 
   const [orders, items, convos, agents] = await Promise.all([
     fetchAllRows(
       (from, to) =>
-        supabase.from("orders").select("id, conversation_id, status, currency").range(from, to),
+        supabase
+          .from("orders")
+          .select("id, conversation_id, status, currency, created_at")
+          .range(from, to),
       "getTopProducts orders",
     ),
     fetchAllRows(
@@ -2009,6 +2102,8 @@ export async function getTopProducts(agentId?: string): Promise<TopProductsRepor
   for (const it of items) {
     const o = orderById.get(it.order_id);
     if (!o) continue;
+    // Con rango, solo cuentan los ítems de órdenes creadas DENTRO del rango.
+    if (range && !isWithinRange(Date.parse(o.created_at), range)) continue;
     const aId = agentByConvo.get(o.conversation_id) ?? null;
     if (agentId && aId !== agentId) continue;
     const native = aId
@@ -2033,7 +2128,10 @@ export async function getTopProducts(agentId?: string): Promise<TopProductsRepor
  * conversación) y su PRIMERA orden no cancelada, + recompras. Lógica pura en
  * report.ts. Paginado.
  */
-export async function getCloseSpeed(agentId?: string): Promise<CloseSpeedReport> {
+export async function getCloseSpeed(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<CloseSpeedReport> {
   const supabase = createServiceClient();
 
   const [orders, convos] = await Promise.all([
@@ -2053,6 +2151,8 @@ export async function getCloseSpeed(agentId?: string): Promise<CloseSpeedReport>
   const facts: CloseSpeedFact[] = [];
   for (const o of orders) {
     if (o.status === "cancelled") continue;
+    // Con rango, solo los cierres (órdenes) creados DENTRO del rango.
+    if (range && !isWithinRange(Date.parse(o.created_at), range)) continue;
     const c = convoById.get(o.conversation_id);
     if (!c) continue;
     if (agentId && c.agent_id !== agentId) continue;
@@ -2063,6 +2163,48 @@ export async function getCloseSpeed(agentId?: string): Promise<CloseSpeedReport>
     });
   }
   return summarizeCloseSpeed(facts);
+}
+
+/**
+ * Conversaciones por día partidas por agente (ADR-0087): cuántos leads ENTRARON
+ * cada día y de qué marca. Alimenta el gráfico apilado Y la tabla de Reportes (la
+ * misma data, dos vistas). Sin rango, últimos 14 días; con rango, sus días. El
+ * filtro por fecha va a la BD para no barrer toda la tabla en el caso común. Lógica
+ * pura en report.ts.
+ */
+export async function getConversationsByDayByAgent(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<ConversationsByDayReport> {
+  const supabase = createServiceClient();
+  // Piso de lectura: el inicio del rango, o ~15 días atrás si no hay rango (cubre
+  // con margen los 14 días que dibuja la serie por defecto).
+  const sinceIso = range
+    ? bogotaDayStartIso(range.fromKey)
+    : new Date(Date.now() - 15 * DAY_MS).toISOString();
+
+  const [agentRows, convos] = await Promise.all([
+    getAgents(),
+    fetchAllRows(
+      (from, to) => {
+        let q = supabase
+          .from("conversations")
+          .select("agent_id, created_at")
+          .gte("created_at", sinceIso);
+        if (range) q = q.lt("created_at", bogotaDayEndIso(range.toKey));
+        if (agentId) q = q.eq("agent_id", agentId);
+        return q.range(from, to);
+      },
+      "getConversationsByDayByAgent",
+    ),
+  ]);
+
+  const agents = agentRows.map((a) => ({ id: a.id, name: a.name }));
+  const facts: ConversationDayFact[] = convos.map((c) => ({
+    agentId: c.agent_id as string | null,
+    createdAt: c.created_at,
+  }));
+  return summarizeConversationsByDay(facts, agents, range);
 }
 
 // --- Videos por palabra clave (ver docs/20, ADR-0038) -----------------------
@@ -2838,7 +2980,10 @@ export interface VoiceCallStats {
 }
 
 /** Resumen para la cabecera de la sección Llamadas y el reporte de costos. */
-export async function getVoiceCallStats(agentId?: string): Promise<VoiceCallStats> {
+export async function getVoiceCallStats(
+  agentId?: string,
+  range?: ReportRange,
+): Promise<VoiceCallStats> {
   const empty: VoiceCallStats = {
     total: 0,
     scheduled: 0,
@@ -2850,8 +2995,16 @@ export async function getVoiceCallStats(agentId?: string): Promise<VoiceCallStat
     sales: 0,
   };
   const supabase = createServiceClient();
-  let q = supabase.from("voice_calls").select("status, duration_sec, cost_usd, order_id");
+  let q = supabase
+    .from("voice_calls")
+    .select("status, duration_sec, cost_usd, order_id, created_at");
   if (agentId) q = q.eq("agent_id", agentId);
+  // Rango a nivel de BD: solo las llamadas hechas dentro del rango.
+  if (range) {
+    q = q
+      .gte("created_at", bogotaDayStartIso(range.fromKey))
+      .lt("created_at", bogotaDayEndIso(range.toKey));
+  }
 
   const { data, error } = await q;
   if (error || !data) return empty;

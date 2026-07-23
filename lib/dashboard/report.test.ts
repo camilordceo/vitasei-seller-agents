@@ -5,9 +5,15 @@ import {
   bogotaDayStartIso,
   bogotaWeekdayHour,
   isDayKey,
+  isWithinRange,
+  lastNDaysRange,
   matchesSearch,
+  normalizeRange,
+  rangeDayCount,
+  rangeDayKeys,
   summarizeCloseSpeed,
   summarizeConversationActivity,
+  summarizeConversationsByDay,
   summarizeOrders,
   summarizeProductConversion,
   summarizeRoas,
@@ -19,8 +25,10 @@ import {
   type ChatFact,
   type CloseSpeedFact,
   type ConversationActivityFact,
+  type ConversationDayFact,
   type OrderFact,
   type ProductSalesFact,
+  type ReportRange,
   type RoasOrderFact,
   type TransactionFact,
 } from "./report";
@@ -980,5 +988,141 @@ describe("matchesSearch", () => {
   it("tolera campos nulos", () => {
     expect(matchesSearch([null, undefined, "Cali"], "cali")).toBe(true);
     expect(matchesSearch([null, undefined], "cali")).toBe(false);
+  });
+});
+
+// --- Rango de fechas (ADR-0087) ---------------------------------------------
+
+describe("helpers de rango de fechas", () => {
+  it("normalizeRange arma un rango válido y descarta lo inválido", () => {
+    expect(normalizeRange("2026-06-30", "2026-07-02", NOW)).toEqual({
+      fromKey: "2026-06-30",
+      toKey: "2026-07-02",
+    });
+    // Invertido → null (no una ventana vacía sin explicación).
+    expect(normalizeRange("2026-07-05", "2026-07-02", NOW)).toBeNull();
+    // Solo "desde" → hasta hoy.
+    expect(normalizeRange("2026-06-30", undefined, NOW)).toEqual({
+      fromKey: "2026-06-30",
+      toKey: "2026-07-02",
+    });
+    // Solo "hasta" → ese único día.
+    expect(normalizeRange(undefined, "2026-06-30", NOW)).toEqual({
+      fromKey: "2026-06-30",
+      toKey: "2026-06-30",
+    });
+    expect(normalizeRange(undefined, undefined, NOW)).toBeNull();
+    expect(normalizeRange("no-es-fecha", undefined, NOW)).toBeNull();
+  });
+
+  it("lastNDaysRange termina hoy e incluye N días", () => {
+    expect(lastNDaysRange(14, NOW)).toEqual({ fromKey: "2026-06-19", toKey: "2026-07-02" });
+    expect(lastNDaysRange(1, NOW)).toEqual({ fromKey: "2026-07-02", toKey: "2026-07-02" });
+  });
+
+  it("rangeDayKeys va del más reciente al más viejo y cuenta bien", () => {
+    const range: ReportRange = { fromKey: "2026-06-30", toKey: "2026-07-02" };
+    expect(rangeDayKeys(range)).toEqual(["2026-07-02", "2026-07-01", "2026-06-30"]);
+    expect(rangeDayCount(range)).toBe(3);
+    // El tope trunca la serie a los más recientes.
+    expect(rangeDayKeys(range, 2)).toEqual(["2026-07-02", "2026-07-01"]);
+  });
+
+  it("isWithinRange compara por día calendario de Bogota", () => {
+    const range: ReportRange = { fromKey: "2026-06-30", toKey: "2026-07-01" };
+    expect(isWithinRange(Date.parse("2026-07-01T09:00:00Z"), range)).toBe(true); // 04:00 Bogota
+    expect(isWithinRange(Date.parse("2026-06-30T02:00:00Z"), range)).toBe(false); // 06-29 21:00 Bogota
+    expect(isWithinRange(Date.parse("2026-07-02T04:00:00Z"), range)).toBe(true); // 07-01 23:00 Bogota
+    expect(isWithinRange(Date.parse("2026-07-02T06:00:00Z"), range)).toBe(false); // 07-02 01:00 Bogota
+  });
+});
+
+describe("summarizeOrders con rango", () => {
+  const facts: OrderFact[] = [
+    { status: "confirmed", method: "addi", total: 100000, createdAt: day("2026-07-02T14:00:00Z") },
+    { status: "handed_off", method: "cod", total: 50000, createdAt: day("2026-07-02T13:00:00Z") },
+    { status: "pending_handoff", method: "cod", total: null, createdAt: day("2026-06-29T12:00:00Z") },
+    { status: "cancelled", method: "addi", total: 80000, createdAt: day("2026-07-01T12:00:00Z") },
+    { status: "confirmed", method: "undecided", total: 40000, createdAt: day("2026-06-12T12:00:00Z") },
+  ];
+  // Rango 06-29 → 07-01: solo la pendiente (06-29, sin total) y la cancelada (07-01).
+  const range: ReportRange = { fromKey: "2026-06-29", toKey: "2026-07-01" };
+  const r = summarizeOrders(facts, NOW, "COP", [], range);
+
+  it("las tarjetas móviles Hoy/7/30 NO dependen del rango", () => {
+    // Idénticas al reporte sin rango: son siempre relativas a hoy.
+    expect(r.today).toEqual({ count: 2, revenue: 150000 });
+    expect(r.last30).toEqual({ count: 4, revenue: 190000 });
+  });
+
+  it("titulares y cortes miran solo lo que cae en el rango", () => {
+    expect(r.generated).toEqual({ count: 1, revenue: 0 }); // solo la pendiente del 06-29
+    expect(r.cancelled).toEqual({ count: 1, revenue: 80000 }); // la del 07-01
+    expect(r.confirmed).toEqual({ count: 0, revenue: 0 });
+    expect(r.totalOrders).toBe(2); // "en total" = dentro del rango
+  });
+
+  it("la serie por día abarca el rango, no los últimos 14", () => {
+    expect(r.perDay).toHaveLength(3);
+    expect(r.perDay[0].date).toBe("2026-07-01");
+    // La cancelada no entra a la serie (solo generadas).
+    expect(r.perDay.find((d) => d.date === "2026-07-01")).toEqual({
+      date: "2026-07-01",
+      count: 0,
+      revenue: 0,
+    });
+    expect(r.perDay.find((d) => d.date === "2026-06-29")).toEqual({
+      date: "2026-06-29",
+      count: 1,
+      revenue: 0,
+    });
+  });
+});
+
+describe("summarizeConversationsByDay", () => {
+  const agents = [
+    { id: "A", name: "Alpha" },
+    { id: "B", name: "Bravo" },
+  ];
+  const facts: ConversationDayFact[] = [
+    { agentId: "A", createdAt: day("2026-07-02T14:00:00Z") },
+    { agentId: "A", createdAt: day("2026-07-02T15:00:00Z") },
+    { agentId: "A", createdAt: day("2026-07-01T14:00:00Z") },
+    { agentId: "B", createdAt: day("2026-07-02T14:00:00Z") },
+    { agentId: "B", createdAt: day("2026-06-30T14:00:00Z") },
+    { agentId: "B", createdAt: day("2026-06-30T15:00:00Z") },
+    { agentId: "B", createdAt: day("2026-06-30T16:00:00Z") },
+    { agentId: null, createdAt: day("2026-07-02T14:00:00Z") }, // sin agente → se ignora
+    { agentId: "C", createdAt: day("2026-07-02T14:00:00Z") }, // fuera del alcance → se ignora
+  ];
+
+  it("sin rango cuenta los últimos 14 días y ordena agentes por total desc", () => {
+    const r = summarizeConversationsByDay(facts, agents, undefined, NOW);
+    expect(r.days).toHaveLength(14);
+    expect(r.total).toBe(7); // 3 de A + 4 de B (null y C fuera)
+    expect(r.agents.map((a) => a.id)).toEqual(["B", "A"]); // B(4) antes que A(3)
+    expect(r.totalsByAgent).toEqual([4, 3]);
+    expect(r.maxDay).toBe(3);
+    // Día más reciente arriba, desglose en el orden estable [B, A].
+    expect(r.days[0].date).toBe("2026-07-02");
+    expect(r.days[0].total).toBe(3);
+    expect(r.days[0].byAgent.map((a) => a.agentId)).toEqual(["B", "A"]);
+    expect(r.days[0].byAgent.map((a) => a.count)).toEqual([1, 2]);
+    expect(r.days.find((d) => d.date === "2026-06-30")?.total).toBe(3);
+  });
+
+  it("con rango abarca solo sus días", () => {
+    const range: ReportRange = { fromKey: "2026-06-30", toKey: "2026-07-01" };
+    const r = summarizeConversationsByDay(facts, agents, range, NOW);
+    expect(r.days.map((d) => d.date)).toEqual(["2026-07-01", "2026-06-30"]);
+    expect(r.total).toBe(4); // A el 07-01 (1) + B el 06-30 (3)
+    expect(r.truncated).toBe(false);
+  });
+
+  it("marca truncated cuando el rango supera el tope de la serie", () => {
+    const range: ReportRange = { fromKey: "2026-03-01", toKey: "2026-07-01" };
+    const r = summarizeConversationsByDay(facts, agents, range, NOW);
+    expect(r.days).toHaveLength(92); // tope de rangeDayKeys
+    expect(r.truncated).toBe(true);
   });
 });

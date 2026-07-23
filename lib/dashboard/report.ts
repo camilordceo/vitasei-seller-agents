@@ -162,6 +162,78 @@ export function bogotaWeekdayHour(ms: number): { weekday: number; hour: number }
   return { weekday: d.getUTCDay(), hour: d.getUTCHours() };
 }
 
+// --- Rango de fechas de los Reportes (ADR-0087) ------------------------------
+//
+// Un rango [fromKey, toKey] de días calendario de Bogota, AMBOS INCLUSIVOS. Cuando
+// está activo, las series y agregaciones del reporte se recalculan SOLO con los
+// hechos que caen dentro del rango; sin rango, cada función mantiene su ventana de
+// siempre (14 días, histórico, etc.). Las tarjetas móviles "Hoy / 7 / 30 días" NO
+// dependen del rango: son siempre relativas a ahora (decisión de producto).
+
+export interface ReportRange {
+  /** Primer día incluido (YYYY-MM-DD, hora Bogota). */
+  fromKey: string;
+  /** Último día incluido (YYYY-MM-DD, hora Bogota). Inclusivo. */
+  toKey: string;
+}
+
+/**
+ * Arma un rango válido a partir de dos días calendario (los de un `<input type="date">`).
+ * Descarta lo que no sea un día real y rellena el lado que falte: solo `from` → hasta
+ * hoy; solo `to` → ese único día. Si queda invertido (desde > hasta) devuelve null en
+ * vez de una ventana vacía sin explicación (mismo criterio que la lista de Conversaciones).
+ */
+export function normalizeRange(
+  from: string | null | undefined,
+  to: string | null | undefined,
+  nowMs: number = Date.now(),
+): ReportRange | null {
+  const f = isDayKey(from) ? (from as string) : undefined;
+  const t = isDayKey(to) ? (to as string) : undefined;
+  if (!f && !t) return null;
+  const toKey = t ?? bogotaDayKey(nowMs);
+  const fromKey = f ?? toKey;
+  if (fromKey > toKey) return null;
+  return { fromKey, toKey };
+}
+
+/** Rango de los últimos `days` días terminando hoy (para los atajos 14/30/90). */
+export function lastNDaysRange(days: number, nowMs: number = Date.now()): ReportRange {
+  const toKey = bogotaDayKey(nowMs);
+  const fromKey = bogotaDayKey(nowMs - (Math.max(1, days) - 1) * DAY_MS);
+  return { fromKey, toKey };
+}
+
+/**
+ * Días del rango, MÁS RECIENTE PRIMERO (como el resto de gráficos de la página).
+ * `cap` es una red de seguridad: un rango de un año no debe dibujar 365 barras; se
+ * quedan los `cap` días más recientes (la página avisa si truncó). El mediodía evita
+ * cualquier borde de día (Colombia es UTC-5 fijo, sin horario de verano).
+ */
+export function rangeDayKeys(range: ReportRange, cap = 92): string[] {
+  const startMs = Date.parse(`${range.fromKey}T12:00:00-05:00`);
+  const endMs = Date.parse(`${range.toKey}T12:00:00-05:00`);
+  const keys: string[] = [];
+  for (let ms = endMs; ms >= startMs && keys.length < cap; ms -= DAY_MS) {
+    keys.push(bogotaDayKey(ms));
+  }
+  return keys;
+}
+
+/** Cuántos días abarca el rango (para saber si `rangeDayKeys` truncó la serie). */
+export function rangeDayCount(range: ReportRange): number {
+  const startMs = Date.parse(`${range.fromKey}T12:00:00-05:00`);
+  const endMs = Date.parse(`${range.toKey}T12:00:00-05:00`);
+  return Math.floor((endMs - startMs) / DAY_MS) + 1;
+}
+
+/** ¿El instante `ms` cae dentro del rango? Compara por día calendario de Bogota. */
+export function isWithinRange(ms: number, range: ReportRange): boolean {
+  if (!Number.isFinite(ms)) return false;
+  const key = bogotaDayKey(ms);
+  return key >= range.fromKey && key <= range.toKey;
+}
+
 function emptyBucket(): Bucket {
   return { count: 0, revenue: 0 };
 }
@@ -190,6 +262,12 @@ export function summarizeOrders(
    * (p. ej. "Link de pago") no existía en Reportes hasta la primera venta. Ver ADR-0080.
    */
   configuredMethods: ReadonlyArray<string> = [],
+  /**
+   * Rango de fechas activo (ADR-0087). Con rango, los titulares, cortes y la serie
+   * por día miran SOLO las órdenes dentro del rango; las tarjetas móviles Hoy/7/30
+   * siguen siendo relativas a ahora. Sin rango, comportamiento histórico.
+   */
+  range?: ReportRange,
 ): SalesReport {
   const byStatus = Object.fromEntries(
     ORDER_STATUSES.map((s) => [s, emptyBucket()]),
@@ -220,15 +298,17 @@ export function summarizeOrders(
   let converted = false;
   let excluded = 0;
 
-  // Claves de los últimos 14 días (índice para acumular perDay).
-  const dayKeys: string[] = [];
+  // Serie por día: los días del rango (más reciente primero) si hay rango; si no,
+  // los últimos 14 días — la ventana histórica de siempre.
+  const dayKeys: string[] = range
+    ? rangeDayKeys(range)
+    : Array.from({ length: 14 }, (_, i) => bogotaDayKey(nowMs - i * DAY_MS));
   const dayIndex = new Map<string, DayBucket>();
-  for (let i = 0; i < 14; i++) {
-    const key = bogotaDayKey(nowMs - i * DAY_MS);
-    dayKeys.push(key);
-    dayIndex.set(key, { date: key, count: 0, revenue: 0 });
-  }
-  const todayKey = dayKeys[0];
+  for (const key of dayKeys) dayIndex.set(key, { date: key, count: 0, revenue: 0 });
+  // "Hoy" de las tarjetas móviles es SIEMPRE el día real, no el tope de la serie
+  // (con rango, el tope de la serie puede ser un día del pasado).
+  const todayKey = bogotaDayKey(nowMs);
+  let scopedCount = 0;
 
   for (const f of facts) {
     // Monto YA en la moneda de lectura. `null` = no sumable (sin total, o en una
@@ -236,12 +316,28 @@ export function summarizeOrders(
     // se cuela un monto crudo en una suma de otra moneda.
     const native = f.currency ?? display;
     const amount = convertMoney(f.total, native, display);
+    const createdMs = Date.parse(f.createdAt);
+    const finite = Number.isFinite(createdMs);
+    const isCancelled = f.status === "cancelled";
+
+    // Tarjetas MÓVILES (Hoy / 7 / 30 días): siempre relativas a ahora, ajenas al
+    // rango. Solo ventas generadas (no canceladas), igual que siempre.
+    if (!isCancelled && finite) {
+      if (bogotaDayKey(createdMs) === todayKey) add(today, amount);
+      if (createdMs >= nowMs - 7 * DAY_MS) add(last7, amount);
+      if (createdMs >= nowMs - 30 * DAY_MS) add(last30, amount);
+    }
+
+    // Con rango activo, TODO lo demás (titulares, cortes y series) mira solo los
+    // hechos dentro del rango. Sin rango, cuenta todo (comportamiento histórico).
+    if (range && !(finite && isWithinRange(createdMs, range))) continue;
+    scopedCount += 1;
+
     if (amount === null && f.total !== null && f.total !== undefined) excluded += 1;
     if (amount !== null && String(native).trim().toUpperCase() !== display) converted = true;
 
     if (byStatus[f.status]) add(byStatus[f.status], amount);
 
-    const isCancelled = f.status === "cancelled";
     if (isCancelled) {
       add(cancelled, amount);
       continue; // las canceladas no cuentan como ventas ni entran a cortes/método
@@ -254,11 +350,7 @@ export function summarizeOrders(
     if (f.status === "confirmed") add(confirmed, amount);
     if (f.status === "pending_handoff" || f.status === "handed_off") add(pipeline, amount);
 
-    const createdMs = Date.parse(f.createdAt);
-    if (Number.isFinite(createdMs)) {
-      if (bogotaDayKey(createdMs) === todayKey) add(today, amount);
-      if (createdMs >= nowMs - 7 * DAY_MS) add(last7, amount);
-      if (createdMs >= nowMs - 30 * DAY_MS) add(last30, amount);
+    if (finite) {
       const dayBucket = dayIndex.get(bogotaDayKey(createdMs));
       if (dayBucket) {
         dayBucket.count += 1;
@@ -294,7 +386,9 @@ export function summarizeOrders(
   }
 
   return {
-    totalOrders: facts.length,
+    // Con rango, "en total" es el total DENTRO del rango (no el histórico); sin
+    // rango, `scopedCount` termina siendo `facts.length` (nada se salta).
+    totalOrders: scopedCount,
     currency: display,
     converted,
     excluded,
@@ -641,22 +735,30 @@ export function summarizeConversationActivity(
   transactions: TransactionFact[],
   total: { conversations: number; transactions: number },
   nowMs: number = Date.now(),
+  /**
+   * Rango activo (ADR-0087): la serie por día abarca el rango en vez de los últimos
+   * 14. Las ventanas Hoy/7/30 siguen relativas a ahora; `total` lo decide la query
+   * (dentro del rango cuando hay rango, histórico si no).
+   */
+  range?: ReportRange,
 ): ConversionReport {
   // Conversaciones distintas por ventana/día (actividad inbound).
   const todayC = new Set<string>();
   const last7C = new Set<string>();
   const last30C = new Set<string>();
 
-  const dayKeys: string[] = [];
+  const dayKeys: string[] = range
+    ? rangeDayKeys(range)
+    : Array.from({ length: 14 }, (_, i) => bogotaDayKey(nowMs - i * DAY_MS));
   const dayC = new Map<string, Set<string>>();
   const dayT = new Map<string, number>();
-  for (let i = 0; i < 14; i++) {
-    const key = bogotaDayKey(nowMs - i * DAY_MS);
-    dayKeys.push(key);
+  for (const key of dayKeys) {
     dayC.set(key, new Set());
     dayT.set(key, 0);
   }
-  const todayKey = dayKeys[0];
+  // "Hoy" de las ventanas móviles es el día real, no el tope de la serie (con rango
+  // el tope puede ser un día del pasado).
+  const todayKey = bogotaDayKey(nowMs);
 
   for (const a of activity) {
     const ms = Date.parse(a.createdAt);
@@ -693,6 +795,113 @@ export function summarizeConversationActivity(
       const transactions = dayT.get(k) ?? 0;
       return { date: k, conversations, transactions, rate: rate(transactions, conversations) };
     }),
+  };
+}
+
+// --- Conversaciones por día por agente (ADR-0087) ---------------------------
+//
+// "Cuántas conversaciones ENTRAN por día, partidas por agente." Una conversación
+// entra el día de su PRIMER contacto (`created_at`, cuando se pagó el lead) — la
+// misma base que los chats del ROAS. Alimenta el gráfico apilado Y la tabla: es la
+// misma data en dos vistas. Sirve para armar llamadas masivas por agente y ver de
+// qué marca están entrando los leads día a día. Puro/testeable.
+
+/** Una conversación con el agente que la atendió y su fecha de entrada. */
+export interface ConversationDayFact {
+  agentId: string | null;
+  /** ISO del `created_at` de la conversación. */
+  createdAt: string;
+}
+
+/** Cuántas conversaciones entraron para un agente en un día (celda del apilado). */
+export interface ConversationDayAgentSlice {
+  agentId: string;
+  name: string;
+  count: number;
+}
+
+export interface ConversationDayRow {
+  /** Día calendario en Bogota, YYYY-MM-DD. */
+  date: string;
+  /** Total de conversaciones que entraron ese día (todos los agentes del alcance). */
+  total: number;
+  /** Desglose por agente, en el MISMO orden para todos los días (color estable). */
+  byAgent: ConversationDayAgentSlice[];
+}
+
+export interface ConversationsByDayReport {
+  /** Días más reciente primero (mismo orden que el resto de gráficos). */
+  days: ConversationDayRow[];
+  /** Agentes con conversaciones en el periodo, en orden estable (por total desc). */
+  agents: Array<{ id: string; name: string }>;
+  /** Total por agente en el periodo, alineado a `agents` (fila de totales de la tabla). */
+  totalsByAgent: number[];
+  /** Total de conversaciones del periodo (todos los días, todos los agentes). */
+  total: number;
+  /** Máximo de conversaciones en un día (para escalar las barras del apilado). */
+  maxDay: number;
+  /** true si el rango era más largo que el tope de la serie y se truncó. */
+  truncated: boolean;
+}
+
+/**
+ * Conversaciones por día partidas por agente. Los días son los del rango (más
+ * reciente primero) o los últimos 14 si no hay rango. Una conversación sin agente
+ * o de un agente fuera del alcance no se cuenta. El orden de los agentes es estable
+ * (por total desc, desempatando por nombre) para que el color de cada uno no salte
+ * de fila en fila. `nowMs` inyectable para tests.
+ */
+export function summarizeConversationsByDay(
+  facts: ConversationDayFact[],
+  agents: Array<{ id: string; name: string }>,
+  range?: ReportRange,
+  nowMs: number = Date.now(),
+): ConversationsByDayReport {
+  const nameById = new Map(agents.map((a) => [a.id, a.name]));
+  const dayKeys = range
+    ? rangeDayKeys(range)
+    : Array.from({ length: 14 }, (_, i) => bogotaDayKey(nowMs - i * DAY_MS));
+  const window = new Set(dayKeys);
+
+  const byDayAgent = new Map<string, Map<string, number>>();
+  for (const key of dayKeys) byDayAgent.set(key, new Map());
+  const totalByAgent = new Map<string, number>();
+  const active = new Set<string>();
+
+  for (const f of facts) {
+    if (!f.agentId || !nameById.has(f.agentId)) continue;
+    const ms = Date.parse(f.createdAt);
+    if (!Number.isFinite(ms)) continue;
+    const key = bogotaDayKey(ms);
+    if (!window.has(key)) continue;
+    byDayAgent.get(key)!.set(f.agentId, (byDayAgent.get(key)!.get(f.agentId) ?? 0) + 1);
+    totalByAgent.set(f.agentId, (totalByAgent.get(f.agentId) ?? 0) + 1);
+    active.add(f.agentId);
+  }
+
+  const ordered = [...active].sort(
+    (a, b) =>
+      (totalByAgent.get(b) ?? 0) - (totalByAgent.get(a) ?? 0) ||
+      (nameById.get(a) ?? "").localeCompare(nameById.get(b) ?? "", "es"),
+  );
+
+  const days: ConversationDayRow[] = dayKeys.map((date) => {
+    const perAgent = byDayAgent.get(date)!;
+    const byAgent = ordered.map((id) => ({
+      agentId: id,
+      name: nameById.get(id) ?? id,
+      count: perAgent.get(id) ?? 0,
+    }));
+    return { date, total: byAgent.reduce((s, a) => s + a.count, 0), byAgent };
+  });
+
+  return {
+    days,
+    agents: ordered.map((id) => ({ id, name: nameById.get(id) ?? id })),
+    totalsByAgent: ordered.map((id) => totalByAgent.get(id) ?? 0),
+    total: [...totalByAgent.values()].reduce((s, n) => s + n, 0),
+    maxDay: Math.max(1, ...days.map((d) => d.total)),
+    truncated: range ? rangeDayCount(range) > dayKeys.length : false,
   };
 }
 
@@ -896,6 +1105,12 @@ export function summarizeRoas(
   aiCostUsdByAgent: Map<string, number> = new Map(),
   display: CurrencyCode = DEFAULT_CURRENCY,
   adSpend: AdSpendFact[] = [],
+  /**
+   * Rango activo (ADR-0087): la serie por día abarca el rango. Las filas ya llegan
+   * filtradas al rango desde la query (chats/órdenes/gasto), así que acá solo cambia
+   * la ventana del gráfico. Sin rango, los últimos 14 días de siempre.
+   */
+  range?: ReportRange,
 ): RoasReport {
   const byAgent = new Map<string, RoasRow>();
   for (const a of agents) {
@@ -1085,9 +1300,9 @@ export function summarizeRoas(
     /** Días del gráfico donde AL MENOS un agente aportó gasto reportado. */
     const dayHasReal = new Set<string>();
 
-    const dayKeys: string[] = [];
-    const now = Date.now();
-    for (let i = 0; i < 14; i++) dayKeys.push(bogotaDayKey(now - i * DAY_MS));
+    const dayKeys: string[] = range
+      ? rangeDayKeys(range)
+      : Array.from({ length: 14 }, (_, i) => bogotaDayKey(Date.now() - i * DAY_MS));
     const window = new Set(dayKeys);
 
     // El gasto real entra PRIMERO y por agente/día, para poder saltarse después el
@@ -1227,6 +1442,12 @@ export function summarizeWeekly(
   display: CurrencyCode = DEFAULT_CURRENCY,
   weeksBack = 8,
   nowMs: number = Date.now(),
+  /**
+   * Rango activo (ADR-0087): las semanas van de la del `toKey` a la del `fromKey`
+   * (tope 26) en vez de las últimas 8. Los chats/órdenes ya llegan filtrados al
+   * rango desde la query.
+   */
+  range?: ReportRange,
 ): WeeklyReport {
   const nameById = new Map(agents.map((a) => [a.id, a.name]));
   // Tasa de venta de cada agente hacia la moneda de lectura. Sin tasa → la plata
@@ -1236,8 +1457,22 @@ export function summarizeWeekly(
   );
 
   const weekKeys: string[] = [];
-  for (let i = 0; i < weeksBack; i++) weekKeys.push(bogotaWeekStartKey(nowMs - i * 7 * DAY_MS));
-  const currentWeek = weekKeys[0];
+  if (range) {
+    const toWkMs = Date.parse(
+      `${bogotaWeekStartKey(Date.parse(`${range.toKey}T12:00:00-05:00`))}T12:00:00-05:00`,
+    );
+    const fromWkMs = Date.parse(
+      `${bogotaWeekStartKey(Date.parse(`${range.fromKey}T12:00:00-05:00`))}T12:00:00-05:00`,
+    );
+    for (let ms = toWkMs; ms >= fromWkMs && weekKeys.length < 26; ms -= 7 * DAY_MS) {
+      weekKeys.push(bogotaDayKey(ms));
+    }
+  } else {
+    for (let i = 0; i < weeksBack; i++) weekKeys.push(bogotaWeekStartKey(nowMs - i * 7 * DAY_MS));
+  }
+  // La marca "en curso" es la semana que contiene a HOY, esté o no en la lista (con
+  // rango en el pasado no hay ninguna semana en curso).
+  const currentWeek = bogotaWeekStartKey(nowMs);
   const index = new Map<string, WeekBucket>();
   for (const key of weekKeys) {
     index.set(key, {

@@ -29,6 +29,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **Filtro de fechas global en Reportes + conversaciones por día por agente** (ADR-0087).
+  Arriba de Reportes hay ahora un control de fechas con atajos (14 / 30 / 90 días) y rango
+  exacto Desde/Hasta (hora Colombia, ambos inclusivos). Con un rango activo, **toda** la
+  página se recalcula dentro de él —ventas, conversión, ROAS, mapa de calor, productos,
+  velocidad de cierre, costo IA y semana a semana—, con dos anclas a hoy a propósito: las
+  tarjetas móviles **Hoy / 7 / 30 días** y la **Escala** (proyección del mes / crecimiento
+  semanal). Sin rango, la página se ve igual que antes (histórico + 14 días): el filtro es
+  opt-in. Nueva sección **"Conversaciones por día · por agente"**: barras apiladas por
+  agente con **toggle Gráfico/Tabla** (la misma data en dos vistas — la tabla se copia para
+  armar llamadas masivas); una conversación cuenta el día de su primer contacto.
 - **Guardar la config de llamadas sin tocar Synthflow, y traer lo que ya está allá** (ADR-0085).
   Actualizar un assistant lo pasa a una versión nueva y le cambia la voz —a peor—, y hasta ahora
   eso pasaba en **cada** guardado de la ficha, porque el guardado empujaba los extractores.

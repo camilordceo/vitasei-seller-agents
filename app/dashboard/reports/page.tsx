@@ -3,6 +3,7 @@ import {
   getAgents,
   getAiCostReport,
   getCloseSpeed,
+  getConversationsByDayByAgent,
   getVoiceCallStats,
   getConversionReport,
   getProductConversion,
@@ -14,6 +15,9 @@ import type { RoasScalingReport } from "@/lib/dashboard/queries";
 import {
   ORDER_STATUSES,
   bogotaDayKey,
+  lastNDaysRange,
+  normalizeRange,
+  type ReportRange,
   type SpendSource,
   type CloseSpeedReport,
   type ConversionReport,
@@ -37,6 +41,8 @@ import { Collapsible } from "../Collapsible";
 import { Kpi, PageHeader } from "../ui-kit";
 import { CopySummaryButton } from "./CopySummaryButton";
 import { AgentFilter } from "./AgentFilter";
+import { ReportsDateRange } from "./ReportsDateRange";
+import { ConversationsByAgentChart } from "./ConversationsByAgentChart";
 import { buildMethodLabels, methodLabel } from "@/lib/dashboard/methodLabels";
 
 export const dynamic = "force-dynamic";
@@ -150,6 +156,8 @@ function buildSummary(
   roas: RoasScalingReport,
   speed: CloseSpeedReport,
   scope: string,
+  /** Ventana del reporte cuando hay un rango activo (para el texto compartido). */
+  period?: string,
 ): string {
   // El retorno solo entra al resumen si hay una lectura consolidable (una moneda
   // y costo configurado); si no, se omite en vez de mandar un "—" al equipo.
@@ -175,7 +183,7 @@ function buildSummary(
         ]
       : [];
   return [
-    `Reporte de ventas — ${scope}`,
+    `Reporte de ventas — ${scope}${period ? ` · ${period}` : ""}`,
     `Ventas confirmadas: ${r.confirmed.count} · ${formatMoney(r.confirmed.revenue, r.currency)}`,
     `En curso (sin confirmar): ${r.pipeline.count} · ${formatMoney(r.pipeline.revenue, r.currency)}`,
     `Órdenes generadas: ${r.generated.count} · ${formatMoney(r.generated.revenue, r.currency)}`,
@@ -356,11 +364,14 @@ function RoasSection({
   selected,
   marketCurrencies,
   agentCount,
+  periodLabel,
 }: {
   roas: RoasReport;
   selected: string | null;
   marketCurrencies: CurrencyCode[];
   agentCount: number;
+  /** Etiqueta de la ventana de la serie ("Últimos 14 días" o el rango elegido). */
+  periodLabel: string;
 }) {
   const maxDay = Math.max(1, ...roas.perDay.map((d) => Math.max(d.revenue, d.investment)));
   const chartCurrency = roas.currency;
@@ -515,7 +526,7 @@ function RoasSection({
             {/* El total del periodo, a la vista: el gráfico dice el día a día y
                 esta línea dice cuánto fue en plata. */}
             <span className="ml-auto tabular-nums">
-              Últimos 14 días: <span className="text-rose-600">{formatMoney(invTotal14, chartCurrency)}</span>{" "}
+              {periodLabel}: <span className="text-rose-600">{formatMoney(invTotal14, chartCurrency)}</span>{" "}
               → <span className="font-medium text-emerald-700">{formatMoney(revTotal14, chartCurrency)}</span>
             </span>
           </div>
@@ -714,7 +725,16 @@ function WeeklySection({ weekly }: { weekly: WeeklyReport }) {
   );
 }
 
-function ScalingSection({ scaling, currency }: { scaling: ScalingReport; currency: string }) {
+function ScalingSection({
+  scaling,
+  currency,
+  alwaysNow,
+}: {
+  scaling: ScalingReport;
+  currency: string;
+  /** true cuando hay un rango activo: esta sección igual es relativa a hoy. */
+  alwaysNow?: boolean;
+}) {
   const { perChat, month, wow } = scaling;
   const projGrowth =
     month && month.prevRevenue > 0
@@ -731,6 +751,9 @@ function ScalingSection({ scaling, currency }: { scaling: ScalingReport; currenc
           Lo que deja <strong>un chat</strong> después de pagar pauta e IA (antes de producto y
           logística), a dónde va el mes si sigue a este ritmo, y si la operación crece o se frena
           semana contra semana. Mismos hechos que el cuadro de retorno: los números cuadran.
+          {alwaysNow
+            ? " Esta sección es siempre relativa a hoy: el rango de fechas no la cambia."
+            : ""}
         </p>
       </div>
 
@@ -959,10 +982,12 @@ function SalesHeatmap({ report }: { report: SalesReport }) {
   );
 }
 
+const RANGE_PRESETS: Record<string, number> = { "14d": 14, "30d": 30, "90d": 90 };
+
 export default async function ReportsPage({
   searchParams,
 }: {
-  searchParams: { agent?: string };
+  searchParams: { agent?: string; range?: string; from?: string; to?: string };
 }) {
   const agents = await getAgents();
   // Etiquetas de método por su clave: las configuradas por los agentes (ADR-0055)
@@ -981,16 +1006,40 @@ export default async function ReportsPage({
   // todos dicen lo mismo, huele a moneda sin configurar (ver `CurrencyNote`).
   const marketCurrencies = [...new Set(agents.map((a) => a.currency))];
 
-  const [r, conv, ai, products, voice, roas, topProducts, speed] = await Promise.all([
-    getSalesReport(agentId),
-    getConversionReport(agentId),
-    getAiCostReport(agentId),
-    getProductConversion(agentId),
-    getVoiceCallStats(agentId),
-    getRoasReport(agentId),
-    getTopProducts(agentId),
-    getCloseSpeed(agentId),
-  ]);
+  // Rango exacto (Desde/Hasta) o atajo (14/30/90 días) — EXCLUYENTES. Gana el rango
+  // exacto. Sin ninguno: histórico (comportamiento de siempre). El corte es en hora
+  // Colombia. Con rango activo, TODA la página se recalcula dentro de él salvo las
+  // tarjetas móviles Hoy/7/30. Ver ADR-0087.
+  const customRange = normalizeRange(searchParams.from, searchParams.to);
+  const presetKey =
+    !customRange && searchParams.range && RANGE_PRESETS[searchParams.range]
+      ? searchParams.range
+      : undefined;
+  const range: ReportRange | undefined =
+    customRange ?? (presetKey ? lastNDaysRange(RANGE_PRESETS[presetKey]) : undefined);
+
+  // Para la UI del filtro y los títulos: atajo activo, rango a medida y etiqueta de
+  // la ventana que dibujan las series por día.
+  const activePreset = customRange ? "custom" : presetKey ?? "all";
+  const fromParam = customRange ? customRange.fromKey : "";
+  const toParam = customRange ? customRange.toKey : "";
+  const rangeActive = Boolean(range);
+  const seriesLabel = range
+    ? `${formatDayKeyShort(range.fromKey)} – ${formatDayKeyShort(range.toKey)}`
+    : "últimos 14 días";
+
+  const [r, conv, ai, products, voice, roas, topProducts, speed, convByDay] =
+    await Promise.all([
+      getSalesReport(agentId, range),
+      getConversionReport(agentId, range),
+      getAiCostReport(agentId, range),
+      getProductConversion(agentId, range),
+      getVoiceCallStats(agentId, range),
+      getRoasReport(agentId, range),
+      getTopProducts(agentId, range),
+      getCloseSpeed(agentId, range),
+      getConversationsByDayByAgent(agentId, range),
+    ]);
   const maxDayRevenue = Math.max(1, ...r.perDay.map((d) => d.revenue));
   const maxConvDay = Math.max(1, ...conv.perDay.map((d) => d.conversations));
   const maxWeekdayRev = Math.max(1, ...r.byWeekday.map((b) => b.revenue));
@@ -1026,7 +1075,11 @@ export default async function ReportsPage({
             <>Ventas generadas por el agente. Comparte el resumen con el equipo.</>
           )
         }
-        actions={<CopySummaryButton summary={buildSummary(r, conv, roas, speed, scope)} />}
+        actions={
+          <CopySummaryButton
+            summary={buildSummary(r, conv, roas, speed, scope, rangeActive ? seriesLabel : undefined)}
+          />
+        }
       />
 
       {agents.length > 1 && (
@@ -1034,6 +1087,21 @@ export default async function ReportsPage({
           agents={agents.map((a) => ({ id: a.id, name: a.name, brand: a.brand }))}
           current={agentId ?? ""}
         />
+      )}
+
+      <ReportsDateRange
+        agent={agentId ?? ""}
+        preset={activePreset}
+        from={fromParam}
+        to={toParam}
+      />
+
+      {rangeActive && (
+        <p className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-900">
+          Mostrando <span className="font-medium">{seriesLabel}</span>. Todos los gráficos y
+          totales están dentro de ese rango; las tarjetas{" "}
+          <span className="font-medium">Hoy / 7 / 30 días</span> siguen siendo relativas a hoy.
+        </p>
       )}
 
       {/* Titulares */}
@@ -1095,6 +1163,14 @@ export default async function ReportsPage({
         ))}
       </section>
 
+      {/* Conversaciones por día · por agente (ADR-0087): top del embudo, para ver
+          de qué marca están entrando los leads y armar llamadas masivas. */}
+      <ConversationsByAgentChart
+        report={convByDay}
+        seriesLabel={seriesLabel}
+        colors={AGENT_COLORS}
+      />
+
       {/* Costo IA: las tres fuentes que consume el agente + total */}
       <section>
         <div className="mb-3">
@@ -1140,10 +1216,12 @@ export default async function ReportsPage({
         selected={selected ? scope : null}
         marketCurrencies={marketCurrencies}
         agentCount={agents.length}
+        periodLabel={rangeActive ? seriesLabel : "Últimos 14 días"}
       />
 
-      {/* Economía por chat, proyección del mes y crecimiento semanal (ADR-0070) */}
-      <ScalingSection scaling={roas.scaling} currency={roas.currency} />
+      {/* Economía por chat, proyección del mes y crecimiento semanal (ADR-0070).
+          Siempre relativa a hoy, aun con rango activo (ADR-0087). */}
+      <ScalingSection scaling={roas.scaling} currency={roas.currency} alwaysNow={rangeActive} />
 
       {/* Semana a semana: chats por agente vs. ventas (ADR-0079) */}
       <WeeklySection weekly={roas.weekly} />
@@ -1156,7 +1234,8 @@ export default async function ReportsPage({
             <p className="text-xs text-slate-400">
               Conversaciones activas (el cliente escribió) vs. transacciones (órdenes no
               canceladas, por su fecha de creación — misma base que &quot;Órdenes generadas&quot;).
-              Hoy / 7 / 30 días cuentan el periodo; Total es histórico.
+              Hoy / 7 / 30 días son relativos a hoy;{" "}
+              {rangeActive ? `Total es el del rango (${seriesLabel}).` : "Total es histórico."}
             </p>
           </div>
           <div className="text-right">
@@ -1211,7 +1290,7 @@ export default async function ReportsPage({
               <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" aria-hidden="true" />
               Transacciones
             </span>
-            <span className="ml-auto">Últimos 14 días</span>
+            <span className="ml-auto">{rangeActive ? seriesLabel : "Últimos 14 días"}</span>
           </div>
           <ul className="space-y-1.5">
             {conv.perDay.map((d) => (
@@ -1378,7 +1457,7 @@ export default async function ReportsPage({
       {/* Últimos 14 días */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="mb-3 font-display text-[15px] font-semibold tracking-tight text-slate-900">
-          Órdenes generadas · últimos 14 días
+          Órdenes generadas · {seriesLabel}
         </h2>
         <ul className="space-y-1.5">
           {r.perDay.map((d) => (
