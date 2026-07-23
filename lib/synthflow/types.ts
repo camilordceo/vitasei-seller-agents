@@ -26,7 +26,24 @@ export interface SynthflowVoice {
 export const EXTRACTOR_TYPES = ["OPEN_QUESTION", "SINGLE_CHOICE", "YES_NO"] as const;
 export type ExtractorType = (typeof EXTRACTOR_TYPES)[number];
 
-/** Extractor tal como lo configura el dashboard (ADR-0062). */
+/**
+ * Campo de la orden que alimenta un extractor. Es lo que convierte "datos
+ * sueltos de una llamada" en una orden real cuando el resultado es compra
+ * (ADR-0083). `null`/ausente = se deduce del identifier (`direccion` → dirección).
+ */
+export const ORDER_FIELDS = [
+  "name",
+  "address",
+  "city",
+  "phone",
+  "product",
+  "qty",
+  "payment",
+  "notes",
+] as const;
+export type OrderField = (typeof ORDER_FIELDS)[number];
+
+/** Extractor tal como lo configura el dashboard (ADR-0062, ADR-0083). */
 export interface VoiceExtractor {
   identifier: string;
   type: ExtractorType;
@@ -35,6 +52,18 @@ export interface VoiceExtractor {
   examples: string[];
   /** `action_id` en Synthflow; ausente mientras no se haya sincronizado. */
   actionId?: string | null;
+  /**
+   * Este extractor DICE EN QUÉ TERMINÓ la llamada. Solo uno manda por agente
+   * (si hay varios marcados, gana el primero). Ver ADR-0083.
+   */
+  outcome?: boolean;
+  /**
+   * Valores del resultado que significan VENTA (`["compra"]`). Al caer en uno
+   * de estos se genera la orden. Se comparan sin tildes ni mayúsculas.
+   */
+  saleValues?: string[];
+  /** A qué campo de la orden va el dato. `null` = deducirlo del identifier. */
+  orderField?: OrderField | null;
 }
 
 /**

@@ -29,6 +29,34 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   `docs/vitasei-software-design.md` §8.
 
 ### Added
+- **La llamada que cierra venta ahora genera la orden sola** (ADR-0083,
+  `docs/29-resultado-de-llamada-y-campanas.md`, migración 0032). En la ficha del agente,
+  cualquier extractor puede marcarse como **resultado de la llamada** —el típico
+  `resultado_llamada` con opciones *compra / no interesada / volver a llamar / no contesta*— y
+  definir qué opciones significan compra. Cuando la llamada cae en una de ellas se arma la orden
+  con los demás datos extraídos (cada extractor puede declarar a qué campo va: nombre,
+  dirección, ciudad, producto, cantidad, método de pago; lo que no mapea cae en las notas), se
+  homologa el método contra los del agente, se busca el producto en el catálogo —sin
+  coincidencia clara la orden queda **sin ítem**, nunca con un SKU adivinado—, se **avisa al
+  dueño por WhatsApp** y se cancelan seguimientos, reactivaciones y llamadas pendientes. La
+  comparación del resultado es **exacta**: `"no compra"` no es una venta. El resultado se guarda
+  siempre, así que la lista de Llamadas por fin dice en qué terminó cada una sin abrirla —chip
+  verde *"compra · orden creada"* que lleva a Órdenes— y hay un KPI **Compras** con el % sobre
+  las contestadas. Antes hubo llamadas que cerraron compra y solo se descubrían una por una.
+- **Campañas de llamadas masivas: subir un CSV/Excel y llamar uno cada X minutos** (ADR-0084,
+  `docs/29`, migración 0032). Nueva pestaña **Llamadas → Campañas**: se elige agente, ritmo
+  (default 1 cada 2 minutos), objetivo de la llamada y cuándo arranca, y se sube el archivo. El
+  sistema **muestra lo que entendió antes de marcar nada**: cuántos números quedaron listos, una
+  muestra, los repetidos, las filas que no sirvieron con su línea y motivo, y cuánto va a durar
+  la campaña. Lee CSV (coma, punto y coma, tab, comillas, UTF-8 o Latin-1) y **Excel `.xlsx`**
+  con un lector propio sin dependencias; las columnas extra viajan como variables de la llamada.
+  El ritmo se respeta en el worker, no solo al agendar: **una campaña atrasada drena a su ritmo
+  en vez de disparar la cola de golpe** (el cron de llamadas pasa a correr cada minuto). Se
+  puede **pausar, reanudar y cancelar**, y se ve el avance con contestadas y compras. Reusa
+  entero el motor existente: mismas guardas de país y horario, misma reconciliación, mismo
+  cierre y la misma orden automática. Un número frío **no crea conversación**: el contacto y la
+  conversación nacen solo si hay venta (`source = 'voice'`), para no inflar los chats de
+  Reportes ni el ROAS. No se llama a quien ya compró ni a un número con una llamada en curso.
 - **API de gasto REAL en pauta + inversión que deja de ser una hipótesis** (ADR-0082,
   `docs/28-api-gasto-en-pauta.md`, migración 0031). Nuevo endpoint
   `POST /api/ingest/ad-spend` (Bearer `AD_SPEND_API_KEY`) para que el producto que tiene

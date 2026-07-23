@@ -31,7 +31,26 @@ interface ExtractorDraft {
   choices: string;
   examples: string;
   actionId?: string | null;
+  /** Marca de "este extractor dice en qué terminó la llamada" (ADR-0083). */
+  outcome: boolean;
+  /** Opciones que significan compra, separadas por coma. */
+  saleValues: string;
+  /** Campo de la orden al que va el dato; "" = deducirlo del identificador. */
+  orderField: string;
 }
+
+/** Campos de orden que puede alimentar un extractor (ADR-0083). */
+const ORDER_FIELD_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "Automático (según el nombre)" },
+  { value: "name", label: "Nombre del cliente" },
+  { value: "address", label: "Dirección" },
+  { value: "city", label: "Ciudad" },
+  { value: "phone", label: "Teléfono de contacto" },
+  { value: "product", label: "Producto" },
+  { value: "qty", label: "Cantidad" },
+  { value: "payment", label: "Método de pago" },
+  { value: "notes", label: "Notas" },
+];
 
 const field =
   "min-h-[40px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
@@ -88,8 +107,14 @@ export function VoiceSettings({
       choices: e.choices.join(", "),
       examples: e.examples.join(", "),
       actionId: e.actionId ?? null,
+      outcome: e.outcome === true,
+      saleValues: (e.saleValues ?? []).join(", "),
+      orderField: e.orderField ?? "",
     })),
   );
+
+  /** ¿Hay un extractor que diga en qué terminó la llamada? (ADR-0083) */
+  const hasOutcome = extractors.some((e) => e.outcome);
 
   const [voices, setVoices] = useState<SynthflowVoice[]>([]);
   const [voiceSearch, setVoiceSearch] = useState("");
@@ -132,6 +157,9 @@ export function VoiceSettings({
         choices: e.choices.split(",").map((c) => c.trim()).filter(Boolean),
         examples: e.examples.split(",").map((c) => c.trim()).filter(Boolean),
         actionId: e.actionId ?? null,
+        outcome: e.outcome,
+        saleValues: e.saleValues.split(",").map((c) => c.trim()).filter(Boolean),
+        orderField: e.orderField || null,
       })),
       stopWhenAnswered,
     };
@@ -541,6 +569,19 @@ export function VoiceSettings({
           <strong>texto plano</strong>: pedir JSON o usar llaves/corchetes puede dejar la llamada
           colgada.
         </p>
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+          Marca <strong>uno</strong> de estos datos como <strong>resultado de la llamada</strong>{" "}
+          (por ejemplo <code className="font-mono">resultado_llamada</code> con las opciones{" "}
+          <em>compra</em> / <em>no interesada</em>). Cuando la llamada termine en una de las
+          opciones de compra, se <strong>genera la orden</strong> con los demás datos, se avisa al
+          dueño por WhatsApp y la venta aparece en Órdenes igual que una de WhatsApp.
+        </p>
+        {hasOutcome ? null : (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Ningún dato está marcado como resultado: las llamadas se van a grabar y transcribir,
+            pero <strong>ninguna venta se va a registrar sola</strong>.
+          </p>
+        )}
 
         {extractors.length === 0 ? (
           <p className="rounded-lg border border-dashed border-slate-300 px-3 py-4 text-center text-sm text-slate-500">
@@ -637,24 +678,131 @@ export function VoiceSettings({
                     className={`mt-1 ${field}`}
                   />
                 </label>
+
+                {/* Resultado de la llamada / mapeo a la orden (ADR-0083) */}
+                <div className="flex flex-wrap items-end gap-3 border-t border-dashed border-slate-200 pt-2">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={ex.outcome}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        // Solo uno puede ser el resultado: marcar uno desmarca el resto.
+                        setExtractors((prev) =>
+                          prev.map((x, idx) =>
+                            idx === i
+                              ? { ...x, outcome: checked }
+                              : checked
+                                ? { ...x, outcome: false }
+                                : x,
+                          ),
+                        );
+                        dirty();
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-teal-500"
+                    />
+                    Es el resultado de la llamada
+                  </label>
+
+                  {ex.outcome ? (
+                    <label className="block min-w-0 flex-1">
+                      <span className="text-xs text-slate-500">
+                        Opciones que significan COMPRA (coma) → generan la orden
+                      </span>
+                      <input
+                        value={ex.saleValues}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setExtractors((prev) =>
+                            prev.map((x, idx) => (idx === i ? { ...x, saleValues: v } : x)),
+                          );
+                          dirty();
+                        }}
+                        placeholder="compra"
+                        className={`mt-1 ${field}`}
+                      />
+                      <span className="mt-0.5 block text-xs text-slate-400">
+                        Deben coincidir <strong>exactas</strong> con una de las opciones de arriba.
+                      </span>
+                    </label>
+                  ) : (
+                    <label className="block w-56">
+                      <span className="text-xs text-slate-500">Campo de la orden</span>
+                      <select
+                        value={ex.orderField}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setExtractors((prev) =>
+                            prev.map((x, idx) => (idx === i ? { ...x, orderField: v } : x)),
+                          );
+                          dirty();
+                        }}
+                        className={`mt-1 ${field}`}
+                      >
+                        {ORDER_FIELD_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         )}
 
-        <button
-          type="button"
-          onClick={() => {
-            setExtractors((prev) => [
-              ...prev,
-              { identifier: "", type: "OPEN_QUESTION", condition: "", choices: "", examples: "" },
-            ]);
-            dirty();
-          }}
-          className={secondary}
-        >
-          Agregar dato a extraer
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setExtractors((prev) => [
+                ...prev,
+                {
+                  identifier: "",
+                  type: "OPEN_QUESTION",
+                  condition: "",
+                  choices: "",
+                  examples: "",
+                  outcome: false,
+                  saleValues: "",
+                  orderField: "",
+                },
+              ]);
+              dirty();
+            }}
+            className={secondary}
+          >
+            Agregar dato a extraer
+          </button>
+          {hasOutcome ? null : (
+            <button
+              type="button"
+              onClick={() => {
+                setExtractors((prev) => [
+                  {
+                    identifier: "resultado_llamada",
+                    type: "SINGLE_CHOICE",
+                    condition:
+                      "En que termino la llamada: si el cliente confirmo la compra, si no le " +
+                      "intereso, si pidio que lo llamaran despues o si no se pudo hablar con el.",
+                    choices: "compra, no interesada, volver a llamar, no contesta",
+                    examples: "",
+                    outcome: true,
+                    saleValues: "compra",
+                    orderField: "",
+                  },
+                  ...prev,
+                ]);
+                dirty();
+              }}
+              className={secondary}
+            >
+              Agregar extractor de resultado
+            </button>
+          )}
+        </div>
       </div>
 
       {/* --- Guardar -------------------------------------------------------- */}

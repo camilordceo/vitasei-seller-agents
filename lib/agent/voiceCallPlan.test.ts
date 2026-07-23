@@ -145,8 +145,31 @@ describe("parseVoiceExtractors", () => {
         choices: ["a", "b"],
         examples: [],
         actionId: null,
+        // Campos del resultado de la llamada (ADR-0083): apagados por defecto.
+        outcome: false,
+        saleValues: [],
+        orderField: null,
       },
     ]);
+  });
+
+  it("solo el PRIMER extractor marcado es el resultado", () => {
+    const out = parseVoiceExtractors([
+      { identifier: "resultado", condition: "en qué terminó", outcome: true, saleValues: ["compra"] },
+      { identifier: "otro", condition: "algo", outcome: true, saleValues: ["compra"] },
+    ]);
+    expect(out.map((e) => e.outcome)).toEqual([true, false]);
+    // Los valores de venta solo tienen sentido en el que manda.
+    expect(out[1].saleValues).toEqual([]);
+  });
+
+  it("conserva el campo de orden elegido y descarta uno inventado", () => {
+    const out = parseVoiceExtractors([
+      { identifier: "ciudad", condition: "ciudad", orderField: "city" },
+      { identifier: "raro", condition: "raro", orderField: "no-existe" },
+    ]);
+    expect(out[0].orderField).toBe("city");
+    expect(out[1].orderField).toBeNull();
   });
 
   it("descarta los que no tienen instrucción", () => {

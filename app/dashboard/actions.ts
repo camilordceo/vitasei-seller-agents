@@ -23,7 +23,9 @@ import { normalizePhone } from "@/lib/messaging/phone";
 import { uploadChatImage } from "@/lib/supabase/storage";
 import { regenerateReply } from "@/lib/agent/processMessage";
 import { runCatalogImport, type CatalogImportResult } from "@/lib/openai/catalogLoader";
-import type { CallRequestStatus, Json } from "@/lib/supabase/types";
+import type { CallRequestStatus, Json, VoiceCampaignStatus } from "@/lib/supabase/types";
+import { parseCampaignRows, readCampaignFile } from "@/lib/agent/voiceCampaignFile";
+import { createVoiceCampaign, setCampaignStatus } from "@/lib/agent/voiceCampaign";
 import type { OrderEditInput } from "./orders/types";
 import type { ProductPick } from "./conversations/types";
 import type { AgentEditInput, AgentCatalogInput, VoiceConfigInput } from "./agents/types";
@@ -1870,6 +1872,130 @@ export async function syncVoiceToSynthflow(
     if (!agent.voiceId) return { ok: false, error: "El agente no tiene voz seleccionada." };
     await syncAssistantVoice(credsFor(agent), agent.modelId, agent.voiceId);
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// --- Campañas de llamadas masivas (docs/29, ADR-0084) -----------------------
+
+export interface CampaignPreview {
+  ok: boolean;
+  error?: string;
+  /** Números listos para llamar (ya normalizados a E.164 sin `+`). */
+  count: number;
+  /** Muestra para que el operador confirme que leímos SU archivo, no otro. */
+  sample: Array<{ phone: string; name: string | null }>;
+  invalid: Array<{ line: number; value: string; reason: string }>;
+  duplicates: number;
+  columns: string[];
+  totalRead: number;
+}
+
+/**
+ * Lee el archivo (CSV o Excel) y devuelve lo que se va a llamar ANTES de crear
+ * nada. Es a propósito un paso aparte: 100 llamadas salen del dashboard sin
+ * vuelta atrás, así que primero se ve qué entendimos del archivo.
+ */
+export async function previewCampaignFile(
+  fileBase64: string,
+  filename: string | null,
+  countryPrefix: string,
+): Promise<CampaignPreview> {
+  const empty: CampaignPreview = {
+    ok: false,
+    count: 0,
+    sample: [],
+    invalid: [],
+    duplicates: 0,
+    columns: [],
+    totalRead: 0,
+  };
+  try {
+    const bytes = new Uint8Array(Buffer.from(fileBase64, "base64"));
+    if (bytes.length === 0) return { ...empty, error: "El archivo llegó vacío." };
+    const grid = readCampaignFile(bytes, filename);
+    const parsed = parseCampaignRows(grid, { defaultPrefix: countryPrefix });
+    return {
+      ok: parsed.rows.length > 0,
+      error: parsed.rows.length === 0 ? "No se encontró ningún teléfono válido en el archivo." : undefined,
+      count: parsed.rows.length,
+      sample: parsed.rows.slice(0, 5).map((r) => ({ phone: r.phone, name: r.name })),
+      invalid: parsed.invalid.slice(0, 20),
+      duplicates: parsed.duplicates,
+      columns: parsed.columns,
+      totalRead: parsed.totalRead,
+    };
+  } catch (e) {
+    return { ...empty, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export interface CreateCampaignActionInput {
+  agentId: string;
+  name: string;
+  intervalMinutes: number;
+  countryPrefix: string;
+  guidance: string;
+  /** ISO local del navegador; vacío = arranca ya. */
+  startAt: string;
+  filename: string | null;
+  fileBase64: string;
+}
+
+/**
+ * Crea la campaña. El archivo se vuelve a leer aquí (no se confía en la lista
+ * que arma el navegador) y las llamadas quedan agendadas una cada N minutos.
+ */
+export async function createCampaign(
+  input: CreateCampaignActionInput,
+): Promise<{ ok: boolean; error?: string; campaignId?: string; inserted?: number; skipped?: number }> {
+  try {
+    const supabase = createServiceClient();
+    const agent = await loadAgentVoiceConfig(supabase, input.agentId);
+    if (!agent) return { ok: false, error: "Falta aplicar la migración 0027 (llamadas con IA)." };
+    if (!agent.voiceEnabled) {
+      return { ok: false, error: "El agente tiene las llamadas apagadas. Actívalas en su ficha." };
+    }
+    if (!agent.modelId) {
+      return { ok: false, error: "El agente no tiene assistant de Synthflow configurado." };
+    }
+
+    const bytes = new Uint8Array(Buffer.from(input.fileBase64, "base64"));
+    if (bytes.length === 0) return { ok: false, error: "El archivo llegó vacío." };
+    const grid = readCampaignFile(bytes, input.filename);
+    const parsed = parseCampaignRows(grid, { defaultPrefix: input.countryPrefix });
+    if (parsed.rows.length === 0) {
+      return { ok: false, error: "No se encontró ningún teléfono válido en el archivo." };
+    }
+
+    const result = await createVoiceCampaign(supabase, {
+      agentId: input.agentId,
+      name: input.name,
+      intervalMinutes: input.intervalMinutes,
+      guidance: input.guidance,
+      startAt: input.startAt || null,
+      filename: input.filename,
+      rows: parsed.rows,
+    });
+
+    revalidatePath("/dashboard/calls");
+    return { ok: true, campaignId: result.campaignId, inserted: result.inserted, skipped: result.skipped };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Pausa, reanuda o cancela una campaña. Cancelar tumba sus llamadas pendientes. */
+export async function updateCampaignStatus(
+  campaignId: string,
+  status: VoiceCampaignStatus,
+): Promise<{ ok: boolean; error?: string; cancelledCalls?: number }> {
+  try {
+    const supabase = createServiceClient();
+    const cancelledCalls = await setCampaignStatus(supabase, campaignId, status);
+    revalidatePath("/dashboard/calls");
+    return { ok: true, cancelledCalls };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

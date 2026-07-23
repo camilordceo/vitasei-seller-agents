@@ -2611,9 +2611,15 @@ export async function getRecentHotmartEvents(limit = 25): Promise<HotmartEventRo
 
 export interface VoiceCallRow {
   id: string;
-  conversationId: string;
+  /** NULL en una llamada de campaña que no derivó en conversación (ADR-0084). */
+  conversationId: string | null;
   agentId: string | null;
   agentName: string | null;
+  campaignId: string | null;
+  /** Resultado del extractor marcado como tal: `compra`, `no interesada`… */
+  outcome: string | null;
+  /** Orden generada por la llamada (ADR-0083). */
+  orderId: string | null;
   contactName: string | null;
   phone: string;
   stage: number;
@@ -2637,13 +2643,16 @@ export interface VoiceCallFilters {
   bucket?: "scheduled" | "done" | "all";
   status?: VoiceCallStatus;
   agentId?: string;
+  /** Solo las llamadas de una campaña. */
+  campaignId?: string;
   /** Búsqueda por teléfono del cliente (coincidencia parcial). */
   phone?: string;
   limit?: number;
 }
 
 const VOICE_CALL_COLS =
-  "id, conversation_id, agent_id, phone, stage, delay_minutes, trigger, status, " +
+  "id, conversation_id, agent_id, campaign_id, contact_name, outcome, order_id, " +
+  "phone, stage, delay_minutes, trigger, status, " +
   "scheduled_at, placed_at, duration_sec, cost_usd, end_call_reason, recording_url, " +
   "transcript, extracted, error, created_at";
 
@@ -2674,6 +2683,7 @@ export async function getVoiceCalls(opts?: VoiceCallFilters): Promise<VoiceCallR
   else if (opts?.bucket === "done") q = q.in("status", DONE_STATUSES);
 
   if (opts?.agentId) q = q.eq("agent_id", opts.agentId);
+  if (opts?.campaignId) q = q.eq("campaign_id", opts.campaignId);
   if (opts?.phone) {
     const digits = opts.phone.replace(/\D/g, "");
     if (digits) q = q.like("phone", `%${digits}%`);
@@ -2690,8 +2700,12 @@ export async function getVoiceCalls(opts?: VoiceCallFilters): Promise<VoiceCallR
 
 interface VoiceCallDbRow {
   id: string;
-  conversation_id: string;
+  conversation_id: string | null;
   agent_id: string | null;
+  campaign_id: string | null;
+  contact_name: string | null;
+  outcome: string | null;
+  order_id: string | null;
   phone: string;
   stage: number;
   delay_minutes: number | null;
@@ -2716,11 +2730,11 @@ async function hydrateVoiceCalls(
 ): Promise<VoiceCallRow[]> {
   if (rows.length === 0) return [];
 
-  const convoIds = [...new Set(rows.map((r) => r.conversation_id))];
-  const convosRes = await supabase
-    .from("conversations")
-    .select("id, contact_id")
-    .in("id", convoIds);
+  // Las llamadas de campaña no tienen conversación: su nombre viene del archivo.
+  const convoIds = [...new Set(rows.map((r) => r.conversation_id).filter(Boolean))] as string[];
+  const convosRes = convoIds.length
+    ? await supabase.from("conversations").select("id, contact_id").in("id", convoIds)
+    : { data: [] };
   const contactByConvo = new Map(
     (convosRes.data ?? []).map((c) => [c.id as string, c.contact_id as string]),
   );
@@ -2746,7 +2760,11 @@ async function hydrateVoiceCalls(
     conversationId: r.conversation_id,
     agentId: r.agent_id,
     agentName: r.agent_id ? (nameByAgent.get(r.agent_id) ?? null) : null,
-    contactName: nameByContact.get(contactByConvo.get(r.conversation_id) ?? "") ?? null,
+    campaignId: r.campaign_id,
+    outcome: r.outcome,
+    orderId: r.order_id,
+    contactName:
+      nameByContact.get(contactByConvo.get(r.conversation_id ?? "") ?? "") ?? r.contact_name ?? null,
     phone: r.phone,
     stage: r.stage,
     delayMinutes: r.delay_minutes,
@@ -2793,7 +2811,11 @@ export async function getConversationIdsWithVoiceCall(): Promise<string[]> {
     .select("conversation_id")
     .in("status", ["placed", "completed", "no_answer", "failed"] as VoiceCallStatus[]);
   if (error) return [];
-  return [...new Set((data ?? []).map((r) => r.conversation_id as string))];
+  return [
+    ...new Set(
+      (data ?? []).map((r) => r.conversation_id as string | null).filter(Boolean) as string[],
+    ),
+  ];
 }
 
 export interface VoiceCallStats {
@@ -2804,6 +2826,8 @@ export interface VoiceCallStats {
   failed: number;
   totalMinutes: number;
   totalCostUsd: number;
+  /** Llamadas que terminaron en COMPRA (extractor de resultado). ADR-0083. */
+  sales: number;
 }
 
 /** Resumen para la cabecera de la sección Llamadas y el reporte de costos. */
@@ -2816,9 +2840,10 @@ export async function getVoiceCallStats(agentId?: string): Promise<VoiceCallStat
     failed: 0,
     totalMinutes: 0,
     totalCostUsd: 0,
+    sales: 0,
   };
   const supabase = createServiceClient();
-  let q = supabase.from("voice_calls").select("status, duration_sec, cost_usd");
+  let q = supabase.from("voice_calls").select("status, duration_sec, cost_usd, order_id");
   if (agentId) q = q.eq("agent_id", agentId);
 
   const { data, error } = await q;
@@ -2826,8 +2851,14 @@ export async function getVoiceCallStats(agentId?: string): Promise<VoiceCallStat
 
   const stats = { ...empty };
   for (const raw of data) {
-    const r = raw as { status: string; duration_sec: number | null; cost_usd: number | null };
+    const r = raw as {
+      status: string;
+      duration_sec: number | null;
+      cost_usd: number | null;
+      order_id: string | null;
+    };
     stats.total++;
+    if (r.order_id) stats.sales++;
     if (r.status === "scheduled" || r.status === "processing") stats.scheduled++;
     if (r.status === "completed") stats.completed++;
     if (r.status === "no_answer") stats.noAnswer++;
@@ -2838,6 +2869,121 @@ export async function getVoiceCallStats(agentId?: string): Promise<VoiceCallStat
   stats.totalMinutes = Number(stats.totalMinutes.toFixed(1));
   stats.totalCostUsd = Number(stats.totalCostUsd.toFixed(2));
   return stats;
+}
+
+// --- Campañas de llamadas masivas (ADR-0084) --------------------------------
+
+export interface VoiceCampaignRow {
+  id: string;
+  name: string;
+  agentId: string;
+  agentName: string | null;
+  status: string;
+  intervalMinutes: number;
+  guidance: string | null;
+  sourceFilename: string | null;
+  total: number;
+  startsAt: string;
+  finishedAt: string | null;
+  createdAt: string;
+  /** Cómo va: llamadas pendientes, hechas, contestadas y ventas. */
+  pending: number;
+  done: number;
+  answered: number;
+  sales: number;
+  costUsd: number;
+}
+
+/**
+ * Campañas con su avance. El avance se cuenta sobre `voice_calls` —la campaña no
+ * lleva contadores propios— para que lo que muestra la pantalla sea siempre lo
+ * que de verdad pasó, aunque una fila se cancele a mano.
+ */
+export async function getVoiceCampaigns(limit = 50): Promise<VoiceCampaignRow[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("voice_campaigns")
+    .select(
+      "id, name, agent_id, status, interval_minutes, guidance, source_filename, total, starts_at, finished_at, created_at",
+    )
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    if (error.code === "42P01") return []; // migración 0032 sin aplicar
+    throw new Error(`getVoiceCampaigns: ${error.message}`);
+  }
+  const campaigns = (data ?? []) as unknown as Array<{
+    id: string;
+    name: string;
+    agent_id: string;
+    status: string;
+    interval_minutes: number;
+    guidance: string | null;
+    source_filename: string | null;
+    total: number;
+    starts_at: string;
+    finished_at: string | null;
+    created_at: string;
+  }>;
+  if (campaigns.length === 0) return [];
+
+  const ids = campaigns.map((c) => c.id);
+  const { data: calls } = await supabase
+    .from("voice_calls")
+    .select("campaign_id, status, order_id, cost_usd")
+    .in("campaign_id", ids);
+
+  const progress = new Map<
+    string,
+    { pending: number; done: number; answered: number; sales: number; costUsd: number }
+  >();
+  for (const raw of calls ?? []) {
+    const row = raw as {
+      campaign_id: string | null;
+      status: string;
+      order_id: string | null;
+      cost_usd: number | null;
+    };
+    if (!row.campaign_id) continue;
+    const entry =
+      progress.get(row.campaign_id) ??
+      { pending: 0, done: 0, answered: 0, sales: 0, costUsd: 0 };
+    if (row.status === "scheduled" || row.status === "processing") entry.pending++;
+    else entry.done++;
+    if (row.status === "completed") entry.answered++;
+    if (row.order_id) entry.sales++;
+    entry.costUsd += Number(row.cost_usd ?? 0);
+    progress.set(row.campaign_id, entry);
+  }
+
+  const agentIds = [...new Set(campaigns.map((c) => c.agent_id))];
+  const { data: agents } = await supabase.from("agents").select("id, name").in("id", agentIds);
+  const nameByAgent = new Map(
+    (agents ?? []).map((a) => [a.id as string, (a.name as string | null) ?? null]),
+  );
+
+  return campaigns.map((c) => {
+    const p = progress.get(c.id) ?? { pending: 0, done: 0, answered: 0, sales: 0, costUsd: 0 };
+    return {
+      id: c.id,
+      name: c.name,
+      agentId: c.agent_id,
+      agentName: nameByAgent.get(c.agent_id) ?? null,
+      status: c.status,
+      intervalMinutes: c.interval_minutes,
+      guidance: c.guidance,
+      sourceFilename: c.source_filename,
+      total: c.total,
+      startsAt: c.starts_at,
+      finishedAt: c.finished_at,
+      createdAt: c.created_at,
+      pending: p.pending,
+      done: p.done,
+      answered: p.answered,
+      sales: p.sales,
+      costUsd: Number(p.costUsd.toFixed(2)),
+    };
+  });
 }
 
 /**

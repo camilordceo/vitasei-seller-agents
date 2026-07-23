@@ -30,6 +30,12 @@ IA (Synthflow), agendadas desde el flujo de WhatsApp o disparadas a mano, con el
 **Fase 2 (fuera de este alcance):** knowledge base (se carga desde Synthflow), llamadas
 entrantes (`inbound_call_webhook_url`), campañas masivas fuera de conversación.
 
+> **Continuación:** el **resultado de la llamada → orden** y las **campañas masivas** ya están
+> implementados en [docs/29](29-resultado-de-llamada-y-campanas.md) (ADR-0083 y ADR-0084,
+> migración `0032`). Esas dos features cambian cosas de este documento: `voice_calls` gana
+> `outcome`, `order_id`, `campaign_id`, `contact_name` y `variables`; `conversation_id` y
+> `contact_id` pasan a ser opcionales; y el cron pasa a correr **cada minuto**.
+
 ---
 
 ## 2. Contrato de la API de Synthflow — VERIFICADO contra la cuenta real

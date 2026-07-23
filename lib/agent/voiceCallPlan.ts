@@ -1,8 +1,11 @@
 import {
   EXTRACTOR_TYPES,
+  ORDER_FIELDS,
   type ExtractorType,
+  type OrderField,
   type VoiceExtractor,
 } from "@/lib/synthflow/types";
+import { defaultOutcomeExtractor } from "@/lib/agent/voiceOutcome";
 import { formatExtractedValue, humanizeIdentifier } from "@/lib/synthflow/extractors";
 import type { ExtractedData } from "@/lib/synthflow/extractors";
 
@@ -154,22 +157,40 @@ export function parseVoiceExtractors(raw: unknown): VoiceExtractor[] {
         ? v.map((x) => String(x ?? "").trim()).filter((x) => x.length > 0).slice(0, 40)
         : [];
 
+    const choices = toList(record.choices);
+    // Marca de "este extractor dice en qué terminó la llamada" (ADR-0083). Solo
+    // el PRIMERO marcado manda: dos resultados serían dos verdades.
+    const outcome = record.outcome === true && !out.some((e) => e.outcome);
+    const orderField =
+      typeof record.orderField === "string" &&
+      (ORDER_FIELDS as readonly string[]).includes(record.orderField)
+        ? (record.orderField as OrderField)
+        : null;
+
     seen.add(identifier);
     out.push({
       identifier,
       type,
       condition,
-      choices: toList(record.choices),
+      choices,
       examples: toList(record.examples),
       actionId: typeof record.actionId === "string" && record.actionId ? record.actionId : null,
+      outcome,
+      // Los valores de venta solo tienen sentido en el extractor de resultado.
+      saleValues: outcome ? toList(record.saleValues) : [],
+      orderField,
     });
   }
   return out.slice(0, 20);
 }
 
-/** Extractores por defecto para una tienda: lo que pidió el negocio. */
+/**
+ * Extractores por defecto para una tienda: lo que pidió el negocio. El primero
+ * es el **resultado de la llamada**, que es el que dispara la orden (ADR-0083).
+ */
 export function defaultExtractors(): VoiceExtractor[] {
   return [
+    defaultOutcomeExtractor(),
     {
       identifier: "nombre",
       type: "OPEN_QUESTION",
@@ -177,6 +198,9 @@ export function defaultExtractors(): VoiceExtractor[] {
       choices: [],
       examples: ["Camilo Ordoñez", "Laura Caicedo"],
       actionId: null,
+      outcome: false,
+      saleValues: [],
+      orderField: "name",
     },
     {
       identifier: "producto",
@@ -185,6 +209,9 @@ export function defaultExtractors(): VoiceExtractor[] {
       choices: [],
       examples: ["Colageno hidrolizado", "Magnesio"],
       actionId: null,
+      outcome: false,
+      saleValues: [],
+      orderField: "product",
     },
     {
       identifier: "direccion",
@@ -194,6 +221,9 @@ export function defaultExtractors(): VoiceExtractor[] {
       choices: [],
       examples: ["Calle 145 #20-30 apto 501, Bogota", "Carrera 7 #80-15, Medellin"],
       actionId: null,
+      outcome: false,
+      saleValues: [],
+      orderField: "address",
     },
     {
       identifier: "metodo_pago",
@@ -202,6 +232,9 @@ export function defaultExtractors(): VoiceExtractor[] {
       choices: [],
       examples: ["contra entrega", "transferencia", "Addi"],
       actionId: null,
+      outcome: false,
+      saleValues: [],
+      orderField: "payment",
     },
   ];
 }
@@ -298,6 +331,10 @@ export function buildCallNote(args: {
   extracted: ExtractedData;
   transcript: string | null;
   recordingUrl: string | null;
+  /** Resultado del extractor marcado como tal (`compra`…). Ver ADR-0083. */
+  outcome?: string | null;
+  /** La llamada generó orden: es lo primero que el equipo necesita ver. */
+  orderCreated?: boolean;
 }): string {
   const lines: string[] = [];
   const label = describeCallStatus(args.status);
@@ -306,6 +343,8 @@ export function buildCallNote(args: {
     : "";
   lines.push(`Llamada con IA — ${label}${mins}`);
 
+  if (args.outcome) lines.push(`Resultado: ${args.outcome}`);
+  if (args.orderCreated) lines.push("Se generó la orden con los datos de la llamada.");
   if (args.endCallReason) lines.push(`Cierre: ${describeEndReason(args.endCallReason)}`);
 
   const entries = Object.entries(args.extracted);

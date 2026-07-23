@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/cron/voice-calls",
-      "schedule": "*/5 * * * *"
+      "schedule": "* * * * *"
     }
   ]
 }

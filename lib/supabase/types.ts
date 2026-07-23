@@ -49,8 +49,12 @@ export type VoiceCallStatus =
   | "failed"
   | "cancelled"
   | "skipped";
-export type VoiceCallTrigger = "auto" | "manual" | "request";
-export type ConversationSource = "whatsapp" | "hotmart" | "manual" | "other";
+/** `campaign` = fila de una campaña de llamadas masivas (ADR-0084). */
+export type VoiceCallTrigger = "auto" | "manual" | "request" | "campaign";
+/** Estado de una campaña de llamadas masivas. Texto + CHECK (ADR-0084). */
+export type VoiceCampaignStatus = "running" | "paused" | "completed" | "cancelled";
+/** `voice` = la conversación nació de una llamada con IA que cerró venta (ADR-0083). */
+export type ConversationSource = "whatsapp" | "hotmart" | "manual" | "other" | "voice";
 
 export type Json =
   | string
@@ -596,12 +600,66 @@ export interface Database {
         };
         Relationships: [];
       };
+      voice_campaigns: {
+        Row: {
+          id: string;
+          agent_id: string;
+          name: string;
+          status: VoiceCampaignStatus;
+          /** Minutos entre llamada y llamada. */
+          interval_minutes: number;
+          guidance: string | null;
+          source_filename: string | null;
+          total: number;
+          starts_at: string;
+          finished_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          agent_id: string;
+          name: string;
+          status?: VoiceCampaignStatus;
+          interval_minutes?: number;
+          guidance?: string | null;
+          source_filename?: string | null;
+          total?: number;
+          starts_at?: string;
+          finished_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          agent_id?: string;
+          name?: string;
+          status?: VoiceCampaignStatus;
+          interval_minutes?: number;
+          guidance?: string | null;
+          source_filename?: string | null;
+          total?: number;
+          starts_at?: string;
+          finished_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       voice_calls: {
         Row: {
           id: string;
-          conversation_id: string;
-          contact_id: string;
+          /** NULL en las llamadas de campaña: un número frío no tiene chat (ADR-0084). */
+          conversation_id: string | null;
+          contact_id: string | null;
           agent_id: string | null;
+          campaign_id: string | null;
+          contact_name: string | null;
+          variables: Json | null;
+          /** Valor del extractor de resultado (`compra`, `no interesada`…). ADR-0083. */
+          outcome: string | null;
+          /** Orden generada por la llamada (resultado = compra). ADR-0083. */
+          order_id: string | null;
           phone: string;
           stage: number;
           delay_minutes: number | null;
@@ -628,9 +686,14 @@ export interface Database {
         };
         Insert: {
           id?: string;
-          conversation_id: string;
-          contact_id: string;
+          conversation_id?: string | null;
+          contact_id?: string | null;
           agent_id?: string | null;
+          campaign_id?: string | null;
+          contact_name?: string | null;
+          variables?: Json | null;
+          outcome?: string | null;
+          order_id?: string | null;
           phone: string;
           stage?: number;
           delay_minutes?: number | null;
@@ -657,9 +720,14 @@ export interface Database {
         };
         Update: {
           id?: string;
-          conversation_id?: string;
-          contact_id?: string;
+          conversation_id?: string | null;
+          contact_id?: string | null;
           agent_id?: string | null;
+          campaign_id?: string | null;
+          contact_name?: string | null;
+          variables?: Json | null;
+          outcome?: string | null;
+          order_id?: string | null;
           phone?: string;
           stage?: number;
           delay_minutes?: number | null;

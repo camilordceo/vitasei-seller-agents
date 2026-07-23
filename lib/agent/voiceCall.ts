@@ -8,7 +8,7 @@ import {
   type SynthflowCreds,
 } from "@/lib/synthflow/client";
 import { callCostUsd } from "@/lib/synthflow/pricing";
-import type { NormalizedCall } from "@/lib/synthflow/types";
+import type { NormalizedCall, VoiceExtractor } from "@/lib/synthflow/types";
 import type { Json } from "@/lib/supabase/types";
 import {
   buildCallNote,
@@ -16,10 +16,14 @@ import {
   evaluateVoiceCall,
   parseVoiceConfig,
   parseVoiceCountries,
+  parseVoiceExtractors,
   phoneAllowed,
   planVoiceCalls,
   toE164,
 } from "@/lib/agent/voiceCallPlan";
+import { evaluateCampaignPace } from "@/lib/agent/voiceCampaignPlan";
+import { loadCampaignPace } from "@/lib/agent/voiceCampaign";
+import { applyVoiceCallOutcome } from "@/lib/agent/voiceOrder";
 
 /**
  * Motor de las llamadas con IA (Synthflow). Ver docs/25 y ADR-0060..0063.
@@ -35,7 +39,7 @@ type EventPayload = Record<string, unknown>;
 /** Columnas de voz del agente. Se leen APARTE de `AGENT_COLS` (42703). */
 const VOICE_COLS =
   "id, name, voice_enabled, synthflow_api_key, synthflow_model_id, synthflow_from_number, " +
-  "voice_id, voice_prompt, voice_greeting, voice_config, voice_countries, " +
+  "voice_id, voice_prompt, voice_greeting, voice_config, voice_countries, voice_extractors, " +
   "voice_stop_when_answered, schedule_enabled, schedule, schedule_timezone";
 
 export interface AgentVoiceConfig {
@@ -50,6 +54,8 @@ export interface AgentVoiceConfig {
   greeting: string | null;
   stages: ReturnType<typeof parseVoiceConfig>;
   countries: string[];
+  /** Extractores del agente: de aquí sale el resultado de la llamada (ADR-0083). */
+  extractors: VoiceExtractor[];
   stopWhenAnswered: boolean;
   scheduleEnabled: boolean;
   schedule: unknown;
@@ -85,6 +91,7 @@ export async function loadAgentVoiceConfig(
     greeting: (row.voice_greeting as string | null) ?? null,
     stages: parseVoiceConfig(row.voice_config),
     countries: parseVoiceCountries(row.voice_countries),
+    extractors: parseVoiceExtractors(row.voice_extractors),
     stopWhenAnswered: row.voice_stop_when_answered !== false,
     scheduleEnabled: row.schedule_enabled === true,
     schedule: row.schedule,
@@ -199,17 +206,26 @@ export interface VoiceRunStats {
   cancelled: number;
   deferred: number;
   failed: number;
+  /** Llamadas de campaña que esperaron su turno (ritmo). Ver ADR-0084. */
+  paced: number;
 }
 
 interface DueRow {
   id: string;
-  conversation_id: string;
-  contact_id: string;
+  conversation_id: string | null;
+  contact_id: string | null;
   agent_id: string | null;
+  campaign_id: string | null;
+  contact_name: string | null;
+  variables: Record<string, unknown> | null;
   phone: string;
   stage: number;
   delay_minutes: number | null;
 }
+
+const DUE_COLS =
+  "id, conversation_id, contact_id, agent_id, campaign_id, contact_name, variables, " +
+  "phone, stage, delay_minutes";
 
 /**
  * Procesa las llamadas vencidas. Cada fila se toma con un **claim atómico**
@@ -220,24 +236,85 @@ export async function runDueVoiceCalls(opts?: {
   limit?: number;
   nowMs?: number;
 }): Promise<VoiceRunStats> {
-  const stats: VoiceRunStats = { processed: 0, placed: 0, cancelled: 0, deferred: 0, failed: 0 };
+  const stats: VoiceRunStats = {
+    processed: 0,
+    placed: 0,
+    cancelled: 0,
+    deferred: 0,
+    failed: 0,
+    paced: 0,
+  };
   if (!env.VOICE_CALLS_ENABLED) return stats;
 
   const supabase = createServiceClient();
   const now = opts?.nowMs ?? Date.now();
   const limit = opts?.limit ?? 25;
 
-  const { data: due, error } = await supabase
+  // Dos consultas a propósito. Una campaña de 500 números tiene siempre las
+  // filas más viejas: con un solo `limit` se comería el lote entero y las
+  // llamadas de las conversaciones (las que vienen de un cliente que ESCRIBIÓ)
+  // se quedarían esperando detrás de una lista fría. Primero las conversaciones.
+  const dueAt = new Date(now).toISOString();
+  const conversationDue = await supabase
     .from("voice_calls")
-    .select("id, conversation_id, contact_id, agent_id, phone, stage, delay_minutes")
+    .select(DUE_COLS)
     .eq("status", "scheduled")
-    .lte("scheduled_at", new Date(now).toISOString())
+    .lte("scheduled_at", dueAt)
+    .is("campaign_id", null)
     .order("scheduled_at", { ascending: true })
     .limit(limit);
-  if (error) throw new Error(`load-due-voice-calls: ${error.message}`);
-  if (!due || due.length === 0) return stats;
+  if (conversationDue.error) {
+    throw new Error(`load-due-voice-calls: ${conversationDue.error.message}`);
+  }
 
-  for (const row of due as unknown as DueRow[]) {
+  const campaignDue = await supabase
+    .from("voice_calls")
+    .select(DUE_COLS)
+    .eq("status", "scheduled")
+    .lte("scheduled_at", dueAt)
+    .not("campaign_id", "is", null)
+    .order("scheduled_at", { ascending: true })
+    .limit(limit);
+  if (campaignDue.error) throw new Error(`load-due-voice-calls: ${campaignDue.error.message}`);
+
+  const rows = [
+    ...((conversationDue.data ?? []) as unknown as DueRow[]),
+    ...((campaignDue.data ?? []) as unknown as DueRow[]),
+  ];
+  if (rows.length === 0) return stats;
+
+  // Ritmo de las campañas. Se resuelve ANTES de tocar ninguna fila: si el cron
+  // estuvo caído, la cola vencida puede tener 30 llamadas de la misma campaña y
+  // colocarlas de golpe es justo lo que el intervalo existe para impedir.
+  const campaignIds = [...new Set(rows.map((r) => r.campaign_id).filter(Boolean))] as string[];
+  const pace = await loadCampaignPace(supabase, campaignIds);
+
+  for (const row of rows) {
+    if (row.campaign_id) {
+      const campaign = pace.get(row.campaign_id);
+      if (!campaign) continue; // campaña borrada: la fila se limpia sola por cascada
+      const decision = evaluateCampaignPace({
+        status: campaign.status,
+        lastPlacedMs: campaign.lastPlacedMs,
+        intervalMinutes: campaign.intervalMinutes,
+        startsAtMs: campaign.startsAtMs,
+        nowMs: now,
+      });
+      if (decision.action === "wait") {
+        stats.paced++;
+        continue; // ni se reclama: sigue `scheduled` esperando su turno
+      }
+      if (decision.action === "cancel") {
+        await supabase
+          .from("voice_calls")
+          .update({ status: "cancelled", error: decision.reason })
+          .eq("id", row.id)
+          .eq("status", "scheduled");
+        stats.cancelled++;
+        continue;
+      }
+    }
+
     const { data: claimed, error: claimErr } = await supabase
       .from("voice_calls")
       .update({ status: "processing" })
@@ -251,6 +328,11 @@ export async function runDueVoiceCalls(opts?: {
     try {
       const outcome = await processVoiceCallRow(supabase, row, now);
       stats[outcome]++;
+      // Marcar el reloj de la campaña con la llamada que ACABA de salir.
+      if (outcome === "placed" && row.campaign_id) {
+        const campaign = pace.get(row.campaign_id);
+        if (campaign) campaign.lastPlacedMs = Date.now();
+      }
     } catch (e) {
       stats.failed++;
       const message = e instanceof Error ? e.message : String(e);
@@ -273,39 +355,56 @@ export async function runDueVoiceCalls(opts?: {
 type RowOutcome = "placed" | "cancelled" | "deferred";
 
 async function processVoiceCallRow(supabase: DB, row: DueRow, nowMs: number): Promise<RowOutcome> {
-  const { data: convo } = await supabase
-    .from("conversations")
-    .select("id, status, ai_paused, agent_id, product_category")
-    .eq("id", row.conversation_id)
-    .maybeSingle();
+  // Una fila de campaña NO tiene conversación: es un número frío. Las guardas
+  // que dependen del chat se resuelven distinto (ver abajo), pero las que
+  // protegen a la persona —país y horario— son idénticas. Ver ADR-0084.
+  const convo = row.conversation_id
+    ? (
+        await supabase
+          .from("conversations")
+          .select("id, status, ai_paused, agent_id, product_category")
+          .eq("id", row.conversation_id)
+          .maybeSingle()
+      ).data
+    : null;
 
   const agentId = row.agent_id ?? (convo as { agent_id?: string } | null)?.agent_id ?? null;
   const agent = agentId ? await loadAgentVoiceConfig(supabase, agentId) : null;
 
-  // ¿Ya compró?
-  const { data: orders } = await supabase
-    .from("orders")
-    .select("id")
-    .eq("conversation_id", row.conversation_id)
-    .neq("status", "cancelled")
-    .limit(1);
+  // ¿Ya compró? En una conversación se mira su orden; en una campaña, si ese
+  // teléfono ya es cliente (llamar a quien acaba de comprar es el peor uso del
+  // minuto y de la paciencia del cliente).
+  const hasOrder = row.conversation_id
+    ? ((
+        await supabase
+          .from("orders")
+          .select("id")
+          .eq("conversation_id", row.conversation_id)
+          .neq("status", "cancelled")
+          .limit(1)
+      ).data?.length ?? 0) > 0
+    : await phoneHasOrder(supabase, row.phone);
 
-  // ¿Alguna etapa previa ya fue contestada?
-  const { data: answered } = await supabase
-    .from("voice_calls")
-    .select("id")
-    .eq("conversation_id", row.conversation_id)
-    .eq("status", "completed")
-    .limit(1);
+  // ¿Alguna etapa previa ya fue contestada? (solo aplica dentro de una conversación)
+  const answered = row.conversation_id
+    ? ((
+        await supabase
+          .from("voice_calls")
+          .select("id")
+          .eq("conversation_id", row.conversation_id)
+          .eq("status", "completed")
+          .limit(1)
+      ).data?.length ?? 0) > 0
+    : false;
 
   const convoRow = convo as { status?: string; ai_paused?: boolean; product_category?: string } | null;
 
   const decision = evaluateVoiceCall({
     conversationStatus: convoRow?.status ?? "active",
     aiPaused: convoRow?.ai_paused === true,
-    hasOrder: (orders?.length ?? 0) > 0,
+    hasOrder,
     agentVoiceEnabled: agent?.voiceEnabled === true,
-    alreadyAnswered: (answered?.length ?? 0) > 0,
+    alreadyAnswered: answered,
     stopWhenAnswered: agent?.stopWhenAnswered !== false,
     phoneAllowed: agent ? phoneAllowed(row.phone, agent.countries) : false,
     withinSchedule: agent ? withinSchedule(agent, new Date(nowMs)) : false,
@@ -357,6 +456,20 @@ function withinSchedule(agent: AgentVoiceConfig, now: Date): boolean {
   }
 }
 
+/** ¿Este teléfono ya compró? (guarda de las campañas: no llamar a un cliente). */
+async function phoneHasOrder(supabase: DB, phone: string): Promise<boolean> {
+  const { data: contacts } = await supabase.from("contacts").select("id").eq("phone", phone);
+  const ids = (contacts ?? []).map((c) => (c as { id: string }).id);
+  if (ids.length === 0) return false;
+  const { data: orders } = await supabase
+    .from("orders")
+    .select("id")
+    .in("contact_id", ids)
+    .neq("status", "cancelled")
+    .limit(1);
+  return (orders?.length ?? 0) > 0;
+}
+
 /** Marca el número y guarda el `call_id`. */
 async function dialAndSave(
   supabase: DB,
@@ -364,32 +477,54 @@ async function dialAndSave(
   row: DueRow,
   productCategory: string | null,
 ): Promise<void> {
-  const { data: contact } = await supabase
-    .from("contacts")
-    .select("name")
-    .eq("id", row.contact_id)
-    .maybeSingle();
-  const contactName = (contact as { name?: string } | null)?.name ?? null;
+  // Contexto: de la conversación si la hay; del archivo si es una campaña.
+  let contactName: string | null = row.contact_name;
+  let lastMessages: string[] = [];
 
-  const { data: recent } = await supabase
-    .from("messages")
-    .select("direction, content")
-    .eq("conversation_id", row.conversation_id)
-    .order("created_at", { ascending: false })
-    .limit(6);
+  if (row.contact_id) {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("name")
+      .eq("id", row.contact_id)
+      .maybeSingle();
+    contactName = (contact as { name?: string } | null)?.name ?? contactName;
+  }
 
-  const lastMessages = (recent ?? [])
-    .slice()
-    .reverse()
-    .map((m) => {
-      const msg = m as { direction?: string; content?: string };
-      const who = msg.direction === "inbound" ? "Cliente" : "Bot";
-      return `${who}: ${(msg.content ?? "").slice(0, 200)}`;
-    })
-    .filter((s) => s.length > 8);
+  if (row.conversation_id) {
+    const { data: recent } = await supabase
+      .from("messages")
+      .select("direction, content")
+      .eq("conversation_id", row.conversation_id)
+      .order("created_at", { ascending: false })
+      .limit(6);
 
+    lastMessages = (recent ?? [])
+      .slice()
+      .reverse()
+      .map((m) => {
+        const msg = m as { direction?: string; content?: string };
+        const who = msg.direction === "inbound" ? "Cliente" : "Bot";
+        return `${who}: ${(msg.content ?? "").slice(0, 200)}`;
+      })
+      .filter((s) => s.length > 8);
+  }
+
+  // El objetivo de la llamada: el de la etapa de la cadencia, o el de la campaña.
   const stageIndex = Math.max(0, row.stage - 1);
-  const guidance = agent.stages[stageIndex]?.guidance ?? null;
+  let guidance = agent.stages[stageIndex]?.guidance ?? null;
+  const extraVars: Record<string, string> = {};
+  if (row.campaign_id) {
+    const { data: campaign } = await supabase
+      .from("voice_campaigns")
+      .select("guidance")
+      .eq("id", row.campaign_id)
+      .maybeSingle();
+    guidance = (campaign as { guidance?: string | null } | null)?.guidance ?? null;
+    for (const [key, value] of Object.entries(row.variables ?? {})) {
+      if (value == null || value === "") continue;
+      extraVars[key] = String(value).slice(0, 200);
+    }
+  }
 
   const prompt = agent.prompt
     ? buildCallPrompt({
@@ -411,6 +546,7 @@ async function dialAndSave(
     variables: {
       nombre: contactName ?? "",
       producto: productCategory ?? "",
+      ...extraVars,
     },
   });
 
@@ -429,7 +565,8 @@ async function dialAndSave(
     voiceCallId: row.id,
     stage: row.stage,
     callId,
-    trigger: "auto",
+    trigger: row.campaign_id ? "campaign" : "auto",
+    campaignId: row.campaign_id,
   });
 }
 
@@ -447,15 +584,19 @@ export async function finalizeVoiceCall(
 ): Promise<void> {
   const { data: row } = await supabase
     .from("voice_calls")
-    .select("id, conversation_id, contact_id, agent_id, stage, status")
+    .select("id, conversation_id, contact_id, agent_id, campaign_id, contact_name, phone, stage, status")
     .eq("id", voiceCallId)
     .maybeSingle();
   if (!row) return;
 
   const current = row as unknown as {
     id: string;
-    conversation_id: string;
+    conversation_id: string | null;
+    contact_id: string | null;
     agent_id: string | null;
+    campaign_id: string | null;
+    contact_name: string | null;
+    phone: string;
     stage: number;
     status: string;
   };
@@ -482,26 +623,86 @@ export async function finalizeVoiceCall(
     })
     .eq("id", voiceCallId);
 
-  // La nota en el hilo de la conversación.
-  const note = buildCallNote({
-    status: call.status,
-    durationSec: call.durationSec,
-    endCallReason: call.endCallReason,
-    extracted: call.extracted,
-    transcript: call.transcript,
-    recordingUrl: call.recordingUrl,
-  });
+  const agent = current.agent_id ? await loadAgentVoiceConfig(supabase, current.agent_id) : null;
 
-  await supabase.from("messages").insert({
-    conversation_id: current.conversation_id,
-    direction: "outbound",
-    role: "system",
-    type: "other",
-    content: note,
-    tags: ["#llamada-ia"] as unknown as Json,
-  });
+  // El RESULTADO de la llamada y, si fue compra, la orden (ADR-0083). Va en
+  // try/catch a propósito: un problema armando la orden no puede costarnos el
+  // registro de la llamada, que ya está guardado arriba.
+  let outcome: string | null = null;
+  let orderId: string | null = null;
+  let conversationId = current.conversation_id;
+  let contactId = current.contact_id;
+  try {
+    const result = await applyVoiceCallOutcome(
+      supabase,
+      {
+        voiceCallId,
+        conversationId: current.conversation_id,
+        contactId: current.contact_id,
+        agentId: current.agent_id,
+        phone: current.phone,
+        contactName: current.contact_name,
+        extracted: call.extracted,
+      },
+      agent?.extractors ?? [],
+    );
+    outcome = result.outcome;
+    orderId = result.orderId;
+    conversationId = result.conversationId;
+    contactId = result.contactId;
+    if (result.error) {
+      await logEvent(supabase, conversationId, "voice_call_order_error", {
+        voiceCallId,
+        error: result.error,
+      });
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[finalizeVoiceCall] resultado/orden falló:", message);
+    await logEvent(supabase, current.conversation_id, "voice_call_order_error", {
+      voiceCallId,
+      error: message,
+    });
+  }
 
-  await logEvent(supabase, current.conversation_id, "voice_call_completed", {
+  // El resultado se guarda SIEMPRE (aunque no sea venta): es la columna que
+  // faltaba para saber en qué terminó una llamada sin abrirla. Si la venta creó
+  // la conversación, la llamada se cuelga de ella para que el hilo quede completo.
+  await supabase
+    .from("voice_calls")
+    .update({
+      outcome,
+      order_id: orderId,
+      conversation_id: conversationId,
+      contact_id: contactId,
+    })
+    .eq("id", voiceCallId);
+
+  // La nota en el hilo de la conversación (si la hay: una campaña sin venta no
+  // crea conversación, y su registro vive en la sección Llamadas).
+  if (conversationId) {
+    const note = buildCallNote({
+      status: call.status,
+      durationSec: call.durationSec,
+      endCallReason: call.endCallReason,
+      extracted: call.extracted,
+      transcript: call.transcript,
+      recordingUrl: call.recordingUrl,
+      outcome,
+      orderCreated: Boolean(orderId),
+    });
+
+    await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      direction: "outbound",
+      role: "system",
+      type: "other",
+      content: note,
+      tags: ["#llamada-ia"] as unknown as Json,
+    });
+  }
+
+  await logEvent(supabase, conversationId, "voice_call_completed", {
     voiceCallId,
     stage: current.stage,
     callId: call.callId,
@@ -510,14 +711,14 @@ export async function finalizeVoiceCall(
     costUsd,
     answered: call.answered,
     extractedKeys: Object.keys(call.extracted),
+    outcome,
+    orderId,
+    campaignId: current.campaign_id,
   });
 
   // Si contestó, las etapas siguientes sobran (salvo que el agente diga lo contrario).
-  if (call.answered && current.agent_id) {
-    const agent = await loadAgentVoiceConfig(supabase, current.agent_id);
-    if (agent?.stopWhenAnswered !== false) {
-      await cancelScheduledVoiceCalls(supabase, current.conversation_id, "already_answered");
-    }
+  if (call.answered && conversationId && agent?.stopWhenAnswered !== false) {
+    await cancelScheduledVoiceCalls(supabase, conversationId, "already_answered");
   }
 }
 
@@ -661,6 +862,9 @@ export async function triggerVoiceCallNow(
         conversation_id: conversationId,
         contact_id: c.contact_id,
         agent_id: c.agent_id,
+        campaign_id: null,
+        contact_name: null,
+        variables: null,
         phone,
         stage: nextStage,
         delay_minutes: 0,

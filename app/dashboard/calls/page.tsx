@@ -3,6 +3,7 @@ import {
   getCallRequests,
   getVoiceCalls,
   getVoiceCallStats,
+  getVoiceCampaigns,
   getAgents,
   type VoiceCallFilters,
 } from "@/lib/dashboard/queries";
@@ -10,6 +11,8 @@ import {
 import { CallRequestList, KpiCard } from "../ui";
 import { PageHeader } from "../ui-kit";
 import { VoiceCallsPanel } from "./VoiceCallsPanel";
+import { CampaignForm } from "./CampaignForm";
+import { CampaignList } from "./CampaignList";
 import { PhoneSearch } from "./PhoneSearch";
 import type { CallRequestStatus, VoiceCallStatus } from "@/lib/supabase/types";
 
@@ -46,7 +49,15 @@ const IconMoney = (
   </svg>
 );
 
-type Tab = "ia" | "requests";
+type Tab = "ia" | "campaigns" | "requests";
+
+const IconCart = (
+  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+    <path d="M3 4h2l2.2 10.2a2 2 0 0 0 2 1.6h7.2a2 2 0 0 0 2-1.5L20 8H6.5" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="10" cy="19" r="1.4" />
+    <circle cx="17" cy="19" r="1.4" />
+  </svg>
+);
 
 const BUCKETS: Array<{ value: string; label: string }> = [
   { value: "all", label: "Todas" },
@@ -78,6 +89,7 @@ interface SearchParams {
   bucket?: string;
   status?: string;
   agent?: string;
+  campaign?: string;
   phone?: string;
 }
 
@@ -108,7 +120,34 @@ function Pill({ href, active, children }: { href: string; active: boolean; child
 }
 
 export default async function CallsPage({ searchParams }: { searchParams: SearchParams }) {
-  const tab: Tab = searchParams.tab === "requests" ? "requests" : "ia";
+  const tab: Tab =
+    searchParams.tab === "requests"
+      ? "requests"
+      : searchParams.tab === "campaigns"
+        ? "campaigns"
+        : "ia";
+
+  if (tab === "campaigns") {
+    const [agents, campaigns] = await Promise.all([
+      getAgents().catch(() => []),
+      getVoiceCampaigns().catch(() => []),
+    ]);
+    return (
+      <div className="space-y-4">
+        <Header count={campaigns.length} />
+        <Tabs tab={tab} />
+        <p className="max-w-3xl text-sm text-slate-500">
+          Llamadas masivas: se sube una lista de números y el sistema marca uno cada X minutos con
+          la voz del agente. Aplican las mismas guardas que el resto de llamadas (país, horario del
+          agente) y las que terminen en compra generan la orden sola.
+        </p>
+        <CampaignForm
+          agents={agents.map((a) => ({ id: a.id, name: a.name, country: a.country }))}
+        />
+        <CampaignList rows={campaigns} />
+      </div>
+    );
+  }
 
   if (tab === "requests") {
     const raw = searchParams.status;
@@ -152,6 +191,7 @@ export default async function CallsPage({ searchParams }: { searchParams: Search
     bucket: bucket as VoiceCallFilters["bucket"],
     status,
     agentId,
+    campaignId: searchParams.campaign,
     phone: searchParams.phone,
   };
 
@@ -165,7 +205,7 @@ export default async function CallsPage({ searchParams }: { searchParams: Search
       <Header count={rows.length} />
       <Tabs tab={tab} />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <KpiCard label="Programadas" value={String(stats.scheduled)} icon={IconClock} tone="amber" />
         <KpiCard
           label="Contestadas"
@@ -173,6 +213,18 @@ export default async function CallsPage({ searchParams }: { searchParams: Search
           sub={`${stats.noAnswer} sin respuesta`}
           icon={IconPhone}
           tone="teal"
+        />
+        {/* La razón de ser de las llamadas: cuántas terminaron en venta (ADR-0083). */}
+        <KpiCard
+          label="Compras"
+          value={String(stats.sales)}
+          sub={
+            stats.completed > 0
+              ? `${Math.round((stats.sales / stats.completed) * 100)}% de las contestadas`
+              : "requiere extractor de resultado"
+          }
+          icon={IconCart}
+          tone="emerald"
         />
         <KpiCard label="Minutos" value={String(stats.totalMinutes)} icon={IconTimer} tone="navy" />
         <KpiCard
@@ -242,6 +294,9 @@ function Tabs({ tab }: { tab: Tab }) {
     <nav className="flex gap-1 border-b border-slate-200">
       <TabLink href="/dashboard/calls" active={tab === "ia"}>
         Llamadas con IA
+      </TabLink>
+      <TabLink href="/dashboard/calls?tab=campaigns" active={tab === "campaigns"}>
+        Campañas
       </TabLink>
       <TabLink href="/dashboard/calls?tab=requests" active={tab === "requests"}>
         Solicitudes

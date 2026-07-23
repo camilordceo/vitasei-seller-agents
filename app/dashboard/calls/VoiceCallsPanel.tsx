@@ -40,7 +40,42 @@ function TriggerTag({ trigger }: { trigger: string }) {
   if (trigger === "request") {
     return <span className="text-xs text-slate-400">· pedida</span>;
   }
+  if (trigger === "campaign") {
+    return <span className="text-xs text-slate-400">· campaña</span>;
+  }
   return null;
+}
+
+/**
+ * En qué terminó la llamada. Es LO PRIMERO que se busca en esta lista: antes
+ * había que abrir el detalle de cada una para descubrir una venta (ADR-0083).
+ */
+function OutcomeTag({
+  outcome,
+  orderId,
+  phone,
+}: {
+  outcome: string | null;
+  orderId: string | null;
+  phone: string;
+}) {
+  if (!outcome && !orderId) return null;
+  if (orderId) {
+    // Órdenes busca por cliente (nombre/teléfono/ciudad), no por id de orden.
+    return (
+      <Link
+        href={`/dashboard/orders?q=${encodeURIComponent(phone)}`}
+        className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
+      >
+        {outcome ? `${outcome} · orden creada` : "Orden creada"}
+      </Link>
+    );
+  }
+  return (
+    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+      {outcome}
+    </span>
+  );
 }
 
 /** Detalle desplegable: datos extraídos, audio y transcript. */
@@ -207,15 +242,24 @@ export function VoiceCallsPanel({ rows }: { rows: VoiceCallRow[] }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <VoiceCallStatusPill status={row.status} />
-                    <Link
-                      href={`/dashboard/conversations/${row.conversationId}`}
-                      className="truncate text-sm font-medium text-slate-900 hover:underline"
-                    >
-                      {row.contactName || row.phone}
-                    </Link>
+                    {/* Una llamada de campaña sin venta no tiene conversación a la
+                        cual entrar: se muestra el número, sin enlace muerto. */}
+                    {row.conversationId ? (
+                      <Link
+                        href={`/dashboard/conversations/${row.conversationId}`}
+                        className="truncate text-sm font-medium text-slate-900 hover:underline"
+                      >
+                        {row.contactName || row.phone}
+                      </Link>
+                    ) : (
+                      <span className="truncate text-sm font-medium text-slate-900">
+                        {row.contactName || row.phone}
+                      </span>
+                    )}
                     {row.contactName ? (
                       <span className="font-mono text-xs text-slate-400">{row.phone}</span>
                     ) : null}
+                    <OutcomeTag outcome={row.outcome} orderId={row.orderId} phone={row.phone} />
                     <TriggerTag trigger={row.trigger} />
                   </div>
 

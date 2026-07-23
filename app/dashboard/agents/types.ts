@@ -91,6 +91,12 @@ export interface VoiceConfigInput {
     choices: string[];
     examples: string[];
     actionId?: string | null;
+    /** Este extractor dice en qué terminó la llamada (ADR-0083). Solo uno manda. */
+    outcome?: boolean;
+    /** Valores del resultado que significan compra → generan la orden. */
+    saleValues?: string[];
+    /** Campo de la orden que alimenta el dato (`name`, `address`…). */
+    orderField?: string | null;
   }>;
   stopWhenAnswered: boolean;
 }
