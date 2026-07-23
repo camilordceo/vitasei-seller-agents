@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  parseActionExtractor,
   parseExecutedActions,
   stripExtractorPrefix,
   formatExtractedValue,
@@ -218,5 +219,86 @@ describe("humanizeIdentifier", () => {
     expect(humanizeIdentifier("metodo_pago")).toBe("Metodo pago");
     expect(humanizeIdentifier("horario_de_recontacto_")).toBe("Horario de recontacto");
     expect(humanizeIdentifier("nombre y apellido")).toBe("Nombre y apellido");
+  });
+});
+
+/**
+ * Traer lo que YA existe en Synthflow (ADR-0085). La forma de abajo es la que
+ * documenta `GET /v2/actions/{id}` y la que se verificó contra la cuenta real
+ * (docs/25 §2.4): el `description` que mandamos vuelve como
+ * `parameters_hard_coded.condition` y el `name` se lo inventa Synthflow.
+ */
+describe("parseActionExtractor", () => {
+  const action = {
+    action_id: "36b0e74a-1111-2222-3333-444455556666",
+    action_type: "INFORMATION_EXTRACTOR",
+    name: "info_extractor_metodo_pago",
+    description: "",
+    parameters_hard_coded: {
+      type: "SINGLE_CHOICE",
+      identifier: "metodo_pago",
+      condition: "Metodo de pago que prefiere",
+      choices: ["contra entrega", "addi", "transferencia"],
+      examples: [],
+    },
+  };
+
+  it("trae el extractor con su action_id, tipo y opciones", () => {
+    expect(parseActionExtractor(action)).toEqual({
+      actionId: "36b0e74a-1111-2222-3333-444455556666",
+      identifier: "metodo_pago",
+      type: "SINGLE_CHOICE",
+      condition: "Metodo de pago que prefiere",
+      choices: ["contra entrega", "addi", "transferencia"],
+      examples: [],
+    });
+  });
+
+  it("acepta `parameters_hard_coded` como STRING con JSON adentro", () => {
+    const parsed = parseActionExtractor({
+      ...action,
+      parameters_hard_coded: JSON.stringify(action.parameters_hard_coded),
+    });
+    expect(parsed?.identifier).toBe("metodo_pago");
+    expect(parsed?.choices).toHaveLength(3);
+  });
+
+  it("un tipo desconocido cae en respuesta abierta, no rompe la traída", () => {
+    const parsed = parseActionExtractor({
+      ...action,
+      parameters_hard_coded: { ...action.parameters_hard_coded, type: "LO_QUE_SEA" },
+    });
+    expect(parsed?.type).toBe("OPEN_QUESTION");
+  });
+
+  it("deduce el identifier del nombre generado cuando no viene en los parámetros", () => {
+    const parsed = parseActionExtractor({
+      ...action,
+      parameters_hard_coded: { condition: "Direccion de entrega" },
+      name: "extract_info_direccion",
+    });
+    expect(parsed?.identifier).toBe("direccion");
+  });
+
+  it("cae al `description` de la acción si no hay `condition`", () => {
+    const parsed = parseActionExtractor({
+      ...action,
+      description: "Get information with question: Extrae el telefono",
+      parameters_hard_coded: { identifier: "telefono" },
+    });
+    expect(parsed?.condition).toBe("Get information with question: Extrae el telefono");
+  });
+
+  it("ignora lo que NO es un extractor: SMS, transferencias y funciones", () => {
+    expect(
+      parseActionExtractor({
+        action_id: "x",
+        action_type: "SEND_SMS",
+        name: "sms_recordatorio",
+        parameters_hard_coded: { message: "hola" },
+      }),
+    ).toBeNull();
+    expect(parseActionExtractor(null)).toBeNull();
+    expect(parseActionExtractor({})).toBeNull();
   });
 });

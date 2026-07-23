@@ -2344,6 +2344,12 @@ export interface AgentRow {
   paymentMethods: PaymentMethodConfig[];
   /** Moneda en la que VENDE (manda en Órdenes). Ver ADR-0068. */
   currency: CurrencyCode;
+  /**
+   * Saludo de voz del agente. Lo usa el formulario de campañas como punto de
+   * partida del saludo de la campaña (ADR-0086). `null` si no tiene o si la
+   * migración 0027 no está aplicada.
+   */
+  voiceGreeting: string | null;
 }
 
 /**
@@ -2380,6 +2386,7 @@ export async function getAgents(): Promise<AgentRow[]> {
     enabled: a.enabled,
     paymentMethods: parsePaymentMethods((a as { payment_methods?: unknown }).payment_methods),
     currency: normalizeCurrency((a as { currency?: string | null }).currency),
+    voiceGreeting: (a as { voice_greeting?: string | null }).voice_greeting ?? null,
   }));
 }
 

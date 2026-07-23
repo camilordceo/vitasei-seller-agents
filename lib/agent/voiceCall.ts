@@ -21,6 +21,7 @@ import {
   planVoiceCalls,
   toE164,
 } from "@/lib/agent/voiceCallPlan";
+import { normalizeVariableKey, renderTemplate } from "@/lib/agent/voiceTemplate";
 import { evaluateCampaignPace } from "@/lib/agent/voiceCampaignPlan";
 import { loadCampaignPace } from "@/lib/agent/voiceCampaign";
 import { applyVoiceCallOutcome } from "@/lib/agent/voiceOrder";
@@ -512,28 +513,48 @@ async function dialAndSave(
   // El objetivo de la llamada: el de la etapa de la cadencia, o el de la campaña.
   const stageIndex = Math.max(0, row.stage - 1);
   let guidance = agent.stages[stageIndex]?.guidance ?? null;
+  let greetingTemplate = agent.greeting;
   const extraVars: Record<string, string> = {};
   if (row.campaign_id) {
-    const { data: campaign } = await supabase
-      .from("voice_campaigns")
-      .select("guidance")
-      .eq("id", row.campaign_id)
-      .maybeSingle();
-    guidance = (campaign as { guidance?: string | null } | null)?.guidance ?? null;
+    const campaign = await loadCampaignCall(supabase, row.campaign_id);
+    guidance = campaign.guidance;
+    // El saludo de la campaña tapa el del agente: "estabas interesado en X" solo
+    // tiene sentido campaña por campaña. Ver ADR-0086.
+    if (campaign.greeting) greetingTemplate = campaign.greeting;
+    // Orden de precedencia: lo fijo de la campaña primero, la fila después —el
+    // dato de ESTA persona siempre gana sobre el valor general.
+    for (const [key, value] of Object.entries(campaign.variables)) {
+      extraVars[normalizeVariableKey(key)] = String(value).slice(0, 200);
+    }
     for (const [key, value] of Object.entries(row.variables ?? {})) {
       if (value == null || value === "") continue;
-      extraVars[key] = String(value).slice(0, 200);
+      extraVars[normalizeVariableKey(key)] = String(value).slice(0, 200);
     }
   }
 
+  // Variables de la llamada. `nombre` y `producto` salen de la conversación
+  // cuando la hay; en una campaña los pone el archivo.
+  const variables: Record<string, string> = {
+    nombre: contactName ?? "",
+    producto: productCategory ?? "",
+    ...extraVars,
+  };
+
+  // Las llaves se resuelven AQUÍ, no en Synthflow (ADR-0086): su documentación
+  // solo promete `{variables}` en el prompt, y el saludo es justo donde el
+  // negocio las usa. Si nadie reemplaza, el bot lee "llave producto" en voz alta.
+  const greeting = greetingTemplate ? renderTemplate(greetingTemplate, variables) : null;
   const prompt = agent.prompt
-    ? buildCallPrompt({
-        basePrompt: agent.prompt,
-        guidance,
-        contactName,
-        productCategory,
-        lastMessages,
-      })
+    ? renderTemplate(
+        buildCallPrompt({
+          basePrompt: agent.prompt,
+          guidance,
+          contactName,
+          productCategory,
+          lastMessages,
+        }),
+        variables,
+      )
     : null;
 
   const callId = await placeCall(credsFor(agent), {
@@ -542,12 +563,10 @@ async function dialAndSave(
     name: contactName || "Cliente",
     fromNumber: agent.fromNumber,
     prompt,
-    greeting: agent.greeting,
-    variables: {
-      nombre: contactName ?? "",
-      producto: productCategory ?? "",
-      ...extraVars,
-    },
+    greeting,
+    // Van igual: el assistant puede referenciarlas en SU propio prompt (el que
+    // vive en el panel de Synthflow y no viaja por llamada).
+    variables,
   });
 
   await supabase
@@ -568,6 +587,52 @@ async function dialAndSave(
     trigger: row.campaign_id ? "campaign" : "auto",
     campaignId: row.campaign_id,
   });
+}
+
+/**
+ * Lo que la campaña le aporta a la llamada: objetivo, saludo propio y variables
+ * fijas. Tolera que la migración 0033 no esté aplicada (42703): en ese caso la
+ * campaña sigue llamando con el objetivo de siempre, sin saludo propio.
+ */
+async function loadCampaignCall(
+  supabase: DB,
+  campaignId: string,
+): Promise<{ guidance: string | null; greeting: string | null; variables: Record<string, string> }> {
+  const full = await supabase
+    .from("voice_campaigns")
+    .select("guidance, greeting, variables")
+    .eq("id", campaignId)
+    .maybeSingle();
+
+  if (full.error?.code === "42703") {
+    const basic = await supabase
+      .from("voice_campaigns")
+      .select("guidance")
+      .eq("id", campaignId)
+      .maybeSingle();
+    return {
+      guidance: (basic.data as { guidance?: string | null } | null)?.guidance ?? null,
+      greeting: null,
+      variables: {},
+    };
+  }
+
+  const row = full.data as {
+    guidance?: string | null;
+    greeting?: string | null;
+    variables?: Record<string, unknown> | null;
+  } | null;
+
+  const variables: Record<string, string> = {};
+  for (const [key, value] of Object.entries(row?.variables ?? {})) {
+    if (value == null || value === "") continue;
+    variables[key] = String(value);
+  }
+  return {
+    guidance: row?.guidance ?? null,
+    greeting: row?.greeting ?? null,
+    variables,
+  };
 }
 
 // --- Cierre de la llamada ---------------------------------------------------

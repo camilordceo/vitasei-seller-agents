@@ -609,6 +609,10 @@ export interface Database {
           /** Minutos entre llamada y llamada. */
           interval_minutes: number;
           guidance: string | null;
+          /** Saludo propio de la campaña, con `{variables}` (ADR-0086). */
+          greeting: string | null;
+          /** Variables fijas de la campaña; las del archivo mandan sobre estas. */
+          variables: Json | null;
           source_filename: string | null;
           total: number;
           starts_at: string;
@@ -623,6 +627,8 @@ export interface Database {
           status?: VoiceCampaignStatus;
           interval_minutes?: number;
           guidance?: string | null;
+          greeting?: string | null;
+          variables?: Json | null;
           source_filename?: string | null;
           total?: number;
           starts_at?: string;
@@ -637,6 +643,8 @@ export interface Database {
           status?: VoiceCampaignStatus;
           interval_minutes?: number;
           guidance?: string | null;
+          greeting?: string | null;
+          variables?: Json | null;
           source_filename?: string | null;
           total?: number;
           starts_at?: string;

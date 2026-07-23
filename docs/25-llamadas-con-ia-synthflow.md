@@ -20,7 +20,9 @@ IA (Synthflow), agendadas desde el flujo de WhatsApp o disparadas a mano, con el
    *1 llamada a los 10 min del primer mensaje*, o *3 llamadas: al llegar, a 24h y a 72h*.
    Se puede acotar por país (prefijo E.164).
 3. **Extractores de información por agente** (producto, dirección, nombre, método de pago…),
-   configurables desde el dashboard y sincronizados con Synthflow.
+   configurables desde el dashboard. La sincronización con Synthflow es **un botón aparte**: el
+   guardado normal no lo toca, porque actualizar el assistant lo pasa a una versión nueva y le
+   cambia la voz (ADR-0085). También se pueden **traer** los que ya existan en su panel.
 4. **Disparo manual** de una llamada desde el detalle de la conversación.
 5. **Sección Llamadas unificada**: realizadas + programadas, filtrable y buscable por teléfono,
    con detalle (transcript + audio) y **cancelación masiva** de las programadas.
@@ -32,7 +34,8 @@ entrantes (`inbound_call_webhook_url`), campañas masivas fuera de conversación
 
 > **Continuación:** el **resultado de la llamada → orden** y las **campañas masivas** ya están
 > implementados en [docs/29](29-resultado-de-llamada-y-campanas.md) (ADR-0083 y ADR-0084,
-> migración `0032`). Esas dos features cambian cosas de este documento: `voice_calls` gana
+> migración `0032`); el **guardado que no toca Synthflow** y el **saludo con variables** están en
+> docs/29 §2.7 y §5 (ADR-0085 y ADR-0086, migración `0033`). Esas dos features cambian cosas de este documento: `voice_calls` gana
 > `outcome`, `order_id`, `campaign_id`, `contact_name` y `variables`; `conversation_id` y
 > `contact_id` pasan a ser opcionales; y el cron pasa a correr **cada minuto**.
 

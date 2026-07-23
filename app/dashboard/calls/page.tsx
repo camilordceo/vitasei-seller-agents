@@ -142,7 +142,12 @@ export default async function CallsPage({ searchParams }: { searchParams: Search
           agente) y las que terminen en compra generan la orden sola.
         </p>
         <CampaignForm
-          agents={agents.map((a) => ({ id: a.id, name: a.name, country: a.country }))}
+          agents={agents.map((a) => ({
+            id: a.id,
+            name: a.name,
+            country: a.country,
+            voiceGreeting: a.voiceGreeting,
+          }))}
         />
         <CampaignList rows={campaigns} />
       </div>

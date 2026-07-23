@@ -303,10 +303,60 @@ export async function detachActions(
 export async function getAssistant(
   creds: SynthflowCreds,
   modelId: string,
+  opts?: { includeActions?: boolean },
 ): Promise<Record<string, unknown> | null> {
-  const res = responseOf(await call(creds, `/assistants/${encodeURIComponent(modelId)}`));
+  const res = responseOf(
+    await call(creds, `/assistants/${encodeURIComponent(modelId)}`, {
+      query: opts?.includeActions ? { include_actions: "true" } : undefined,
+    }),
+  );
   if (Array.isArray(res.assistants)) {
     const first = res.assistants[0];
+    return isRecord(first) ? first : null;
+  }
+  return isRecord(res) ? res : null;
+}
+
+/**
+ * IDs de las acciones adjuntas al assistant. Es una LECTURA: no crea, no
+ * adjunta y no toca al assistant — el punto entero de traer en vez de empujar
+ * (ADR-0085). El `include_actions=true` es lo que puebla el array; sin él viene
+ * vacío aunque el assistant tenga acciones.
+ */
+export async function listAssistantActionIds(
+  creds: SynthflowCreds,
+  modelId: string,
+): Promise<string[]> {
+  const assistant = await getAssistant(creds, modelId, { includeActions: true });
+  if (!assistant) return [];
+
+  const ids = new Set<string>();
+  if (Array.isArray(assistant.actions)) {
+    for (const id of assistant.actions) {
+      if (typeof id === "string" && id) ids.add(id);
+    }
+  }
+  // Segunda fuente: `input_variables` viene agrupado por `action_id`. Si el
+  // array de arriba llegara vacío (su API ya cambió de forma antes), de aquí
+  // salen igual los ids.
+  if (Array.isArray(assistant.input_variables)) {
+    for (const item of assistant.input_variables) {
+      if (isRecord(item) && typeof item.action_id === "string" && item.action_id) {
+        ids.add(item.action_id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+/** Trae una acción cruda (`response.actions[0]`, igual que `/calls`). */
+export async function getAction(
+  creds: SynthflowCreds,
+  actionId: string,
+): Promise<Record<string, unknown> | null> {
+  const res = responseOf(await call(creds, `/actions/${encodeURIComponent(actionId)}`));
+  if (Array.isArray(res.actions)) {
+    const first = res.actions[0];
     return isRecord(first) ? first : null;
   }
   return isRecord(res) ? res : null;

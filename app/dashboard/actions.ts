@@ -36,6 +36,7 @@ import {
   triggerVoiceCallNow,
 } from "@/lib/agent/voiceCall";
 import {
+  normalizeIdentifier,
   parseVoiceConfig,
   parseVoiceCountries,
   parseVoiceExtractors,
@@ -43,12 +44,16 @@ import {
 import {
   attachActions,
   createExtractor,
+  getAction,
+  listAssistantActionIds,
   listVoices,
   syncAssistantVoice,
   syncAssistantWebhook,
   updateExtractor,
 } from "@/lib/synthflow/client";
+import { parseActionExtractor } from "@/lib/synthflow/extractors";
 import type { SynthflowVoice, VoiceExtractor } from "@/lib/synthflow/types";
+import { missingVariables, normalizeVariableKey } from "@/lib/agent/voiceTemplate";
 
 /**
  * Server Actions del dashboard.
@@ -1673,21 +1678,25 @@ export async function triggerVoiceCall(
 }
 
 /**
- * Guarda la config de voz de un agente y **sincroniza los extractores con
- * Synthflow** (crear / actualizar / adjuntar / quitar). La sincronización puede
- * fallar por red: en ese caso se guarda igual la config local y se devuelve el
- * aviso, para no perder lo que el operador escribió. Ver ADR-0062.
+ * Guarda la config de voz de un agente.
  *
- * ORDEN: primero se escribe en Supabase, después se sincroniza. Al revés, un
- * Synthflow lento o caído dejaba el guardado colgado hasta que la función moría,
- * y **apagar las llamadas no se guardaba** aunque no tenga nada que ver con su
- * API. Además, si se están apagando, no se sincroniza nada: no hay para qué
- * hablar con Synthflow para dejar de llamar.
+ * **Por defecto NO habla con Synthflow** (ADR-0085). Antes, cada guardado
+ * empujaba los extractores —crear/actualizar acciones y volver a adjuntarlas al
+ * assistant—, y eso pasa el assistant a una versión nueva: en la práctica la
+ * llamada salía con otra voz, peor. Un cambio de cadencia, de país o un typo en
+ * el prompt no puede costar la calidad de la voz. Ahora el empujón es un botón
+ * aparte (`syncSynthflow: true`), igual que ya lo eran la voz y el webhook.
+ *
+ * ORDEN: primero se escribe en Supabase, después se sincroniza (si se pidió). Al
+ * revés, un Synthflow lento o caído dejaba el guardado colgado hasta que la
+ * función moría, y **apagar las llamadas no se guardaba** aunque no tenga nada
+ * que ver con su API. Ver ADR-0062.
  */
 export async function saveVoiceConfig(
   agentId: string,
   input: VoiceConfigInput,
-): Promise<{ ok: boolean; warning?: string }> {
+  opts?: { syncSynthflow?: boolean },
+): Promise<{ ok: boolean; warning?: string; synced?: boolean }> {
   const supabase = createServiceClient();
 
   const stages = parseVoiceConfig(input.stages);
@@ -1723,13 +1732,17 @@ export async function saveVoiceConfig(
     throw new Error(`saveVoiceConfig: ${error.message}`);
   }
 
-  // Ya está guardado lo que el operador pidió. Ahora, mejor esfuerzo: sincronizar
-  // los extractores con Synthflow y persistir los `actionId` que devuelva.
+  // Ya está guardado lo que el operador pidió. El empujón a Synthflow solo pasa
+  // si lo pidió explícitamente, y es mejor esfuerzo: si su API falla, lo escrito
+  // NO se pierde.
+  const push = opts?.syncSynthflow === true;
   let warning: string | undefined;
   let synced = extractors;
-  if (input.voiceEnabled && input.modelId && extractors.length > 0) {
+  let didSync = false;
+  if (push && input.voiceEnabled && input.modelId && extractors.length > 0) {
     try {
       synced = await syncExtractorsWithSynthflow(supabase, agentId, input.modelId, extractors);
+      didSync = true;
       const changed = synced.some((e, i) => e.actionId !== extractors[i]?.actionId);
       if (changed) {
         await supabase
@@ -1742,6 +1755,10 @@ export async function saveVoiceConfig(
         e instanceof Error ? e.message : String(e)
       }`;
     }
+  } else if (push && input.voiceEnabled && input.modelId && extractors.length === 0) {
+    warning = "No hay extractores que sincronizar: se guardó la config y no se tocó Synthflow.";
+  } else if (push && !input.modelId) {
+    warning = "Falta el assistant (model_id): se guardó la config y no se tocó Synthflow.";
   }
 
   await supabase.from("events_log").insert({
@@ -1752,13 +1769,117 @@ export async function saveVoiceConfig(
       enabled: input.voiceEnabled,
       stages: stages.length,
       extractors: synced.length,
+      // Queda en el rastro CUÁL de los dos guardados fue: si un día la voz vuelve
+      // a cambiar sola, esto dice si salió de aquí. Ver ADR-0085.
+      syncedToSynthflow: didSync,
     } as unknown as Json,
   });
 
   revalidatePath("/dashboard/agents");
   revalidatePath(`/dashboard/agents/${agentId}`);
   revalidatePath("/dashboard/calls");
-  return { ok: true, warning };
+  return { ok: true, warning, synced: didSync };
+}
+
+/**
+ * Trae los extractores que YA existen en el assistant de Synthflow, para
+ * editarlos aquí sin haberlos escrito dos veces. Es **solo lectura** contra su
+ * API (`GET` del assistant + `GET` de cada acción): no crea, no adjunta y no
+ * toca al assistant, así que no le cambia la versión ni la voz (ADR-0085).
+ *
+ * No guarda nada: devuelve los extractores al formulario para que el operador
+ * los revise —de Synthflow no viene ni el resultado de la llamada ni el mapeo a
+ * la orden, que son cosas nuestras— y decida con cuál de los dos botones guarda.
+ */
+export async function importExtractorsFromSynthflow(agentId: string): Promise<{
+  ok: boolean;
+  error?: string;
+  extractors: VoiceExtractor[];
+  /** Acciones adjuntas que NO son extractores (SMS, transferencias, funciones). */
+  skipped: number;
+}> {
+  try {
+    const supabase = createServiceClient();
+    const agent = await loadAgentVoiceConfig(supabase, agentId);
+    if (!agent) return { ok: false, error: "Falta aplicar la migración 0027.", extractors: [], skipped: 0 };
+    if (!agent.modelId) {
+      return {
+        ok: false,
+        error: "Primero guarda el model_id del assistant de Synthflow.",
+        extractors: [],
+        skipped: 0,
+      };
+    }
+
+    const creds = credsFor(agent);
+    const actionIds = await listAssistantActionIds(creds, agent.modelId);
+    if (actionIds.length === 0) {
+      return {
+        ok: false,
+        error: "El assistant no tiene acciones adjuntas en Synthflow.",
+        extractors: [],
+        skipped: 0,
+      };
+    }
+
+    // Lo que ya está configurado aquí manda en lo NUESTRO: el extractor de
+    // resultado, los valores de compra y el campo de la orden no existen en
+    // Synthflow, así que traerlos no puede borrarlos.
+    const localByIdentifier = new Map(agent.extractors.map((e) => [e.identifier, e]));
+
+    const out: VoiceExtractor[] = [];
+    let skipped = 0;
+    for (const actionId of actionIds.slice(0, 30)) {
+      const raw = await getAction(creds, actionId);
+      const parsed = parseActionExtractor(raw);
+      if (!parsed || !parsed.condition) {
+        skipped++;
+        continue;
+      }
+      const identifier = normalizeIdentifier(parsed.identifier);
+      const local = localByIdentifier.get(identifier);
+      out.push({
+        identifier,
+        type: parsed.type,
+        condition: parsed.condition,
+        choices: parsed.choices,
+        examples: parsed.examples,
+        actionId: parsed.actionId ?? actionId,
+        outcome: local?.outcome ?? false,
+        saleValues: local?.saleValues ?? [],
+        orderField: local?.orderField ?? null,
+      });
+    }
+
+    if (out.length === 0) {
+      return {
+        ok: false,
+        error: `Se leyeron ${actionIds.length} acción(es) del assistant, pero ninguna es un extractor de información.`,
+        extractors: [],
+        skipped,
+      };
+    }
+
+    await supabase.from("events_log").insert({
+      conversation_id: null,
+      type: "voice_extractors_imported",
+      payload: {
+        agentId,
+        modelId: agent.modelId,
+        imported: out.length,
+        skipped,
+      } as unknown as Json,
+    });
+
+    return { ok: true, extractors: parseVoiceExtractors(out), skipped };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+      extractors: [],
+      skipped: 0,
+    };
+  }
 }
 
 /**
@@ -1879,17 +2000,34 @@ export async function syncVoiceToSynthflow(
 
 // --- Campañas de llamadas masivas (docs/29, ADR-0084) -----------------------
 
+/** Una variable del archivo: cómo se llama, cuántas filas la traen y un ejemplo. */
+export interface CampaignVariableStat {
+  /** Clave canónica: así se escribe entre llaves (`{producto}`). */
+  key: string;
+  /** Encabezado tal cual venía en el archivo. */
+  column: string;
+  /** Filas llamables que traen un valor. */
+  filled: number;
+  sample: string | null;
+}
+
 export interface CampaignPreview {
   ok: boolean;
   error?: string;
   /** Números listos para llamar (ya normalizados a E.164 sin `+`). */
   count: number;
   /** Muestra para que el operador confirme que leímos SU archivo, no otro. */
-  sample: Array<{ phone: string; name: string | null }>;
+  sample: Array<{ phone: string; name: string | null; variables: Record<string, string> }>;
   invalid: Array<{ line: number; value: string; reason: string }>;
   duplicates: number;
   columns: string[];
   totalRead: number;
+  /**
+   * Las columnas extra convertidas en variables llamables. Sin esto, el operador
+   * escribe `{producto}` en el saludo y no tiene forma de saber si su archivo lo
+   * llena: se entera cuando el bot dice la frase a medias. Ver ADR-0086.
+   */
+  variables: CampaignVariableStat[];
 }
 
 /**
@@ -1910,21 +2048,43 @@ export async function previewCampaignFile(
     duplicates: 0,
     columns: [],
     totalRead: 0,
+    variables: [],
   };
   try {
     const bytes = new Uint8Array(Buffer.from(fileBase64, "base64"));
     if (bytes.length === 0) return { ...empty, error: "El archivo llegó vacío." };
     const grid = readCampaignFile(bytes, filename);
     const parsed = parseCampaignRows(grid, { defaultPrefix: countryPrefix });
+
+    // Cobertura de cada variable sobre las filas LLAMABLES (no sobre el archivo):
+    // lo que importa es cuántas de las llamadas que van a salir traen el dato.
+    const stats = new Map<string, CampaignVariableStat>();
+    for (const row of parsed.rows) {
+      for (const [key, value] of Object.entries(row.variables)) {
+        const entry = stats.get(key) ?? {
+          key,
+          column: parsed.columns.find((c) => normalizeVariableKey(c) === key) ?? key,
+          filled: 0,
+          sample: null,
+        };
+        entry.filled++;
+        if (!entry.sample) entry.sample = value.slice(0, 60);
+        stats.set(key, entry);
+      }
+    }
+
     return {
       ok: parsed.rows.length > 0,
       error: parsed.rows.length === 0 ? "No se encontró ningún teléfono válido en el archivo." : undefined,
       count: parsed.rows.length,
-      sample: parsed.rows.slice(0, 5).map((r) => ({ phone: r.phone, name: r.name })),
+      sample: parsed.rows
+        .slice(0, 5)
+        .map((r) => ({ phone: r.phone, name: r.name, variables: r.variables })),
       invalid: parsed.invalid.slice(0, 20),
       duplicates: parsed.duplicates,
       columns: parsed.columns,
       totalRead: parsed.totalRead,
+      variables: [...stats.values()].sort((a, b) => b.filled - a.filled),
     };
   } catch (e) {
     return { ...empty, error: e instanceof Error ? e.message : String(e) };
@@ -1941,6 +2101,13 @@ export interface CreateCampaignActionInput {
   startAt: string;
   filename: string | null;
   fileBase64: string;
+  /**
+   * Saludo de apertura de ESTA campaña, con `{variables}`. Vacío = el del agente.
+   * Ver ADR-0086.
+   */
+  greeting?: string;
+  /** Variables fijas de la campaña (`producto = Colágeno`). Las del archivo mandan. */
+  variables?: Record<string, string>;
 }
 
 /**
@@ -1969,22 +2136,74 @@ export async function createCampaign(
       return { ok: false, error: "No se encontró ningún teléfono válido en el archivo." };
     }
 
+    // Variables fijas de la campaña, con las claves canonizadas (`Producto` y
+    // `producto` son la misma).
+    const fixed: Record<string, string> = {};
+    for (const [rawKey, rawValue] of Object.entries(input.variables ?? {})) {
+      const key = normalizeVariableKey(rawKey);
+      const value = String(rawValue ?? "").trim();
+      if (key && value) fixed[key] = value.slice(0, 200);
+    }
+
+    // La guarda que importa: un saludo que usa `{producto}` en filas que no lo
+    // traen sale a medias ("estabas interesado en, ¿tienes un minuto?"). Se
+    // rechaza ANTES de agendar, diciendo cuántas filas y qué variable. Aquí no
+    // hay deshacer: son llamadas a personas.
+    const greeting = (input.greeting ?? "").trim();
+    const templates = [greeting, input.guidance ?? ""].filter(Boolean).join("\n");
+    if (templates) {
+      const gaps = new Map<string, number>();
+      for (const row of parsed.rows) {
+        for (const key of missingVariables(templates, {
+          nombre: row.name ?? "",
+          ...fixed,
+          ...row.variables,
+        })) {
+          // `{nombre}` es la única que no bloquea: sin nombre, "Hola, soy Vanessa"
+          // se lee natural. Las demás dejan la frase coja. Mismo criterio que el
+          // formulario, para que "Lanzar" no se habilite y luego el servidor diga
+          // que no.
+          if (key === "nombre") continue;
+          gaps.set(key, (gaps.get(key) ?? 0) + 1);
+        }
+      }
+      if (gaps.size > 0) {
+        const detail = [...gaps.entries()]
+          .map(([key, count]) => `{${key}} falta en ${count} de ${parsed.rows.length}`)
+          .join(" · ");
+        return {
+          ok: false,
+          error:
+            `El saludo/objetivo usa variables que el archivo no llena: ${detail}. ` +
+            "Agrega la columna al archivo, ponle un valor fijo a la campaña, o quita la variable del texto.",
+        };
+      }
+    }
+
     const result = await createVoiceCampaign(supabase, {
       agentId: input.agentId,
       name: input.name,
       intervalMinutes: input.intervalMinutes,
       guidance: input.guidance,
+      greeting,
+      variables: fixed,
       startAt: input.startAt || null,
       filename: input.filename,
       rows: parsed.rows,
     });
 
     revalidatePath("/dashboard/calls");
-    return { ok: true, campaignId: result.campaignId, inserted: result.inserted, skipped: result.skipped };
+    return {
+      ok: true,
+      campaignId: result.campaignId,
+      inserted: result.inserted,
+      skipped: result.skipped,
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
 
 /** Pausa, reanuda o cancela una campaña. Cancelar tumba sus llamadas pendientes. */
 export async function updateCampaignStatus(

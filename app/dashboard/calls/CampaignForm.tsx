@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import { createCampaign, previewCampaignFile, type CampaignPreview } from "../actions";
 import { btnPrimary, btnSecondary, Card, CardTitle, inputCls } from "../ui-kit";
 import { describeCampaignDuration } from "@/lib/agent/voiceCampaignPlan";
+import {
+  missingVariables,
+  normalizeVariableKey,
+  renderTemplate,
+  templateVariables,
+} from "@/lib/agent/voiceTemplate";
 
 /**
  * Cargar una lista y lanzar llamadas a ritmo (docs/29, ADR-0084).
@@ -19,6 +25,14 @@ interface AgentOption {
   id: string;
   name: string;
   country: string | null;
+  /** Saludo de voz del agente: el punto de partida del de la campaña (ADR-0086). */
+  voiceGreeting?: string | null;
+}
+
+/** Variable fija de la campaña: un valor para toda la lista. */
+interface FixedVar {
+  key: string;
+  value: string;
 }
 
 /** Indicativo por país del agente, para los números escritos en local. */
@@ -58,10 +72,58 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
   const [prefix, setPrefix] = useState(COUNTRY_PREFIX[agents[0]?.country ?? "CO"] ?? "57");
   const [guidance, setGuidance] = useState("");
   const [startAt, setStartAt] = useState("");
+  const [greeting, setGreeting] = useState(agents[0]?.voiceGreeting ?? "");
+  const [fixedVars, setFixedVars] = useState<FixedVar[]>([]);
   const [fileBase64, setFileBase64] = useState("");
   const [filename, setFilename] = useState<string | null>(null);
   const [preview, setPreview] = useState<CampaignPreview | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+
+  /** Variables fijas con la clave ya canonizada (`Producto` → `producto`). */
+  const fixedMap: Record<string, string> = {};
+  for (const v of fixedVars) {
+    const key = normalizeVariableKey(v.key);
+    if (key && v.value.trim()) fixedMap[key] = v.value.trim();
+  }
+
+  // Lo que el saludo y el objetivo piden, y de dónde puede salir.
+  const usedVars = templateVariables([greeting, guidance].filter(Boolean).join("\n"));
+  const fileVarKeys = new Set((preview?.variables ?? []).map((v) => v.key));
+
+  /**
+   * Filas que van a quedar cojas: usan una variable que ni el archivo ni las
+   * fijas llenan. Se cuenta sobre la muestra que devolvió el servidor y, si el
+   * archivo entero no trae la columna, sobre el total.
+   */
+  const gaps = usedVars
+    // `{nombre}` no bloquea: sin nombre, "Hola, soy Vanessa" se lee natural. El
+    // servidor aplica el mismo criterio (si no, "Lanzar" se habilitaría y luego
+    // el servidor diría que no).
+    .filter((key) => key !== "nombre" && !fixedMap[key])
+    .map((key) => {
+      const stat = preview?.variables.find((v) => v.key === key);
+      const missing = (preview?.count ?? 0) - (stat?.filled ?? 0);
+      return { key, missing, inFile: fileVarKeys.has(key) };
+    })
+    .filter((g) => g.missing > 0);
+
+  // El saludo YA resuelto con la primera fila real del archivo: la única forma
+  // honesta de contestar "¿qué va a decir el bot?" antes de llamar a nadie.
+  const sampleRow = preview?.sample[0];
+  const greetingPreview = greeting.trim()
+    ? renderTemplate(
+        greeting,
+        { nombre: sampleRow?.name ?? "", ...fixedMap, ...(sampleRow?.variables ?? {}) },
+        { onMissing: "keep" },
+      )
+    : "";
+  const previewIncomplete = greetingPreview
+    ? missingVariables(greeting, {
+        nombre: sampleRow?.name ?? "",
+        ...fixedMap,
+        ...(sampleRow?.variables ?? {}),
+      }).length > 0
+    : false;
 
   function reset() {
     setFileBase64("");
@@ -111,6 +173,8 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
         intervalMinutes: interval,
         countryPrefix: prefix,
         guidance,
+        greeting,
+        variables: fixedMap,
         startAt: startAt ? new Date(startAt).toISOString() : "",
         filename,
         fileBase64,
@@ -157,8 +221,16 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
             value={agentId}
             onChange={(e) => {
               setAgentId(e.target.value);
-              const country = agents.find((a) => a.id === e.target.value)?.country ?? "CO";
-              setPrefix(COUNTRY_PREFIX[country ?? "CO"] ?? "57");
+              const agent = agents.find((a) => a.id === e.target.value);
+              setPrefix(COUNTRY_PREFIX[agent?.country ?? "CO"] ?? "57");
+              // El saludo arranca en el del agente elegido, salvo que ya lo hayan
+              // escrito a mano (no se pisa lo que el operador redactó).
+              setGreeting((current) => {
+                const previous = agents.find((a) => a.id === agentId)?.voiceGreeting ?? "";
+                return current.trim() === "" || current === previous
+                  ? (agent?.voiceGreeting ?? "")
+                  : current;
+              });
             }}
             className={`mt-1 ${inputCls}`}
           >
@@ -214,6 +286,77 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
             Se le antepone a los números escritos en local (10 dígitos o menos).
           </span>
         </label>
+
+        <label className="block sm:col-span-2">
+          <span className="text-sm font-medium text-slate-700">Saludo con el que abre</span>
+          <textarea
+            value={greeting}
+            onChange={(e) => setGreeting(e.target.value)}
+            rows={2}
+            placeholder="Hola, soy Vanessa de Vitasei. Te llamaba porque estabas interesado en {producto}, ¿tienes un minuto?"
+            className="mt-1 w-full rounded-[10px] border border-slate-200 bg-white px-3.5 py-2.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+          />
+          <span className="mt-1 block text-xs text-slate-500">
+            Lo que dice al contestar. Usa <code className="font-mono">{"{llaves}"}</code> para los
+            datos de cada persona: <code className="font-mono">{"{nombre}"}</code> y cualquier
+            columna del archivo (<code className="font-mono">{"{producto}"}</code>). Vacío = el
+            saludo del agente.
+          </span>
+        </label>
+
+        <div className="block sm:col-span-2">
+          <span className="text-sm font-medium text-slate-700">Valores fijos de la campaña</span>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Para lo que es igual en toda la lista: en vez de repetir una columna{" "}
+            <code className="font-mono">producto</code> con &ldquo;Colágeno&rdquo; en 500 filas, se
+            pone aquí una vez. Si el archivo trae la columna, <strong>manda el archivo</strong>.
+          </p>
+          {fixedVars.length > 0 ? (
+            <ul className="mt-2 space-y-2">
+              {fixedVars.map((v, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={v.key}
+                    onChange={(e) =>
+                      setFixedVars((prev) =>
+                        prev.map((x, idx) => (idx === i ? { ...x, key: e.target.value } : x)),
+                      )
+                    }
+                    placeholder="producto"
+                    aria-label="Nombre de la variable"
+                    className={`${inputCls} w-40 font-mono`}
+                  />
+                  <span className="text-sm text-slate-400">=</span>
+                  <input
+                    value={v.value}
+                    onChange={(e) =>
+                      setFixedVars((prev) =>
+                        prev.map((x, idx) => (idx === i ? { ...x, value: e.target.value } : x)),
+                      )
+                    }
+                    placeholder="Colágeno hidrolizado"
+                    aria-label="Valor de la variable"
+                    className={`${inputCls} min-w-0 flex-1`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setFixedVars((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="text-sm text-slate-500 underline-offset-2 hover:text-red-700 hover:underline"
+                  >
+                    Quitar
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setFixedVars((prev) => [...prev, { key: "", value: "" }])}
+            className={`mt-2 ${btnSecondary}`}
+          >
+            Agregar valor fijo
+          </button>
+        </div>
 
         <label className="block sm:col-span-2">
           <span className="text-sm font-medium text-slate-700">Objetivo de la llamada</span>
@@ -290,6 +433,67 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
               {preview.duplicates} repetido(s) en el archivo: se llama una sola vez.
             </p>
           ) : null}
+
+          {preview.variables.length > 0 ? (
+            <div className="mt-3 border-t border-slate-200 pt-2">
+              <p className="text-xs font-medium text-slate-600">
+                Variables que trae el archivo (úsalas entre llaves):
+              </p>
+              <ul className="mt-1 flex flex-wrap gap-1.5">
+                {preview.variables.map((v) => (
+                  <li
+                    key={v.key}
+                    className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600"
+                    title={`Columna "${v.column}" · ${v.filled} de ${preview.count} filas · ej: ${v.sample ?? "—"}`}
+                  >
+                    <code className="font-mono">{`{${v.key}}`}</code>
+                    <span className="ml-1 text-slate-400">
+                      {v.filled}/{preview.count}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {greetingPreview ? (
+            <div className="mt-3 border-t border-slate-200 pt-2">
+              <p className="text-xs font-medium text-slate-600">
+                Va a abrir así {sampleRow?.name ? `(con ${sampleRow.name})` : "(primera fila)"}:
+              </p>
+              <p
+                className={`mt-1 rounded-lg border px-3 py-2 text-sm ${
+                  previewIncomplete
+                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                    : "border-slate-200 bg-white text-slate-800"
+                }`}
+              >
+                “{greetingPreview}”
+              </p>
+            </div>
+          ) : null}
+
+          {gaps.length > 0 ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-xs font-medium text-amber-900">
+                Faltan datos para el texto que escribiste:
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs text-amber-800">
+                {gaps.map((g) => (
+                  <li key={g.key}>
+                    <code className="font-mono">{`{${g.key}}`}</code>{" "}
+                    {g.inFile
+                      ? `está vacía en ${g.missing} de ${preview.count} filas`
+                      : `no existe en el archivo (${g.missing} llamadas la necesitan)`}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-amber-800">
+                Agrega la columna, ponle un valor fijo arriba, o quita la variable del texto. No se
+                lanza hasta que cuadre: una llamada con la frase a medias ya no se puede deshacer.
+              </p>
+            </div>
+          ) : null}
           {preview.invalid.length > 0 ? (
             <details className="mt-2">
               <summary className="cursor-pointer text-xs font-medium text-amber-700">
@@ -311,7 +515,12 @@ export function CampaignForm({ agents }: { agents: AgentOption[] }) {
         <button
           type="button"
           onClick={launch}
-          disabled={pending || !preview?.ok}
+          disabled={pending || !preview?.ok || gaps.length > 0}
+          title={
+            gaps.length > 0
+              ? "El saludo u objetivo usa variables que no están llenas en todas las filas."
+              : undefined
+          }
           className={btnPrimary}
         >
           {pending ? "Trabajando…" : `Lanzar ${preview?.count ?? ""} llamadas`.trim()}

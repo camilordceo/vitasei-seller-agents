@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   saveVoiceConfig,
+  importExtractorsFromSynthflow,
   listSynthflowVoices,
   syncVoiceToSynthflow,
   syncWebhookToSynthflow,
@@ -119,8 +120,13 @@ export function VoiceSettings({
   const [voices, setVoices] = useState<SynthflowVoice[]>([]);
   const [voiceSearch, setVoiceSearch] = useState("");
   const [status, setStatus] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
+  /** Paso intermedio del guardado que SÍ toca Synthflow (ADR-0085). */
+  const [confirmSync, setConfirmSync] = useState(false);
 
-  const dirty = () => setStatus(null);
+  const dirty = () => {
+    setStatus(null);
+    setConfirmSync(false);
+  };
 
   function loadVoices() {
     dirty();
@@ -131,8 +137,14 @@ export function VoiceSettings({
     });
   }
 
-  function save() {
+  /**
+   * `sync = false` (lo normal): los datos quedan en Supabase y **no se toca
+   * Synthflow**. `sync = true`: además se empujan los extractores, que es lo que
+   * pasa el assistant a una versión nueva y puede cambiarle la voz (ADR-0085).
+   */
+  function save(sync: boolean) {
     setStatus(null);
+    setConfirmSync(false);
     const payload: VoiceConfigInput = {
       voiceEnabled: enabled,
       modelId: modelId.trim(),
@@ -166,22 +178,57 @@ export function VoiceSettings({
 
     startTransition(async () => {
       try {
-        const result = await saveVoiceConfig(agentId, payload);
+        const result = await saveVoiceConfig(agentId, payload, { syncSynthflow: sync });
         setApiKey("");
         setStatus(
           result.warning
             ? { kind: "warn", text: result.warning }
             : {
                 kind: "ok",
-                text: enabled
-                  ? "Config de llamadas guardada."
-                  : "Llamadas apagadas: no se agendará ninguna más.",
+                text: !enabled
+                  ? "Llamadas apagadas: no se agendará ninguna más."
+                  : result.synced
+                    ? "Guardado y extractores sincronizados con Synthflow."
+                    : "Guardado aquí. No se tocó Synthflow: el assistant sigue igual.",
               },
         );
         router.refresh();
       } catch (e) {
         setStatus({ kind: "error", text: e instanceof Error ? e.message : String(e) });
       }
+    });
+  }
+
+  /** Trae los extractores que ya existen en el assistant (solo lectura). */
+  function importExtractors() {
+    setStatus(null);
+    setConfirmSync(false);
+    startTransition(async () => {
+      const result = await importExtractorsFromSynthflow(agentId);
+      if (!result.ok) {
+        setStatus({ kind: "error", text: result.error ?? "No se pudo traer nada de Synthflow." });
+        return;
+      }
+      setExtractors(
+        result.extractors.map((e) => ({
+          identifier: e.identifier,
+          type: e.type,
+          condition: e.condition,
+          choices: e.choices.join(", "),
+          examples: e.examples.join(", "),
+          actionId: e.actionId ?? null,
+          outcome: e.outcome === true,
+          saleValues: (e.saleValues ?? []).join(", "),
+          orderField: e.orderField ?? "",
+        })),
+      );
+      setStatus({
+        kind: "warn",
+        text:
+          `Se trajeron ${result.extractors.length} extractor(es) de Synthflow` +
+          (result.skipped > 0 ? ` (${result.skipped} acción(es) que no son extractores se omitieron)` : "") +
+          ". Revísalos y guarda: TODAVÍA no están guardados aquí.",
+      });
     });
   }
 
@@ -397,9 +444,15 @@ export function VoiceSettings({
               setGreeting(e.target.value);
               dirty();
             }}
-            placeholder="Hola, soy Ana de Vitasei. ¿Tienes un minuto?"
+            placeholder="Hola, soy Ana de Vitasei. Te llamaba porque estabas interesado en {producto}, ¿tienes un minuto?"
             className={`mt-1 ${field}`}
           />
+          <span className="mt-1 block text-xs text-slate-500">
+            Admite variables entre llaves: <code className="font-mono">{"{nombre}"}</code> y{" "}
+            <code className="font-mono">{"{producto}"}</code> se llenan con la conversación; en una
+            campaña, con las columnas del archivo. Se resuelven <strong>antes</strong> de llamar,
+            así que el bot nunca lee la llave.
+          </span>
         </label>
         <label className="block">
           <span className="text-sm font-medium text-slate-700">Prompt de voz</span>
@@ -565,9 +618,11 @@ export function VoiceSettings({
           Datos a extraer de la llamada ({extractors.length})
         </h3>
         <p className="text-xs text-slate-500">
-          Se sincronizan con Synthflow al guardar. Escribe las instrucciones en{" "}
-          <strong>texto plano</strong>: pedir JSON o usar llaves/corchetes puede dejar la llamada
-          colgada.
+          Viven aquí y solo llegan a Synthflow con{" "}
+          <strong>&ldquo;Guardar y actualizar Synthflow&rdquo;</strong>. Si ya los creaste en su
+          panel, usa <strong>&ldquo;Traer de Synthflow&rdquo;</strong> y quedan escritos una sola
+          vez. Escribe las instrucciones en <strong>texto plano</strong>: pedir JSON o usar
+          llaves/corchetes puede dejar la llamada colgada.
         </p>
         <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
           Marca <strong>uno</strong> de estos datos como <strong>resultado de la llamada</strong>{" "}
@@ -776,6 +831,17 @@ export function VoiceSettings({
           >
             Agregar dato a extraer
           </button>
+          {modelId.trim() ? (
+            <button
+              type="button"
+              onClick={importExtractors}
+              disabled={pending}
+              title="Lee los extractores del assistant GUARDADO (si cambiaste el model_id, guarda primero). Solo lectura: no modifica nada en Synthflow."
+              className={secondary}
+            >
+              {pending ? "Leyendo…" : "Traer de Synthflow"}
+            </button>
+          ) : null}
           {hasOutcome ? null : (
             <button
               type="button"
@@ -806,10 +872,30 @@ export function VoiceSettings({
       </div>
 
       {/* --- Guardar -------------------------------------------------------- */}
-      <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
-        <button type="button" onClick={save} disabled={pending} className={primary}>
-          {pending ? "Guardando…" : "Guardar llamadas"}
+      <div className="space-y-2 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={() => save(false)} disabled={pending} className={primary}>
+          {pending ? "Guardando…" : "Guardar solo aquí"}
         </button>
+        {confirmSync ? (
+          <button
+            type="button"
+            onClick={() => save(true)}
+            disabled={pending}
+            className="min-h-[40px] rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:opacity-60"
+          >
+            Confirmar: guardar y actualizar el assistant
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmSync(true)}
+            disabled={pending}
+            className={secondary}
+          >
+            Guardar y actualizar Synthflow
+          </button>
+        )}
         {status ? (
           <p
             className={`text-sm ${
@@ -823,6 +909,15 @@ export function VoiceSettings({
             {status.text}
           </p>
         ) : null}
+        </div>
+        <p className="max-w-prose text-xs leading-relaxed text-slate-500">
+          <strong>Guardar solo aquí</strong> deja todo en esta base y{" "}
+          <strong>no toca el assistant</strong> de Synthflow: la voz, el prompt y la versión que
+          ya tienes se quedan como están. Úsalo siempre, salvo que hayas cambiado los{" "}
+          <strong>datos a extraer</strong> y quieras que Synthflow los conozca — eso es lo único
+          que el otro botón hace, y a cambio el assistant pasa a una versión nueva (que puede
+          sonar distinta).
+        </p>
         </div>
       </div>
     </Collapsible>

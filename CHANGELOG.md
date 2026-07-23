@@ -28,6 +28,30 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) · Versiona
   cedió ante la realidad (un solo nav, sin datos ficticios, sin búsqueda muerta) en
   `docs/vitasei-software-design.md` §8.
 
+### Added
+- **Guardar la config de llamadas sin tocar Synthflow, y traer lo que ya está allá** (ADR-0085).
+  Actualizar un assistant lo pasa a una versión nueva y le cambia la voz —a peor—, y hasta ahora
+  eso pasaba en **cada** guardado de la ficha, porque el guardado empujaba los extractores.
+  Cambiar "a los 10 minutos" por "a los 15" costaba la calidad de la voz. Ahora son tres botones
+  con intenciones distintas: **Guardar solo aquí** (default, escribe en la base y no llama a
+  Synthflow), **Guardar y actualizar Synthflow** (con confirmación, solo para que conozca los
+  datos a extraer) y **Traer de Synthflow** (solo lectura: llena el formulario con los
+  extractores que ya existen en el assistant, sin modificar nada allá). Traer **no** pisa lo que
+  es nuestro y no existe en Synthflow: el extractor de resultado, los valores que significan
+  compra y el campo de la orden se conservan. Queda rastro en `events_log` de cuál de los dos
+  guardados fue.
+- **El saludo de la campaña con los datos de cada persona** (ADR-0086, migración `0033`). El
+  assistant abre con "…estabas interesado en `{producto}`, ¿tienes un minuto?", pero en una
+  campaña no hay conversación de dónde sacar el producto: solo servía que el Excel trajera una
+  columna con ese nombre exacto, y nada lo decía en pantalla. Ahora cada campaña tiene su
+  **saludo** (con llaves) y sus **valores fijos** (`producto = Colágeno`, para no repetir una
+  columna 500 veces); las columnas del archivo mandan sobre los fijos. Al subir el archivo se ve
+  **qué variables trae y en cuántas filas**, y **el saludo ya resuelto con la primera fila
+  real** — y no se puede lanzar si a alguna fila le falta el dato (el servidor lo revalida y
+  dice `{producto} falta en 12 de 300`). Las llaves las resuelve nuestro backend antes de
+  llamar, no Synthflow: su doc solo promete variables en el prompt y, si nadie reemplaza, el bot
+  lee la llave en voz alta.
+
 ### Fixed
 - **Al abrir una conversación no se decía de qué agente venía.** En la lista el chip del agente
   está desde siempre, pero adentro del chat no había nada: con varias marcas en la misma cuenta,

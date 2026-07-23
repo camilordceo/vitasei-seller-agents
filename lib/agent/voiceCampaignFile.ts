@@ -1,4 +1,5 @@
 import { expandExponential, looksLikeZip, readXlsxRows } from "./xlsx";
+import { normalizeVariableKey } from "./voiceTemplate";
 
 /**
  * De un archivo de la vida real (CSV exportado de cualquier lado, o un Excel) a
@@ -330,7 +331,10 @@ export function parseCampaignRows(
     if (header.hasHeader) {
       header.columns.forEach((col, idx) => {
         if (idx === header.phone || idx === header.name) return;
-        const key = deburr(col).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        // MISMA normalización que las llaves del saludo (`{producto interesado}`
+        // ↔ columna "Producto Interesado"): si las dos no coinciden, la variable
+        // no se llena y la frase sale coja. Ver ADR-0086.
+        const key = normalizeVariableKey(col);
         const value = (row[idx] ?? "").trim();
         if (key && value) variables[key] = value.slice(0, 200);
       });

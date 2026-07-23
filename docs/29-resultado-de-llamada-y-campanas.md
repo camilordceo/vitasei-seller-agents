@@ -116,7 +116,38 @@ Luis;+57 300 999 8877;Magnesio
 confirmación) · **Ver llamadas** (la lista filtrada por esa campaña). Una campaña sin pendientes
 se marca *Terminada* sola.
 
-### 2.6 Un número frío no crea conversación
+### 2.6 El saludo de la campaña y sus variables (ADR-0086)
+
+El assistant abre así:
+
+> "Hola, soy Vanessa de Vitasei. Te llamaba porque estabas interesado en **{producto}**,
+> ¿tienes un minuto?"
+
+En una llamada de WhatsApp `{producto}` lo pone la conversación. En una campaña **no hay
+conversación**, así que el dato sale del archivo o de la campaña:
+
+| Dónde | Qué es | Ejemplo |
+|---|---|---|
+| **Saludo con el que abre** | El saludo de ESTA campaña, con llaves. Vacío = el del agente. | `…estabas interesado en {producto}, ¿tienes un minuto?` |
+| **Valores fijos** | Un valor para toda la lista, para no repetir una columna 500 veces. | `producto = Colágeno hidrolizado` |
+| **Columnas del archivo** | Una variable por columna extra, por persona. | columna `producto` |
+
+**Precedencia:** columna del archivo → valor fijo de la campaña → lo que aporte la conversación.
+Lo más específico gana. `{nombre}` sale de la columna de nombres.
+
+Los nombres se comparan **sin tildes, en minúsculas y con `_`**: la columna "Producto
+Interesado" llena `{producto interesado}` y `{producto_interesado}` por igual.
+
+**Las llaves las resolvemos nosotros antes de llamar**, no Synthflow: su documentación solo
+promete variables en el prompt, y si nadie reemplaza, el bot **lee la llave en voz alta**. El
+`custom_variables` se envía igual, por si el assistant las usa en su propio prompt.
+
+**Nada sale a medias.** Al subir el archivo, la pantalla muestra qué variables trae y en cuántas
+filas, **el saludo ya resuelto con la primera fila real**, y bloquea "Lanzar" si alguna variable
+del texto no está llena en todas. El servidor lo vuelve a validar al crear y rechaza diciendo
+`{producto} falta en 12 de 300`.
+
+### 2.7 Un número frío no crea conversación
 
 La conversación (y el contacto) **solo se crean si hay venta**, con `source = 'voice'`. Cien
 conversaciones vacías inflarían los chats de Reportes y el ROAS. El registro de una llamada sin
@@ -145,15 +176,48 @@ venta vive completo en la sección **Llamadas** (resultado, grabación, transcri
 `interval_minutes`, `guidance`, `source_filename`, `total`, `starts_at`, `finished_at`,
 `created_at`, `updated_at`.
 
+**Migración `0033_voice_campaign_greeting_variables.sql`** (ADR-0086) le suma dos columnas:
+`greeting` (saludo propio de la campaña, con `{llaves}`) y `variables` (valores fijos para toda
+la lista). Sin aplicarla, una campaña con saludo propio o valores fijos **se rechaza al crearla**
+con ese mensaje; las campañas normales siguen funcionando igual.
+
 ---
 
 ## 4. Puesta en marcha
 
-1. Aplicar `supabase/migrations/0032_voice_outcome_and_campaigns.sql`.
-2. En la ficha del agente: **Agregar extractor de resultado** → Guardar (se sincroniza con
-   Synthflow).
+1. Aplicar `supabase/migrations/0032_voice_outcome_and_campaigns.sql` y
+   `0033_voice_campaign_greeting_variables.sql`.
+2. En la ficha del agente: **Agregar extractor de resultado** → **Guardar y actualizar
+   Synthflow** (esta vez sí: es la única forma de que Synthflow conozca el extractor). Los demás
+   cambios del día a día van con **Guardar solo aquí**. Ver §5.
 3. Verificar que el agente tenga `voice_enabled`, assistant, número saliente y horario.
-4. Llamadas → **Campañas** → subir el archivo, revisar y lanzar.
+4. Llamadas → **Campañas** → subir el archivo, escribir el saludo, revisar y lanzar.
 
 > Recordatorio: `VOICE_CALLS_ENABLED` sigue siendo el kill switch global. Con él apagado no sale
 > ninguna llamada, ni de cadencia ni de campaña.
+
+---
+
+## 5. Guardar sin tocar Synthflow (ADR-0085)
+
+Actualizar un assistant lo pasa a una **versión nueva** y, en la práctica, le cambia la voz —a
+peor—. Antes eso pasaba en cada guardado de la ficha, porque el guardado empujaba los
+extractores. Ya no: **guardar y sincronizar son dos botones distintos.**
+
+| Botón | Qué hace | Cuándo |
+|---|---|---|
+| **Guardar solo aquí** | Escribe en la base. **No llama a Synthflow.** | Siempre: cadencia, prompt, saludo, países, mapeo a la orden, prender/apagar. |
+| **Guardar y actualizar Synthflow** | Además crea/actualiza los extractores y los adjunta al assistant. Pide confirmación. | Solo cuando cambiaste **los datos a extraer** y quieres que Synthflow los conozca. |
+| **Traer de Synthflow** | **Solo lectura**: llena el formulario con los extractores que ya existen en el assistant. No modifica nada allá. | Cuando el extractor se creó en el panel de Synthflow y lo quieres acá. |
+
+Detalles que importan:
+
+- **Traer no guarda.** Cae en el formulario para que lo revises; después eliges con cuál botón
+  guardas.
+- **Traer no borra lo nuestro.** El extractor marcado como *resultado de la llamada*, los valores
+  que significan compra y el campo de la orden **no existen en Synthflow**: se conservan del
+  extractor local con el mismo identificador.
+- Un extractor guardado aquí y **no** empujado no extrae nada en la llamada. Es el precio de no
+  tocar el assistant sin permiso, y la sección lo dice en pantalla.
+- Queda rastro en `events_log`: `voice_config_updated` con `syncedToSynthflow`, y
+  `voice_extractors_imported` al traer.

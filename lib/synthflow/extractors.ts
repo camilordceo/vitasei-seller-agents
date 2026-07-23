@@ -133,6 +133,74 @@ export function parseExecutedActions(raw: unknown): ExtractedData {
   return out;
 }
 
+/** Extractor tal como lo devuelve `GET /v2/actions/{id}`, ya normalizado. */
+export interface ParsedActionExtractor {
+  actionId: string | null;
+  identifier: string;
+  type: "OPEN_QUESTION" | "SINGLE_CHOICE" | "YES_NO";
+  condition: string;
+  choices: string[];
+  examples: string[];
+}
+
+/**
+ * Acción de Synthflow → extractor nuestro. Es el camino de VUELTA (traer lo que
+ * ya existe en su panel en vez de empujarlo), y por eso tiene que tragar las dos
+ * formas: `parameters_hard_coded` llega como objeto en `GET /v2/actions/{id}` y
+ * como STRING con JSON adentro en `executed_actions`. Ver ADR-0085.
+ *
+ * Devuelve `null` si la acción no es una extracción (el workspace también tiene
+ * `custom_function`, transferencias y SMS: traerlos sería basura en la ficha).
+ */
+export function parseActionExtractor(raw: unknown): ParsedActionExtractor | null {
+  if (!isPlainObject(raw)) return null;
+
+  const actionType = String(raw.action_type ?? "").toUpperCase();
+  const name = typeof raw.name === "string" ? raw.name : "";
+  const looksLikeExtractor =
+    actionType.includes("INFORMATION_EXTRACTOR") ||
+    actionType === EXTRACTOR_ACTION_TYPE.toUpperCase() ||
+    stripExtractorPrefix(name) !== null;
+  if (!looksLikeExtractor) return null;
+
+  const params = parseMaybeJson(raw.parameters_hard_coded);
+  if (!isPlainObject(params)) return null;
+
+  // El identifier vive en los parámetros; el nombre generado (`info_extractor_x`)
+  // es el fallback, con su prefijo quitado.
+  const identifier = String(
+    (typeof params.identifier === "string" && params.identifier) ||
+      stripExtractorPrefix(name) ||
+      "",
+  ).trim();
+  if (!identifier) return null;
+
+  const rawType = String(params.type ?? "").toUpperCase();
+  const type =
+    rawType === "SINGLE_CHOICE" || rawType === "YES_NO" ? rawType : "OPEN_QUESTION";
+
+  const list = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 40)
+      : [];
+
+  // `description` es lo que MANDAMOS; Synthflow lo guarda como `condition`.
+  const condition = String(
+    (typeof params.condition === "string" && params.condition) ||
+      (typeof raw.description === "string" && raw.description) ||
+      "",
+  ).trim();
+
+  return {
+    actionId: typeof raw.action_id === "string" && raw.action_id ? raw.action_id : null,
+    identifier,
+    type,
+    condition,
+    choices: list(params.choices),
+    examples: list(params.examples),
+  };
+}
+
 /**
  * Aplana un valor extraído a una línea legible para la nota de la conversación
  * y la tabla del dashboard. Los objetos anidados se muestran `clave: valor`.

@@ -22,6 +22,10 @@ export interface CreateCampaignInput {
   name: string;
   intervalMinutes: number;
   guidance?: string | null;
+  /** Saludo de apertura propio de la campaña, con `{variables}`. Ver ADR-0086. */
+  greeting?: string | null;
+  /** Variables fijas para TODAS sus llamadas (las del archivo mandan sobre estas). */
+  variables?: Record<string, string> | null;
   /** ISO. Vacío = arranca ya. */
   startAt?: string | null;
   filename?: string | null;
@@ -54,27 +58,51 @@ export async function createVoiceCampaign(
   const live = await liveCallPhones(supabase, phones);
   const rows = input.rows.filter((r) => !live.has(r.phone));
 
-  const { data: campaign, error: campErr } = await supabase
-    .from("voice_campaigns")
-    .insert({
-      agent_id: input.agentId,
-      name: input.name.trim() || "Campaña de llamadas",
-      status: "running",
-      interval_minutes: interval,
-      guidance: input.guidance?.trim() || null,
-      source_filename: input.filename ?? null,
-      total: rows.length,
-      starts_at: startsAt,
-    })
-    .select("id")
-    .single();
-  if (campErr) {
-    if (campErr.code === "42P01") {
-      throw new Error("Falta aplicar la migración 0032 (campañas de llamadas) en Supabase.");
+  const base = {
+    agent_id: input.agentId,
+    name: input.name.trim() || "Campaña de llamadas",
+    status: "running" as const,
+    interval_minutes: interval,
+    guidance: input.guidance?.trim() || null,
+    source_filename: input.filename ?? null,
+    total: rows.length,
+    starts_at: startsAt,
+  };
+  const greeting = input.greeting?.trim() || null;
+  const variables =
+    input.variables && Object.keys(input.variables).length > 0 ? input.variables : null;
+
+  let campaign: { id: string } | null = null;
+  {
+    const full = await supabase
+      .from("voice_campaigns")
+      .insert({ ...base, greeting, variables: variables as unknown as Json })
+      .select("id")
+      .single();
+
+    if (full.error && full.error.code === "42703") {
+      // Migración 0033 sin aplicar. La campaña se crea igual —lo caro es la
+      // lista, no el saludo— pero el operador tiene que enterarse de que su
+      // saludo propio NO se guardó, en vez de descubrirlo al oír la llamada.
+      if (greeting || variables) {
+        throw new Error(
+          "Falta aplicar la migración 0033 (saludo y variables de campaña) en Supabase: " +
+            "esta campaña usa saludo propio o variables fijas y no se pueden guardar todavía.",
+        );
+      }
+      const basic = await supabase.from("voice_campaigns").insert(base).select("id").single();
+      if (basic.error) throw new Error(`createVoiceCampaign: ${basic.error.message}`);
+      campaign = basic.data as { id: string };
+    } else if (full.error) {
+      if (full.error.code === "42P01") {
+        throw new Error("Falta aplicar la migración 0032 (campañas de llamadas) en Supabase.");
+      }
+      throw new Error(`createVoiceCampaign: ${full.error.message}`);
+    } else {
+      campaign = full.data as { id: string };
     }
-    throw new Error(`createVoiceCampaign: ${campErr.message}`);
   }
-  const campaignId = (campaign as { id: string }).id;
+  const campaignId = campaign.id;
 
   const schedule = planCampaignSchedule(new Date(startsAt).getTime(), rows.length, interval);
   const payload = rows.map((row, i) => ({
